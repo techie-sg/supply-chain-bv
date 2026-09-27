@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+# No `pull_request:` here — `push` already fires on PR-branch updates. Having both
+# would double every CI run on PR branches. PR-description check lives in
+# pr-checks.yml (which IS on `pull_request` since the body only exists there).
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.13
+        run: uv python install 3.13
+
+      - name: Sync dependencies
+        run: uv sync --locked
+
+      - name: Ruff check
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Mypy
+        run: uv run mypy . --exclude alembic/versions
+
+  test:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: dispatchdesk
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DB_URL: postgresql+psycopg://postgres:postgres@localhost:5432/dispatchdesk
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.13
+        run: uv python install 3.13
+
+      - name: Sync dependencies
+        run: uv sync --locked
+
+      - name: Pytest + coverage
+        run: uv run pytest --cov=. --cov-report=term-missing
+
+      - name: Coverage PR comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          pr=$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [[ -z "$pr" ]]; then
+            echo "No open PR for $BRANCH — skipping coverage comment."
+            exit 0
+          fi
+          marker='<!-- coverage-report -->'
+          {
+            echo "$marker"
+            echo "## Coverage report"
+            echo
+            uv run coverage report --format=markdown --skip-covered
+            echo
+            echo "_Updated for \`${SHA:0:7}\` · [CI run]($RUN_URL)_"
+          } > /tmp/cov.md
+          cid=$(gh api "repos/$REPO/issues/$pr/comments" --paginate \
+            --jq ".[] | select(.body | contains(\"$marker\")) | .id" | head -n1)
+          if [[ -n "$cid" ]]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$cid" -F body=@/tmp/cov.md >/dev/null \
+              && echo "Updated coverage comment #$cid on PR #$pr." \
+              || echo "Coverage comment update failed (non-fatal)."
+          else
+            gh api -X POST "repos/$REPO/issues/$pr/comments" -F body=@/tmp/cov.md >/dev/null \
+              && echo "Created coverage comment on PR #$pr." \
+              || echo "Coverage comment create failed (non-fatal)."
+          fi
+
+      - name: Coverage gate (≥ 90%)
+        run: uv run coverage report --fail-under=90

@@ -1,8 +1,10 @@
 # DispatchDesk task tracker
 
-**Last updated:** 2026-09-27  
-**Source plan:** [`tasks.md`](../tasks.md)  
-**Requirements:** [`requirements.md`](../requirements.md)
+**Last updated:** 2026-09-27
+
+**Source plan:** [`tasks.md`](tasks.md)
+
+**Requirements:** [`requirements.md`](requirements.md)
 
 This is the working tracker for the 34 required tasks. The source plan defines each task's full definition of done and evidence requirement. Update the status, the 2–3 people taking the task, the reviewer, and the evidence link here as work progresses. A draft is not complete until its definition of done is met and reviewed.
 

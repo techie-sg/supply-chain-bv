@@ -1,0 +1,24 @@
+name: PR checks
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  description:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require PR description (≥ 20 chars)
+        env:
+          # Read PR body via env (not interpolated into shell) to avoid injection.
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if [[ -z "${PR_BODY// }" ]]; then
+            echo "::error::PR description is empty. Explain *why* this change exists — future-you will thank you."
+            exit 1
+          fi
+          if (( ${#PR_BODY} < 20 )); then
+            echo "::error::PR description is ${#PR_BODY} chars — need at least 20. One real sentence about why this change exists."
+            exit 1
+          fi
+          echo "PR description: ${#PR_BODY} chars — OK"
