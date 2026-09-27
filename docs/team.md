@@ -8,7 +8,7 @@ Tasks will be taken up by groups of 2–3 people. The people responsible for eac
 | --- | --- | --- | --- |
 | Week 1 tasks 1–11 | To be assigned task by task | To be assigned | Not recorded |
 
-Each team member should confirm they have read [`requirements.md`](https://github.com/abhineer/Sep-Projects/blob/main/DispatchDesk/requirements.md) before taking a task. Record confirmations when names are known.
+Each team member should confirm they have read [`requirements.md`](../requirements.md) before taking a task. Record confirmations when names are known.
 
 | Team member | Requirements read (date) |
 | --- | --- |
@@ -29,7 +29,7 @@ Each team member should confirm they have read [`requirements.md`](https://githu
 
 ## Week 1 scope
 
-The Week 1 prototype retrieves policy and playbook passages and explains them in Gradio. Live dispatch tools, persistent manager preferences, and the formal guardrail layer are scheduled for later weeks in [`tasks.md`](https://github.com/abhineer/Sep-Projects/blob/main/DispatchDesk/tasks.md).
+The Week 1 prototype retrieves policy and playbook passages and explains them in Gradio. Live dispatch tools, persistent manager preferences, and the formal guardrail layer are scheduled for later weeks in [`tasks.md`](../tasks.md).
 
 Until live tools are connected, the assistant must not claim to know the current queue, rider state, SLA, or ETA. Operational actions are proposals only, and the assistant must not recommend unsafe rider behavior. A Week 1 demo question should use a clearly labeled example scenario or ask for general policy guidance.
 
