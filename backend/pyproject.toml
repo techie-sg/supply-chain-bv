@@ -5,6 +5,7 @@ description = "Dispatch copilot for dark store managers"
 requires-python = ">=3.13"
 dependencies = [
     "flask",
+    "gunicorn>=26.2.0",
     "pytest",
 ]
 
