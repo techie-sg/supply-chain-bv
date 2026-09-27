@@ -1,0 +1,26 @@
+[project]
+name = "dispatchdesk"
+version = "0.1.0"
+description = "Dispatch copilot for dark store managers"
+requires-python = ">=3.13"
+dependencies = [
+    "flask",
+    "pytest",
+]
+
+[dependency-groups]
+dev = [
+    "mypy",
+    "pytest-cov",
+    "ruff",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.coverage.run]
+omit = ["tests/*"]
