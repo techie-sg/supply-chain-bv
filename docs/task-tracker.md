@@ -13,9 +13,9 @@ This is the working tracker for the 34 required tasks. The source plan defines e
 | # | Task | Status | People (2–3) / reviewer | Evidence or next action |
 | --- | --- | --- | --- | --- |
 | 1 | Kickoff: requirements, roles, stack | In progress | To assign | [`team.md`](team.md) records the stack; add people, requirements-read confirmations, and task ownership. |
-| 2 | Amazon-style 6-pager | In review | To assign | [`6-pager.md`](6-pager.md) is drafted; team review and agreement pending. |
+| 2 | Amazon-style 6-pager | In review | To assign | [`6-pager.md`](6-pager.md) revision 2 covers the decision, evidence limits, alternatives, feasibility, and acceptance criteria. [PDF](6-pager.pdf) verified at five pages; team review and agreement pending. |
 | 3 | PR/FAQ | To do | To assign | Create `docs/pr-faq.md` and review it. |
-| 4 | Repository, branches, `.gitignore`, README | To do | To assign | Create remote repo and verify a fresh clone can run it from README. |
+| 4 | Repository, branches, `.gitignore`, README | In progress | To assign | Git repo and remote exist; confirm branch workflow, add `.gitignore` and runnable README, then verify a fresh clone. |
 | 5 | System prompt and two manual checks | To do | To assign | Commit prompt and transcripts showing no invented figures and proposal-only actions. |
 | 6 | Synthetic dispatch dataset | To do | To assign | Commit queue, rider, and two-evening metrics data with a count summary. |
 | 7 | RAG policy corpus | To do | To assign | Commit SOP, delay guide, batching/cold-chain, rain/surge, customer-communication, and rider-policy sources. |
