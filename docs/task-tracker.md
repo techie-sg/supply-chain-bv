@@ -20,7 +20,7 @@ This is the working tracker for the 34 required tasks. The source plan defines e
 | 4 | Repository, branches, `.gitignore`, README | In progress | To assign | Git repo and remote exist; confirm branch workflow, add `.gitignore` and runnable README, then verify a fresh clone. |
 | 5 | System prompt and two manual checks | To do | To assign | Commit prompt and transcripts showing no invented figures and proposal-only actions. |
 | 6 | Synthetic dispatch dataset | To do | To assign | Commit queue, rider, and two-evening metrics data with a count summary. |
-| 7 | RAG policy corpus | To do | To assign | Commit SOP, delay guide, batching/cold-chain, rain/surge, customer-communication, and rider-policy sources. |
+| 7 | RAG policy corpus | In review | To assign | Six corpus documents and query/source inventory in [`../backend/corpus/README.md`](../backend/corpus/README.md); covers all six required scenarios and records source boundaries/open policy decisions. Team review pending. |
 | 8 | Chunking, embeddings, pgvector ingestion | To do | To assign | Save successful run log with expected and actual chunk counts. |
 | 9 | Retrieval test on rain-delay question | To do | To assign | Log top-three passages and relevance judgment; confirm embedding model. |
 | 10 | Question-to-grounded-answer prototype | To do | To assign | Save one successful transcript with source references. |
