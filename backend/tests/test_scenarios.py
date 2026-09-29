@@ -63,7 +63,9 @@ def test_load_endpoint_uses_only_scenario_name(monkeypatch) -> None:
     with app_module.app.test_client() as client:
         listing = client.get("/api/scenarios")
         assert listing.status_code == 200
-        assert {item["key"] for item in listing.json["scenarios"]} == {
+        listing_data = listing.get_json()
+        assert listing_data is not None
+        assert {item["key"] for item in listing_data["scenarios"]} == {
             "normal",
             "backlog",
             "rain",
@@ -159,4 +161,7 @@ def test_download_scenario_xlsx_without_loading_database(monkeypatch) -> None:
     orders = list(workbook["orders"].values)
     first = dict(zip(orders[0], orders[1], strict=True))
     assert first["order_id"] == "ORD-01-001"
-    assert first["as_of_ist"] - first["placed_at_ist"] == timedelta(seconds=240)
+    as_of = first["as_of_ist"]
+    placed_at = first["placed_at_ist"]
+    assert isinstance(as_of, datetime) and isinstance(placed_at, datetime)
+    assert as_of - placed_at == timedelta(seconds=240)

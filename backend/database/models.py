@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from uuid import UUID, uuid4
 
-from pgvector.sqlalchemy import Vector
+from pgvector.sqlalchemy import Vector  # type: ignore[import-untyped]
 from sqlalchemy import (
     Boolean,
     CheckConstraint,

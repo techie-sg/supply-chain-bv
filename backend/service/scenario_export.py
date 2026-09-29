@@ -14,7 +14,9 @@ from service.scenarios import TIMEZONE, build_scenario
 def scenario_xlsx(key: str) -> bytes:
     rows, _ = build_scenario(key, datetime.now(TIMEZONE))
     workbook = Workbook()
-    workbook.remove(workbook.active)
+    default_sheet = workbook.active
+    assert default_sheet is not None
+    workbook.remove(default_sheet)
 
     for model in (Zone, Rider, Order, HourlyMetric):
         sheet = workbook.create_sheet(model.__tablename__)
