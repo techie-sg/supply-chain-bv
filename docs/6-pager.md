@@ -5,9 +5,9 @@
 **Status:** Draft for team review
 **Date:** 27 September 2026
 
-*Reading note: this memo is meant to be read silently, start to finish, before discussion. The six-page body ends at Section 9. Appendices hold supporting data and are not required reading.*
+We recommend completing a four-week DispatchDesk prototype that helps a dark store manager identify a delivery bottleneck, understand the applicable policy, and choose a safe next action. The decision requested in this review is to agree on the scope of that experiment, its acceptance criteria, and the evidence needed before pursuing use in a real store. The proposed commitment covers the six scenarios in the [project requirements](initial/requirements.md), using synthetic operational data and simulated actions. A successful demonstration would establish that these capabilities work together under the tested conditions. Customer adoption, faster management decisions, and improved delivery performance would require further evidence.
 
----
+We are in Week 1. The stack has been agreed, and tasks will be taken up by groups of two or three people, with assignments decided as work progresses. The [source plan](initial/tasks.md) contains 34 tasks across four weeks. It estimates roughly one hour per task, but total team availability and validated implementation estimates have not been recorded in the team plan. This memo therefore recommends a bounded scope and explicit review points. The team needs to assign the next tasks and confirm capacity before treating the four-week schedule as a reliable delivery commitment.
 
 ## 1. Introduction
 

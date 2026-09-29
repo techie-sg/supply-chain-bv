@@ -2,9 +2,9 @@
 
 **Last updated:** 2026-09-27
 
-**Source plan:** [`tasks.md`](tasks.md)
+**Source plan:** [`initial/tasks.md`](initial/tasks.md)
 
-**Requirements:** [`requirements.md`](requirements.md)
+**Requirements:** [`initial/requirements.md`](initial/requirements.md)
 
 This is the working tracker for the 34 required tasks. The source plan defines each task's full definition of done and evidence requirement. Update the status, the 2–3 people taking the task, the reviewer, and the evidence link here as work progresses. A draft is not complete until its definition of done is met and reviewed.
 
@@ -16,7 +16,7 @@ This is the working tracker for the 34 required tasks. The source plan defines e
 | --- | --- | --- | --- | --- |
 | 1 | Kickoff: requirements, roles, stack | In progress | To assign | [`team.md`](team.md) records the stack; add people, requirements-read confirmations, and task ownership. |
 | 2 | Amazon-style 6-pager | In review | To assign | [`6-pager.md`](6-pager.md) revision 2 covers the decision, evidence limits, alternatives, feasibility, and acceptance criteria. [PDF](6-pager.pdf) verified at five pages; team review and agreement pending. |
-| 3 | PR/FAQ | To do | To assign | Create `docs/pr-faq.md` and review it. |
+| 3 | PR/FAQ | In review | To assign | [`pr-faq.md`](pr-faq.md) includes a future release, public and internal FAQs, evidence limits, and open decisions. Team review and agreement pending. |
 | 4 | Repository, branches, `.gitignore`, README | In progress | To assign | Git repo and remote exist; confirm branch workflow, add `.gitignore` and runnable README, then verify a fresh clone. |
 | 5 | System prompt and two manual checks | To do | To assign | Commit prompt and transcripts showing no invented figures and proposal-only actions. |
 | 6 | Synthetic dispatch dataset | To do | To assign | Commit queue, rider, and two-evening metrics data with a count summary. |
