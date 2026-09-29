@@ -1,11 +1,11 @@
-from config import Settings, get_settings
+from config import Settings
 from database.session import database_url
 
 
 def test_database_url_alias_and_secret_are_loaded_from_environment(monkeypatch) -> None:
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_URL", raising=False)
-    assert get_settings().database_url is None
+    assert Settings(_env_file=None).database_url is None
 
     monkeypatch.setenv("DB_URL", "postgresql://fallback@localhost/demo")
     assert database_url() == "postgresql+psycopg://fallback@localhost/demo"
