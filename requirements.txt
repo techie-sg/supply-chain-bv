@@ -1,0 +1,7 @@
+gradio
+langchain-core
+langchain-groq
+requests
+python-dotenv
+supabase
+transformers
