@@ -88,16 +88,12 @@ def retrieve(
 ) -> list[dict]:
     """Retrieve the most similar chunks from Supabase."""
 
-    response = (
-        client.schema("app")
-        .rpc(
-            "match_document_chunks",
-            {
-                "query_embedding": query_embedding,
-                "match_count": match_count,
-            },
-        )
-        .execute()
-    )
+    # postgrest types params as dict[str, str], but serialises any JSON value.
+    params: dict[str, Any] = {
+        "query_embedding": query_embedding,
+        "match_count": match_count,
+    }
+
+    response = client.schema("app").rpc("match_document_chunks", params).execute()
 
     return cast(list[dict], response.data)
