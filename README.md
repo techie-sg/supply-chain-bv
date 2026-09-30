@@ -11,12 +11,12 @@ Background: [requirements](docs/initial/requirements.md), [task plan](docs/initi
 
 ```text
 supply-chain-bv/
-├── .env.example              # Template for .env (copy to .env in this folder)
 ├── .github/workflows/        # CI: lint, type check, tests + 90% coverage gate, PR description check
 ├── backend/                  # All application code (a uv project; run commands from here)
+│   ├── .env.example          # Template for backend/.env (copy and fill in)
 │   ├── app.py                # Flask entry point; registers the blueprints
 │   ├── gradio_app.py         # Gradio chat UI for the RAG assistant
-│   ├── config.py             # Typed settings loaded from the environment / root .env
+│   ├── config.py             # Typed settings loaded from the environment / backend/.env
 │   ├── blueprints/           # HTTP routes (Flask blueprints)
 │   │   ├── health.py         #   GET /
 │   │   └── scenarios.py      #   /api/scenarios endpoints
@@ -57,13 +57,12 @@ supply-chain-bv/
 
 ```bash
 git clone https://github.com/techie-sg/supply-chain-bv.git
-cd supply-chain-bv
+cd supply-chain-bv/backend
 cp .env.example .env    # then fill in the values
-cd backend
 uv sync --locked        # creates backend/.venv with runtime + dev dependencies
 ```
 
-### Environment variables (`.env` in the repository root)
+### Environment variables (`backend/.env`)
 
 | Variable | Needed for | Description |
 |---|---|---|
@@ -73,7 +72,7 @@ uv sync --locked        # creates backend/.venv with runtime + dev dependencies
 | `SUPABASE_URL` | RAG | Supabase project URL |
 | `SUPABASE_KEY` | RAG | Supabase API key |
 
-`.env` is git-ignored, so never commit it. Real environment variables override values in `.env`.
+`backend/.env` is git-ignored, so never commit it. Real environment variables override values in `.env`.
 
 ## Running
 

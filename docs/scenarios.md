@@ -15,8 +15,8 @@ document chunk tables are unaffected. The original workbook remains in
 | `rain` | Rain, packed orders, and batching candidates |
 
 The [settings module](../backend/config.py) reads `DATABASE_URL` (or `DB_URL`)
-from the process environment or the repository-root `.env`. Copy
-[`.env.example`](../.env.example) to `.env` in the repository root and set your
+from the process environment or `backend/.env`. Copy
+[`backend/.env.example`](../backend/.env.example) to `backend/.env` and set your
 local connection details. The `.env` file is ignored by Git. Migrations are run manually from your local
 machine; app startup and deployment do not run them. With a database URL your
 machine can reach already set in your shell, run:
