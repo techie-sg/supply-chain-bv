@@ -88,12 +88,16 @@ def retrieve(
 ) -> list[dict]:
     """Retrieve the most similar chunks from Supabase."""
 
-    response = client.schema("app").rpc(
-        "match_document_chunks",
-        {
-            "query_embedding": query_embedding,
-            "match_count": match_count,
-        },
-    ).execute()
+    response = (
+        client.schema("app")
+        .rpc(
+            "match_document_chunks",
+            {
+                "query_embedding": query_embedding,
+                "match_count": match_count,
+            },
+        )
+        .execute()
+    )
 
     return cast(list[dict], response.data)
