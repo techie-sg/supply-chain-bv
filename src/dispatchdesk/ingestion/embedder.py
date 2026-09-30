@@ -29,7 +29,12 @@ def embed_texts(
         timeout=60,
     )
 
-    response.raise_for_status()
+    if not response.ok:
+        raise requests.HTTPError(
+            f"Jina embeddings failed ({response.status_code}): "
+            f"{response.text[:500]}",
+            response=response,
+        )
 
     data = response.json()["data"]
 
