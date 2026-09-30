@@ -21,6 +21,10 @@ class FakeSupabase:
         self.data = data
         self.calls: list[tuple[str, Any]] = []
 
+    def schema(self, name: str) -> "FakeSupabase":
+        self.calls.append(("schema", name))
+        return self
+
     def table(self, name: str) -> "FakeSupabase":
         self.calls.append(("table", name))
         return self
@@ -116,14 +120,28 @@ def test_vector_store_and_llm_clients(monkeypatch) -> None:
     assert vector_store.get_supabase_client() == ("https://example.supabase.co", "key")
     assert llm.get_llm().model_name == llm.DEFAULT_MODEL
 
-    client = FakeSupabase([{"chunk_id": "c"}])
-    doc = Document(
-        page_content="body", metadata={"doc_id": "d", "title": "t", "section": "s"}
-    )
-    assert vector_store.insert_chunks(client, [doc], ["c"], [[0.1]]) == 1  # type: ignore[arg-type]
-    assert vector_store.retrieve(client, [0.1], 2) == [{"chunk_id": "c"}]  # type: ignore[arg-type]
+    client = FakeSupabase([{"id": "doc-uuid", "chunk_id": 0}])
+    metadata = {
+        "doc_id": "d",
+        "title": "t",
+        "section": "s",
+        "version": "1.1 (2026-09-29)",
+        "source": "corpus/d.md",
+        "file_hash": "ab" * 32,
+    }
+    docs = [Document(page_content=c, metadata=metadata) for c in ("one", "two")]
+    assert vector_store.insert_chunks(client, docs, [[0.1], [0.2]]) == 1  # type: ignore[arg-type]
+    upserts = [rows for call, rows in client.calls if call == "upsert"]
+    assert upserts[0]["file_hash"] == "\\x" + "ab" * 32
+    assert upserts[0]["document_date"] == "2026-09-29"
+    assert [r["chunk_id"] for r in upserts[1]] == [0, 1]
+    assert {r["document_id"] for r in upserts[1]} == {"doc-uuid"}
+    assert ("schema", "app") in client.calls
+    client.calls.clear()
+    assert vector_store.retrieve(client, [0.1], 2) == client.data  # type: ignore[arg-type]
+    assert client.calls[0] == ("schema", "app")
     with pytest.raises(ValueError, match="same length"):
-        vector_store.insert_chunks(client, [doc], [], [])  # type: ignore[arg-type]
+        vector_store.insert_chunks(client, docs, [])  # type: ignore[arg-type]
 
 
 def test_answer_question(monkeypatch) -> None:
@@ -154,8 +172,8 @@ def test_ingestion_main(monkeypatch) -> None:
     stored: list[int] = []
 
     def insert_chunks(**kw: Any) -> int:
-        stored.append(len(kw["ids"]))
-        return len(kw["ids"])
+        stored.append(len(kw["documents"]))
+        return len(kw["documents"])
 
     monkeypatch.setattr(ingestion, "insert_chunks", insert_chunks)
     ingestion.main()

@@ -1,3 +1,4 @@
+import hashlib
 import re
 from pathlib import Path
 
@@ -81,6 +82,7 @@ def load_corpus(
     for source in source_files:
         markdown = source.read_text(encoding="utf-8")
         metadata = parse_metadata(markdown, source, repo_root)
+        metadata["file_hash"] = hashlib.sha256(source.read_bytes()).hexdigest()
 
         for section, body in section_chunks(markdown):
             content = f"{metadata['title']} > {section}\n\n{body}"

@@ -59,11 +59,10 @@ def main() -> None:
     stored = insert_chunks(
         client=supabase,
         documents=documents,
-        ids=ids,
         embeddings=embeddings,
     )
 
-    print(f"Upserted {stored} chunks into Supabase")
+    print(f"Upserted {stored} chunks into app.documents / app.document_chunks")
     print("\n=== Ingestion complete ===")
 
 
