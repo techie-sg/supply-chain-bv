@@ -2,7 +2,7 @@
 
 A dispatch copilot for dark-store managers, served as one Gradio application:
 
-- **Assistant** is the default manager workspace: ask about dispatch delays, SLA changes, and safe batching, with the store and snapshot timestamp visible. Answers use the saved data alongside the dispatch playbook, with Jina embeddings, PostgreSQL/pgvector retrieval, and a Groq-hosted LLM.
+- **Assistant** is the default manager workspace: ask for dispatch playbook guidance on delays, SLA changes, and safe batching. Answers use retrieved documents, with Jina embeddings, PostgreSQL/pgvector retrieval, and a Groq-hosted LLM.
 - **Demo tools** is a separate view for selecting and loading synthetic situations and inspecting searchable orders, riders, zones, and hourly metrics. These controls support demonstrations without occupying the manager’s workspace.
 
 Background: [requirements](docs/initial/requirements.md), [task plan](docs/initial/tasks.md), [6-pager](docs/6-pager.md), [PR/FAQ](docs/pr-faq.md).
@@ -98,9 +98,10 @@ The interface follows your system's light or dark appearance.
 
 Use **Demo tools** to preview tables or load a different simulated situation.
 **Load scenario** replaces the operational rows and clears the conversation.
-Previewing data or switching between views preserves the loaded chat context and
-conversation. **Back to assistant** returns to the manager workspace.
-Chat uses a snapshot captured when loaded, not a continuously live feed.
+Previewing data or switching between views preserves the conversation.
+**Back to assistant** returns to the manager workspace.
+Chat receives the question and retrieved playbook passages. Scenario rows are
+available in Demo tools and are not supplied to the embedding or language-model services.
 
 See [docs/scenarios.md](docs/scenarios.md) for scenario details.
 

@@ -105,20 +105,38 @@ def test_chat_failure_preserves_existing_history(monkeypatch) -> None:
     assert "internal API details" not in str(error.value)
 
 
-def test_chat_uses_loaded_snapshot_when_preview_changes(monkeypatch) -> None:
-    current = scenarios.scenario_details("rain")
+def test_chat_passes_only_the_question_and_never_reads_scenario_data(
+    monkeypatch,
+) -> None:
     seen = []
 
-    def answer(question, *, scenario_context):
-        seen.append(scenario_context)
+    def answer(question):
+        seen.append(question)
         return "reply"
 
+    def no_scenario(*args, **kwargs):
+        raise AssertionError("Chat must not read scenario data")
+
     monkeypatch.setattr(gradio_app, "answer_question", answer)
-    gradio_app.prepare_scenario("backlog")
-    history, _ = gradio_app.chat("What should we do?", [], current)
-    assert seen == [current]
-    assert seen[0]["scenario_key"] == "rain"
+    monkeypatch.setattr(gradio_app, "current_scenario", no_scenario)
+    history, _ = gradio_app.chat("What should we do?", [])
+    assert seen == ["What should we do?"]
     assert history[-1]["content"] == "reply"
+
+
+def test_chat_callbacks_receive_no_scenario_state() -> None:
+    callbacks = [
+        callback
+        for callback in gradio_app.app.fns.values()
+        if callback.fn is gradio_app.chat
+    ]
+    assert len(callbacks) == 2
+    assert all(len(callback.inputs) == 2 for callback in callbacks)
+    assert all(
+        not isinstance(component, gr.State)
+        for callback in callbacks
+        for component in callback.inputs
+    )
 
 
 def test_dropdown_lists_all_scenarios_and_handles_empty_inventory(monkeypatch) -> None:

@@ -86,8 +86,8 @@ def _icon(name: str) -> str:
 CHAT_PLACEHOLDER = """
 <div class="chat-welcome">
     <div class="welcome-orbit" aria-hidden="true"><span class="welcome-emblem"></span></div>
-    <h1>What needs your <span>attention?</span></h1>
-    <p>Make sense of delays. Find a safer, smarter next move.</p>
+    <h1>Pressure’s on. <span>Ask away.</span></h1>
+    <p>Tough calls. Straight answers. Backed by your dispatch playbook.</p>
 </div>
 """
 
@@ -262,7 +262,6 @@ def restore_workspace(default_key: str) -> tuple:
 def chat(
     message: str,
     history: list[dict] | None,
-    scenario_context: dict[str, Any] | None = None,
 ) -> tuple[list[dict], str]:
     """Keep the user's draft and history intact if a backend request fails."""
     history = history or []
@@ -270,11 +269,7 @@ def chat(
     if not message:
         return history, ""
     try:
-        answer = (
-            answer_question(message, scenario_context=scenario_context)
-            if scenario_context
-            else answer_question(message)
-        )
+        answer = answer_question(message)
     except (
         requests.RequestException,
         SQLAlchemyError,
@@ -372,7 +367,7 @@ def build_app() -> gr.Blocks:
                     message = gr.Textbox(
                         label="Ask your dispatch assistant",
                         show_label=False,
-                        placeholder="What’s happening at your store?",
+                        placeholder="Ask the tough dispatch question…",
                         lines=1,
                         max_lines=6,
                         container=False,
@@ -387,22 +382,13 @@ def build_app() -> gr.Blocks:
                     )
                 with gr.Row(elem_id="starter-prompts") as suggestions:
                     prompts = [
-                        (
-                            "Resolve a backlog\nFind the bottleneck and what to do first.",
-                            "Orders are backing up. What is causing the delay, and what should I do first?",
-                        ),
-                        (
-                            "Understand an SLA drop\nCompare shifts and uncover the cause.",
-                            "Why did our 10-minute SLA compliance fall between 8 and 10pm last night compared with the night before?",
-                        ),
-                        (
-                            "Plan a safe batch\nCheck orders, routes, and rider readiness.",
-                            "Which waiting orders can we batch safely? Explain any exclusions and check rider availability and breaks.",
-                        ),
+                        "We're missing the 10-minute promise. Should I ask my riders to jump red lights and speed?",
+                        "It's pouring and deliveries are late. Can I dock riders' pay for missing the delivery promise?",
+                        "Packed orders are piling up. Can I batch frozen-item orders with other deliveries?",
                     ]
                     prompt_buttons = [
-                        gr.Button(label, size="sm", elem_classes="prompt-button")
-                        for label, _ in prompts
+                        gr.Button(question, size="sm", elem_classes="prompt-button")
+                        for question in prompts
                     ]
             with (
                 gr.Tab("Demo tools", id="demo"),
@@ -411,7 +397,7 @@ def build_app() -> gr.Blocks:
                 with gr.Row(elem_id="demo-heading"):
                     gr.HTML(
                         '<div class="page-heading"><span class="section-kicker">DEMO TOOLS</span>'
-                        "<h1>Set up a situation.</h1><p>Load a simulated dataset and inspect the data behind the assistant.</p></div>",
+                        "<h1>Set up a situation.</h1><p>Load and inspect a simulated dispatch dataset.</p></div>",
                         apply_default_css=False,
                     )
                     back = gr.Button(
@@ -514,7 +500,7 @@ def build_app() -> gr.Blocks:
             outputs=workspace,
             queue=False,
         )
-        for button, (_, question) in zip(prompt_buttons, prompts, strict=True):
+        for button, question in zip(prompt_buttons, prompts, strict=True):
             button.click(lambda q=question: q, outputs=message, queue=False).then(
                 fn=None,
                 js="() => document.querySelector('#message-input textarea')?.focus()",
@@ -543,7 +529,7 @@ def build_app() -> gr.Blocks:
         for event in (submit.click, message.submit):
             event(
                 chat,
-                inputs=[message, chatbot, current],
+                inputs=[message, chatbot],
                 outputs=[chatbot, message],
                 show_progress="minimal",
                 show_progress_on=chatbot,

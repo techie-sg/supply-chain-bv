@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from typing import Any
 
@@ -29,8 +28,6 @@ class RAGService:
         self,
         question: str,
         top_k: int = 3,
-        *,
-        scenario_context: dict[str, Any] | None = None,
     ) -> str:
         """Retrieve evidence and answer using the injected provider services."""
         if top_k < 1:
@@ -43,18 +40,9 @@ class RAGService:
             )
 
         context = self._build_context(results)
-        scenario = ""
-        if scenario_context is not None:
-            scenario = (
-                "\n\nLoaded scenario snapshot (synthetic data captured at its as_of "
-                "timestamp; not a continuously live feed):\n"
-                + json.dumps(scenario_context, ensure_ascii=False)
-            )
         return self.llm_service.generate(
             system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
-            user_message=(
-                f"Retrieved context:\n\n{context}{scenario}\n\nQuestion: {question}"
-            ),
+            user_message=f"Retrieved context:\n\n{context}\n\nQuestion: {question}",
         )
 
     @staticmethod
@@ -67,8 +55,6 @@ class RAGService:
 def answer_question(
     question: str,
     top_k: int = 3,
-    *,
-    scenario_context: dict[str, Any] | None = None,
 ) -> str:
     """UI entry point composing the configured services."""
     settings = get_settings()
@@ -76,4 +62,4 @@ def answer_question(
         embedding_service=create_embedding_service(settings),
         llm_service=create_llm_service(settings),
     )
-    return service.answer_question(question, top_k, scenario_context=scenario_context)
+    return service.answer_question(question, top_k)

@@ -38,15 +38,16 @@ preview its row counts, then click **Load scenario** to replace the operational
 data. The workspace shows the loaded scenario, store, and timestamp. A successful
 load clears the conversation; a failed load keeps it intact.
 
-The **Scenario data** tab shows searchable, read-only tables for orders,
+The **Demo tools** view shows searchable, read-only tables for orders,
 riders, hourly metrics, and zones. Dates are generated relative to preview time
 and timestamps include their timezone (+05:30 / IST). Choosing another scenario
-only changes the preview; it does not replace the loaded scenario used by chat.
+only changes the preview; it does not replace the saved operational rows.
 There is no Excel export or separate HTTP API.
 
-The **Current scenario** indicator and loader stay visible above both tabs.
-On a successful load, the exact snapshot is shown in the data tab and supplied
-to chat alongside retrieved playbook guidance. Its `as_of` timestamp records
+The **Current scenario** indicator identifies the saved operational dataset.
+On a successful load, the exact snapshot is shown in Demo tools. Chat uses the
+question and retrieved playbook passages; scenario rows are not supplied to it.
+The snapshot's `as_of` timestamp records
 when it was loaded; the snapshot is not a continuously live feed. Reload the
 scenario to establish a fresh starting point.
 

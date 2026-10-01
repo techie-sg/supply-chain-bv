@@ -48,16 +48,14 @@ def test_rag_uses_injected_services_and_keeps_roles_separate(monkeypatch) -> Non
         return results
 
     monkeypatch.setattr(rag, "retrieve", retrieve)
-    context = {"scenario_key": "rain", "counts": {"orders": 12}}
-    assert service.answer_question("why?", 2, scenario_context=context) == "answer"
+    assert service.answer_question("why?", 2) == "answer"
     assert embeddings.questions == ["why?"]
     system, user = llm.messages[0]
     assert system == rag.PROMPT_PATH.read_text(encoding="utf-8")
-    assert "[Source: doc#rain]" in user and "[Source: doc#break]" in user
-    assert '"scenario_key": "rain"' in user
-    assert "Loaded scenario snapshot" in user
-    assert "Question: why?" in user
-    assert "scenario_key" not in system
+    assert user == (
+        "Retrieved context:\n\n[Source: doc#rain]\nSlow down in rain."
+        "\n\n---\n\n[Source: doc#break]\nTake regular breaks.\n\nQuestion: why?"
+    )
 
 
 def test_no_evidence_does_not_call_llm(monkeypatch) -> None:
