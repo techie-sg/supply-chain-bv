@@ -1,7 +1,5 @@
 # DispatchDesk PR/FAQ
 
-*Mock launch announcement for [Task 3](initial/tasks.md). It describes the intended completed project. Karthik and the quotes are illustrative; this is not a statement that every feature is available today.*
-
 ## Press release
 
 ### DispatchDesk launches to help dark store managers make safe calls when deliveries slip
