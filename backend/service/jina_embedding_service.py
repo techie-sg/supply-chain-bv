@@ -1,15 +1,16 @@
 """Jina implementation of the embedding service."""
 
-import logging
+from time import perf_counter
 
 import requests
+import structlog
 from pydantic import SecretStr
 
 from config import get_settings, require
 from constants import JINA_API_URL, JINA_MODEL
 from service.embedding_service import EmbeddingService
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 
 
 class JinaEmbeddingService(EmbeddingService):
@@ -32,6 +33,7 @@ class JinaEmbeddingService(EmbeddingService):
             return []
 
         api_key = require(self._api_key or get_settings().jina_api_key, "JINA_API_KEY")
+        started = perf_counter()
         response = requests.post(
             JINA_API_URL,
             headers={
@@ -46,7 +48,8 @@ class JinaEmbeddingService(EmbeddingService):
         )
         if not response.ok:
             raise requests.HTTPError(
-                f"Jina embeddings failed ({response.status_code})", response=response
+                f"Jina embeddings failed ({response.status_code})",
+                response=response,
             )
 
         body = response.json()
@@ -57,9 +60,10 @@ class JinaEmbeddingService(EmbeddingService):
             raise ValueError("Jina returned invalid embedding indices")
 
         logger.info(
-            "Jina embeddings: model=%s inputs=%s tokens=%s",
-            self.model,
-            len(texts),
-            body.get("usage", {}).get("total_tokens"),
+            "Jina embeddings completed",
+            model=self.model,
+            inputs=len(texts),
+            tokens=body.get("usage", {}).get("total_tokens"),
+            duration_ms=round((perf_counter() - started) * 1000, 2),
         )
         return [item["embedding"] for item in data]

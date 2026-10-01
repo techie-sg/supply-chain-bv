@@ -5,9 +5,11 @@ from __future__ import annotations
 import math
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import structlog
 import yaml
 from pydantic import ValidationError
 from sqlalchemy import Engine
@@ -15,6 +17,8 @@ from sqlalchemy import Engine
 from database.models import HourlyMetric, Order, Rider, Zone
 from domain.scenario import ScenarioData
 from queries.scenarios import read_scenario_rows, replace_scenario
+
+logger = structlog.stdlib.get_logger(__name__)
 
 SCENARIO_DIR = Path(__file__).resolve().parent / "scenario_data"
 TIMEZONE = ZoneInfo("Asia/Kolkata")
@@ -40,7 +44,7 @@ def scenario_names() -> list[dict[str, str]]:
     for key in _scenario_paths():
         data = _read_scenario(key)
         scenarios.append(
-            {"key": key, "title": data.title, "description": data.description}
+            {"key": key, "title": data.title, "description": data.description},
         )
     return scenarios
 
@@ -132,11 +136,18 @@ def build_scenario(key: str, as_of: datetime) -> tuple[list[object], dict[str, A
 
 def load_scenario(key: str, engine: Engine | None = None) -> dict[str, Any]:
     """Atomically replace all operational rows with one validated scenario."""
+    started = perf_counter()
     rows, _ = build_scenario(key, datetime.now(TIMEZONE))
     replace_scenario(rows, engine)
     context = current_scenario(engine)
     if context is None:
         raise RuntimeError("No saved scenario after loading")
+    logger.info(
+        "Scenario loaded",
+        scenario=key,
+        counts=context["counts"],
+        duration_ms=round((perf_counter() - started) * 1000, 2),
+    )
     return context
 
 

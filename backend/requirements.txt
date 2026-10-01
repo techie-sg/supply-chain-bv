@@ -9,3 +9,4 @@ sqlalchemy==2.1.1
 langchain-core
 langchain-groq
 requests
+structlog>=25,<27

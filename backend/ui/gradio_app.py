@@ -1,17 +1,19 @@
 """Local DispatchDesk workspace for scenario data and dispatch guidance."""
 
-import logging
 import os
 from collections.abc import Iterator
 from html import escape
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import gradio as gr
 import requests
+import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
 from domain.chat import ChatMessage
+from logging_config import configure_logging
 from service.rag import answer_question
 from service.scenarios import (
     current_scenario,
@@ -20,7 +22,7 @@ from service.scenarios import (
     scenario_names,
 )
 
-logger = logging.getLogger(__name__)
+logger = structlog.stdlib.get_logger(__name__)
 CSS_PATH = Path(__file__).with_name("gradio_app.css")
 THEME = gr.themes.Base(
     primary_hue="indigo",
@@ -226,18 +228,20 @@ def _table_views(context: dict[str, Any] | None) -> tuple[dict, dict, dict, dict
             {
                 "headers": [
                     labels.get(
-                        header, header.replace("_", " ").title().replace(" Id", " ID")
+                        header,
+                        header.replace("_", " ").title().replace(" Id", " ID"),
                     )
                     for header in columns
                 ],
                 "data": [[row[index] for index in indices] for row in table["data"]],
-            }
+            },
         )
     return views[0], views[1], views[2], views[3]
 
 
 def prepare_scenario(
-    key: str, current: dict[str, Any] | None = None
+    key: str,
+    current: dict[str, Any] | None = None,
 ) -> tuple[str, dict, dict, dict, dict]:
     """Read current rows from the database; preview other starting scenarios."""
     try:
@@ -250,7 +254,7 @@ def prepare_scenario(
     except (KeyError, ValueError, SQLAlchemyError, RuntimeError) as exc:
         logger.exception("Could not prepare scenario %s", key)
         raise gr.Error(
-            "Could not prepare this scenario. Check its configuration and database connection."
+            "Could not prepare this scenario. Check its configuration and database connection.",
         ) from exc
     return _scenario_summary(context), *_table_views(context)
 
@@ -264,7 +268,7 @@ def load_selected_scenario(
     except (KeyError, ValueError, SQLAlchemyError, RuntimeError) as exc:
         logger.exception("Could not load scenario %s", key)
         raise gr.Error(
-            "Scenario could not be loaded. Check the database connection and migrations."
+            "Scenario could not be loaded. Check the database connection and migrations.",
         ) from exc
     return (
         context,
@@ -280,7 +284,7 @@ def restore_workspace() -> tuple:
     try:
         context = current_scenario()
     except (KeyError, ValueError, SQLAlchemyError, RuntimeError):
-        logger.warning("Could not restore the saved scenario")
+        logger.warning("Could not restore the saved scenario", exc_info=True)
         empty_message = "Saved scenario unavailable. Check the database connection and refresh again."
         context = None
     else:
@@ -327,17 +331,19 @@ def chat(
     history = history or []
     if not message.strip():
         return history, ""
+    request_id = uuid4().hex
     try:
-        answer = answer_question(message, history=_conversation_history(history))
+        with structlog.contextvars.bound_contextvars(request_id=request_id):
+            answer = answer_question(message, history=_conversation_history(history))
     except (
         requests.RequestException,
         SQLAlchemyError,
         RuntimeError,
         ValueError,
     ) as exc:
-        logger.exception("Assistant request failed")
+        logger.exception("Assistant request failed", request_id=request_id)
         raise gr.Error(
-            "The assistant is unavailable right now. Please try again."
+            "The assistant is unavailable right now. Please try again.",
         ) from exc
     return history + [
         {"role": "user", "content": message},
@@ -346,7 +352,8 @@ def chat(
 
 
 def respond_to_pending(
-    message: str, history: list[dict] | None
+    message: str,
+    history: list[dict] | None,
 ) -> Iterator[tuple[list[dict], str]]:
     """Answer the message already displayed by the browser without duplicating it."""
     history = history or []
@@ -405,7 +412,8 @@ def _situation_heading(key: str | None, scenarios: list[dict[str, str]]) -> str:
         else "No scenario loaded",
     )
     description = scenario.get(
-        "description", "Choose and load a scenario to get started."
+        "description",
+        "Choose and load a scenario to get started.",
     )
     return (
         '<div class="page-heading"><span class="section-kicker">CURRENT SITUATION</span>'
@@ -592,7 +600,7 @@ def build_app() -> gr.Blocks:
                                             max_height="calc(100dvh - 390px)",
                                             buttons=["fullscreen", "copy"],
                                             elem_classes="scenario-table",
-                                        )
+                                        ),
                                     )
                         gr.Markdown(
                             "Synthetic starting snapshots · Refresh to see saved changes",
@@ -614,7 +622,8 @@ def build_app() -> gr.Blocks:
             ).then(_assistant_context, inputs=current, outputs=context_banner)
         current.change(
             lambda context: _situation_heading(
-                context["scenario_key"] if context else None, scenarios
+                context["scenario_key"] if context else None,
+                scenarios,
             ),
             inputs=current,
             outputs=situation,
@@ -698,14 +707,19 @@ def build_app() -> gr.Blocks:
     return app
 
 
+if __name__ == "__main__":
+    configure_logging()
+
 app = build_app()
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+    configure_logging()
+    port = int(os.environ.get("PORT", "7860"))
+    logger.info("DispatchDesk starting", host="0.0.0.0", port=port)
     app.launch(
         server_name="0.0.0.0",
-        server_port=int(os.environ.get("PORT", "7860")),
+        server_port=port,
         share=False,
         theme=THEME,
         css_paths=CSS_PATH,

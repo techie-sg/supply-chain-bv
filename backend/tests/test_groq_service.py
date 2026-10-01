@@ -38,7 +38,9 @@ def test_groq_client_is_lazy_reused_and_keeps_message_roles(monkeypatch) -> None
 
 def test_groq_loads_runtime_credentials_on_first_generation(monkeypatch) -> None:
     monkeypatch.setattr(
-        groq, "get_settings", lambda: SimpleNamespace(groq_api_key=SecretStr("runtime"))
+        groq,
+        "get_settings",
+        lambda: SimpleNamespace(groq_api_key=SecretStr("runtime")),
     )
 
     def client(**kwargs):
@@ -57,7 +59,9 @@ def test_groq_preserves_previous_user_and_assistant_turns(monkeypatch) -> None:
         return SimpleNamespace(text="follow-up answer")
 
     monkeypatch.setattr(
-        groq, "ChatGroq", lambda **kwargs: SimpleNamespace(invoke=invoke)
+        groq,
+        "ChatGroq",
+        lambda **kwargs: SimpleNamespace(invoke=invoke),
     )
     service = GroqService(api_key=SecretStr("test-key"))
     assert (

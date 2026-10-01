@@ -2,7 +2,9 @@
 
 from collections.abc import Sequence
 from functools import cached_property
+from time import perf_counter
 
+import structlog
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_groq import ChatGroq
 from pydantic import SecretStr
@@ -11,6 +13,8 @@ from config import get_settings, require
 from constants import GROQ_MODEL
 from domain.chat import ChatMessage
 from service.llm_service import LLMService
+
+logger = structlog.stdlib.get_logger(__name__)
 
 
 class GroqService(LLMService):
@@ -27,7 +31,7 @@ class GroqService(LLMService):
         return ChatGroq(
             model=self.model,
             api_key=SecretStr(
-                require(self._api_key or get_settings().groq_api_key, "GROQ_API_KEY")
+                require(self._api_key or get_settings().groq_api_key, "GROQ_API_KEY"),
             ),
             temperature=0,
         )
@@ -43,5 +47,13 @@ class GroqService(LLMService):
             message_type = HumanMessage if message["role"] == "user" else AIMessage
             messages.append(message_type(content=message["content"]))
         messages.append(HumanMessage(content=user_message))
+        started = perf_counter()
         response = self._client.invoke(messages)
+        logger.info(
+            "Groq generation completed",
+            model=self.model,
+            messages=len(messages),
+            tokens=getattr(response, "usage_metadata", None),
+            duration_ms=round((perf_counter() - started) * 1000, 2),
+        )
         return response.text

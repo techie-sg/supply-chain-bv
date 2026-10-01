@@ -96,7 +96,7 @@ class ScenarioData(ScenarioRow):
                 raise ValueError(f"unknown rider for order {order.order_id}")
         for route in self.candidate_routes:
             if len(route.order_ids) != len(set(route.order_ids)) or not set(
-                route.order_ids
+                route.order_ids,
             ) <= set(order_ids):
                 raise ValueError("candidate route contains duplicate or unknown orders")
         return self

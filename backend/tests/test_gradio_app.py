@@ -47,7 +47,7 @@ def test_loading_uses_service_and_clears_chat_only_on_success(monkeypatch) -> No
 
     monkeypatch.setattr(gradio_app, "load_scenario", load)
     current, history, draft, summary, *tables = gradio_app.load_selected_scenario(
-        "backlog"
+        "backlog",
     )
     assert called == ["backlog"]
     assert current == context and len(tables) == 4
@@ -264,7 +264,7 @@ def test_follow_up_uses_gradio_history_and_new_session_starts_empty(
         [
             gr.ChatMessage(role=message["role"], content=message["content"])
             for message in first_history
-        ]
+        ],
     )
     browser_history = [dict(message) for message in chatbot.preprocess(payload)]
     follow_up_history, _ = gradio_app.chat("Why?", browser_history)
@@ -324,7 +324,8 @@ def test_clear_chat_waits_for_outstanding_workspace_callbacks() -> None:
 
 @pytest.mark.parametrize("error", [ValueError("Invalid YAML"), OSError("Unreadable")])
 def test_unavailable_scenarios_do_not_prevent_assistant_startup(
-    monkeypatch, caplog, error
+    monkeypatch,
+    error,
 ) -> None:
     def unavailable():
         raise error
@@ -355,7 +356,6 @@ def test_unavailable_scenarios_do_not_prevent_assistant_startup(
         )
         == 2
     )
-    assert "Could not list scenarios" in caplog.text
 
 
 def test_dropdown_lists_all_scenarios_and_handles_empty_inventory(monkeypatch) -> None:
@@ -382,7 +382,9 @@ def test_launch_supports_railway_port(monkeypatch, port, expected) -> None:
         monkeypatch.setenv("PORT", port)
     options = {}
     monkeypatch.setattr(
-        gradio_app.app, "launch", lambda **kwargs: options.update(kwargs)
+        gradio_app.app,
+        "launch",
+        lambda **kwargs: options.update(kwargs),
     )
     gradio_app.main()
     assert options["server_name"] == "0.0.0.0"

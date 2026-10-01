@@ -119,7 +119,7 @@ def test_ui_entry_point_passes_conversation_to_llm(monkeypatch) -> None:
         (
             "user: Should riders jump red lights?\n"
             "assistant: No. Safety comes first.\nFollow-up question: Why?"
-        )
+        ),
     ]
     assert "continuing the conversation" in llm.messages[0][1]
     assert "<context>" in llm.messages[0][1]

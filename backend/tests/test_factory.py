@@ -17,13 +17,17 @@ def test_factories_use_settings_without_calling_external_providers(monkeypatch) 
     )
     assert isinstance(llm, GroqService) and llm.model == "chat"
     assert isinstance(
-        factory.create_chunking_strategy(), MarkdownSectionChunkingStrategy
+        factory.create_chunking_strategy(),
+        MarkdownSectionChunkingStrategy,
     )
 
 
 def test_fixed_size_settings_select_the_alternative_strategy() -> None:
     settings = Settings(  # type: ignore[call-arg]
-        _env_file=None, chunking_strategy="fixed_size", chunk_size=100, chunk_overlap=20
+        _env_file=None,
+        chunking_strategy="fixed_size",
+        chunk_size=100,
+        chunk_overlap=20,
     )
     strategy = factory.create_chunking_strategy(settings)
     assert isinstance(strategy, FixedSizeChunkingStrategy)

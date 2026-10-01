@@ -28,7 +28,7 @@ def insert_chunks(
     by_source: dict[str, list[tuple[CorpusDocument, list[float]]]] = {}
     for document, embedding in zip(documents, embeddings, strict=True):
         by_source.setdefault(document.metadata["source"], []).append(
-            (document, embedding)
+            (document, embedding),
         )
 
     with get_session(engine) as session:
@@ -60,7 +60,7 @@ def insert_chunks(
                 delete(DocumentChunk).where(
                     DocumentChunk.document_id == document_id,
                     DocumentChunk.chunk_id >= len(chunks),
-                )
+                ),
             )
 
             rows = [
@@ -80,7 +80,7 @@ def insert_chunks(
                         "content": chunk_insert.excluded.content,
                         "embedding": chunk_insert.excluded.embedding,
                     },
-                )
+                ),
             )
     return len(documents)
 

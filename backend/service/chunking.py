@@ -36,7 +36,7 @@ class FixedSizeChunkingStrategy(ChunkingStrategy):
     ) -> None:
         if chunk_size <= 0 or not 0 <= overlap < chunk_size:
             raise ValueError(
-                "chunk_size must be positive and 0 <= overlap < chunk_size"
+                "chunk_size must be positive and 0 <= overlap < chunk_size",
             )
         self.chunk_size = chunk_size
         self.overlap = overlap

@@ -10,7 +10,7 @@ down_revision: str | Sequence[str] | None = "0001_six_tables"
 
 def upgrade() -> None:
     op.execute(
-        "ALTER TABLE app.documents ALTER COLUMN id SET DEFAULT gen_random_uuid()"
+        "ALTER TABLE app.documents ALTER COLUMN id SET DEFAULT gen_random_uuid()",
     )
 
 

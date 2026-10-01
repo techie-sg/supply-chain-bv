@@ -62,10 +62,11 @@ def test_each_file_can_define_its_own_data(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(scenarios, "SCENARIO_DIR", tmp_path)
 
     rows, context = build_scenario(
-        "custom", datetime(2026, 10, 3, 19, 30, tzinfo=ZoneInfo("Asia/Kolkata"))
+        "custom",
+        datetime(2026, 10, 3, 19, 30, tzinfo=ZoneInfo("Asia/Kolkata")),
     )
     assert scenario_names() == [
-        {"key": "custom", "title": data["title"], "description": data["description"]}
+        {"key": "custom", "title": data["title"], "description": data["description"]},
     ]
     assert context["store_id"] == "TEST-STORE"
     assert context["counts"]["hourly_metrics"] == 1
@@ -73,7 +74,8 @@ def test_each_file_can_define_its_own_data(monkeypatch, tmp_path) -> None:
 
 
 def test_invalid_scenario_is_rejected_before_database_work(
-    monkeypatch, tmp_path
+    monkeypatch,
+    tmp_path,
 ) -> None:
     def no_database(*args, **kwargs):
         raise AssertionError("invalid scenarios must not access the database")

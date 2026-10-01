@@ -3,6 +3,7 @@
 from alembic import context
 from database import models  # noqa: F401 - registers tables with Base.metadata
 from database.session import Base, build_engine, database_url
+from logging_config import configure_logging
 
 
 def run_migrations() -> None:
@@ -19,6 +20,7 @@ def run_migrations() -> None:
             context.run_migrations()
         return
 
+    configure_logging()
     engine = build_engine()
     try:
         with engine.connect() as connection:

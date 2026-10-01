@@ -1,6 +1,7 @@
 """Typed runtime settings loaded from environment variables."""
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -10,7 +11,8 @@ from constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE, GROQ_MODEL, JIN
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=Path(__file__).resolve().parent / ".env", extra="ignore"
+        env_file=Path(__file__).resolve().parent / ".env",
+        extra="ignore",
     )
 
     database_url: SecretStr | None = Field(
@@ -19,6 +21,7 @@ class Settings(BaseSettings):
     )
     jina_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     embedding_provider: str = "jina"
     embedding_model: str = JINA_MODEL
     llm_provider: str = "groq"

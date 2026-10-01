@@ -28,7 +28,7 @@ def upgrade() -> None:
             ORDER BY c.embedding::vector(768) <=> query_embedding
             LIMIT match_count
         $$
-        """
+        """,
     )
     op.execute("REVOKE EXECUTE ON FUNCTION app.match_document_chunks FROM PUBLIC, anon")
     op.execute("GRANT EXECUTE ON FUNCTION app.match_document_chunks TO service_role")
