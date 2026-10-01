@@ -34,21 +34,26 @@ Recommendations use the relevant operational facts, applicable policies, and any
 
 It looks at the work waiting, the age and attributes of orders, and riders who are available, returning, on break, or on standby. It then assesses the options permitted by the playbook, such as prioritizing eligible orders, batching compatible deliveries, requesting standby capacity, or adjusting serviceability. Customer updates can be prepared alongside the proposal. Missing availability, route information, or an incentive cap is identified before an option depending on it can be recommended.
 
-### 4. Can I use it to improve how I run the next shift?
-
-You can compare equivalent periods across days and see changes in order volume, riders online, packing time, rider wait, and travel time. DispatchDesk connects those observations to the operating guidance so you can identify where to investigate and what adjustments to consider. It distinguishes an observed change from a possible explanation. Any delivery estimate must come from operational data, be labeled as an estimate range, and carry its observation time.
-
-### 5. Will it remember how I want the store to operate?
+### 4. Will it remember how I want the store to operate?
 
 You can save alert thresholds and their applicable time windows, batching restrictions, and an incentive cap for your store. DispatchDesk confirms these preferences and applies them when the same manager returns in a later session. Conflicts are surfaced for you to resolve. Preferences can impose stricter limits, but cannot relax mandatory policy. Thresholds are evaluated during your interactions; continuous background monitoring is outside the core scope.
 
-### 6. Who makes the final decision and carries out the action?
+### 5. Who makes the final decision and carries out the action?
 
 You do. DispatchDesk prepares assignments, batches, incentives, service-area changes, call-ins, and messages as proposals. It explains the basis for each so you can approve, reject, or ask for another option. Execution is a separate step requiring explicit approval and a check that the proposal still fits the current state. In the demonstration, approved changes affect only synthetic data and never contact real riders or customers.
 
-### 7. How does DispatchDesk handle my data?
+### 6. How does DispatchDesk handle my data?
 
 You own your data. DispatchDesk fetches only the information relevant to your question and sends those details for processing, so it can give you a useful answer grounded in your store's context.
+
+### 7. How will I know DispatchDesk is helping my store?
+
+Success should show up in your shift: less time working out what needs attention and more decisions you can explain using the facts. We will look at:
+
+- **Faster decisions:** time taken to understand an issue and choose an action, compared with using the same records and policies without DispatchDesk.
+- **Useful guidance:** recommendations you can use without major correction, with your feedback on what you accepted or rejected and why.
+- **Better order flow:** waiting time for packed orders, age of the oldest waiting order, and the share of deliveries within the promised window, compared across shifts with similar demand, capacity, and weather.
+- **Consistency across shifts:** your saved preferences applied correctly without having to repeat them.
 
 ## Internal and guardrail FAQs
 
@@ -60,6 +65,18 @@ Recommendations must satisfy the relevant dispatch, batching, cold-chain, custom
 
 State what is known, identify what is missing, and explain the next useful check. Unavailable or stale data must never become invented queue counts, rider states, timings, or ETAs. Older records carry their observation time. Ambiguous references need clarification when the available records cannot resolve them. Policy guidance can still help the manager work through a question, while specific recommendations wait for the facts they require.
 
-### 10. How will we measure success?
+### 10. How will we measure success internally?
 
-We will compare decision time and quality with and without DispatchDesk, starting with the six example cases in the [requirements](initial/requirements.md). Success means managers make decisions faster, grounded in accurate data and relevant policies, with their preferences respected and explicit approval before any action.
+Track customer outcomes alongside answer quality and service reliability. Start with the six example cases in the [requirements](initial/requirements.md), then expand coverage to varied store conditions, follow-ups, and unavailable or stale data.
+
+| Metric | What we measure |
+| --- | --- |
+| Decision quality | Share of evaluated responses that identify the issue correctly and propose a useful action consistent with the data and policy. |
+| Grounding and retrieval | Unsupported operational claims, citation correctness, and how often the required policy passages appear in the top three retrieval results. |
+| Preference recall | Share of saved preferences correctly applied in a later session, including conflicts surfaced instead of silently overridden. |
+| Policy and approval compliance | Prohibited recommendations, valid questions incorrectly refused, and actions taken without explicit approval. |
+| Reliability and freshness | Tool-call failure rate, stale-data occurrences, and the share of these cases handled with a clear limitation and useful next step. |
+| Response speed | Median and 95th-percentile time from request to completed answer; cache hit rate and its effect on latency. |
+| Operating cost | Provider cost per completed answer, including retrieval, generation, and retries. |
+
+Record a baseline and compare results after each change. For the evaluated cases, target all six examples passing, correct recall of every tested preference, and zero fabricated operational figures or unapproved actions. Set decision-time, latency, and cost targets from baseline measurements; faster answers count as an improvement only when decision quality is maintained.
