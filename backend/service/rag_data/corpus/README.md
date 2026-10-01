@@ -1,50 +1,40 @@
-# DispatchDesk RAG corpus
+# DispatchDesk policy corpus
 
-**Status:** Week 1, Task 7 deliverable (revision 1.1, 2026-09-29)  
-**Document count:** 7 operational documents  
-**Expected chunk count:** 37 (one chunk per `##` section, README excluded)  
-**Format:** UTF-8 Markdown, one retrieval-friendly source per file  
-**Intended use:** Chunk each document by its `##` sections. Text before the first `##` is header metadata, not chunk content. Preserve `doc_id`, title, section heading, version, and file on every chunk. **Do not ingest this README.**
+Seven Markdown documents provide simulated dispatch policy for the RAG assistant. They are based on the [sample dispatch playbook](../../../../docs/initial/sample_data/dispatch_operations_playbook.pdf); thresholds are illustrative demo rules.
 
-## Source and authority
+## Documents
 
-These are purpose-built, simulated operating documents for the DispatchDesk demo. The primary source is the *Dark Store Last-Mile Dispatch Playbook* (`docs/initial/sample_data/dispatch_operations_playbook.pdf`), a sample operations document whose thresholds are illustrative only. They are not evidence of an actual employer's policy, legal advice, or live store state. Where the playbook leaves a boundary unresolved, the team's interpretation is recorded in the decision log below.
+| Document ID | File | Sections | Coverage |
+| --- | --- | --- | --- |
+| DD-SOP-001 | [Dispatch SOP](01-dispatch-sop.md) | 4 | Queue triage, priorities, proposals, preferences |
+| DD-DIAG-001 | [Delay diagnosis](02-delay-diagnosis-guide.md) | 8 | Delivery stages, SLA interpretation, live and historical diagnosis |
+| DD-BATCH-001 | [Batching and cold chain](03-batching-and-cold-chain.md) | 5 | Order count, geography, detour, items, frozen goods, age |
+| DD-WEATHER-001 | [Rain and surge](04-rain-and-surge-playbook.md) | 5 | Capacity options, surge declarations, safety |
+| DD-COMMS-001 | [Customer communication](05-customer-communication.md) | 4 | Honest estimates, delay notices, message drafts |
+| DD-RIDER-001 | [Rider safety and hours](06-rider-safety-and-working-hours.md) | 5 | Safety, penalties, shifts, breaks, refusals |
+| DD-QUICKREF-001 | [Quick reference](07-quick-reference.md) | 6 | Symptoms, first actions, escalation |
 
-Source order for the demo:
+## Ingestion and retrieval
 
-1. Safety and working-hours limits in `06-rider-safety-and-working-hours.md` are hard constraints.
-2. Explicit order, batching, and customer-communication rules in their respective documents apply to proposals.
-3. Manager preferences from memory may add stricter constraints; they cannot relax a policy rule. Conflicts are surfaced rather than silently resolved.
-4. Current order, rider, stage, weather, and time facts come only from live or historical tools, never from this corpus.
+Run `uv run python -m service.ingestion` from `backend/`. The configured default strategy splits at `##` headings and produces **37 chunks**. Header text before the first section supplies metadata. This README is excluded. An optional fixed-size strategy produces a different count; 37 is not a runtime limit.
 
-Rules about the assistant's own behavior (no invented figures, draft-only actions, handling missing data) live in the system prompt and guardrail layer, not in this corpus. See `notes/rules-moved-to-system-prompt.md`.
+`CorpusService` attaches document ID, title, version, section, source path, and file hash. Jina embeds the text; SQLAlchemy queries upsert it into `app.documents` and `app.document_chunks`. Stored chunk numbers are zero-based, and retrieved citations use the policy `doc_id#chunk_number`, such as `DD-BATCH-001#0`.
 
-## Inventory and query coverage
+The assistant retrieves the nearest three passages by default using pgvector cosine distance. Follow-up retrieval includes the recent exchange, and Groq receives the full session history, retrieved passages, and the [system prompt](../prompts/dispatch_manager_system.md).
 
-| ID | File | Sections | Coverage | Sample queries |
-| --- | --- | --- | --- | --- |
-| DD-SOP-001 | `01-dispatch-sop.md` | 4 | Triage, dispatch priority, draft-only workflow, preference handling | 1, 2, 3, 5, 6 |
-| DD-DIAG-001 | `02-delay-diagnosis-guide.md` | 8 | Stage targets, SLA cliff, causes by stage, historical and live diagnosis | 1, 2, 3 |
-| DD-BATCH-001 | `03-batching-and-cold-chain.md` | 5 | Batching purpose, eligibility checks, exclusions, preferences | 1, 3, 5 |
-| DD-WEATHER-001 | `04-rain-and-surge-playbook.md` | 5 | Heavy-rain expectations, levers in playbook order, surge exception, prohibited responses | 1, 2, 3, 4 |
-| DD-COMMS-001 | `05-customer-communication.md` | 4 | Honest estimates, delay notices, credits, message drafts | 3, 4 |
-| DD-RIDER-001 | `06-rider-safety-and-working-hours.md` | 5 | Safety rules, penalties, hours, breaks, refusals and alternatives | 4, 6 |
-| DD-QUICKREF-001 | `07-quick-reference.md` | 6 | Symptom → cause → first action → escalation trigger | 1, 2, 3, 4, 6 |
+## Scope and sources
 
-## Query-to-source retrieval map
+The corpus supplies rules, not live queue counts, rider states, weather observations, or ETAs. The current chat pipeline has no operational tools and does not receive scenario database rows. Tools and persistent store preferences described in the policy documents are intended interfaces for later project stages.
 
-| Query | Primary sections | Supporting sections |
-| --- | --- | --- |
-| 1. Backlog now; what first? | DD-SOP-001 triage; DD-QUICKREF-001 high rider wait | DD-DIAG-001 live queue; DD-BATCH-001 eligibility; DD-WEATHER-001 levers |
-| 2. Compare two evenings | DD-DIAG-001 historical metrics, causes by stage | DD-WEATHER-001 heavy-rain expectations; DD-DIAG-001 SLA cliff |
-| 3. Rain, batching, ETA | DD-BATCH-001 eligibility; DD-COMMS-001 estimates | DD-WEATHER-001 levers; DD-QUICKREF-001 high ride time |
-| 4. Speed and dock pay | DD-RIDER-001 non-negotiable rules | DD-WEATHER-001 prohibited responses and levers; DD-COMMS-001 |
-| 5. Store weekend preferences | DD-BATCH-001 preference interaction; DD-SOP-001 memory handling | DD-RIDER-001 safety floor |
-| 6. Extend rider shift | DD-RIDER-001 maximum shift and break | DD-QUICKREF-001 rider near limit; DD-SOP-001 draft-only workflow |
+Hard safety and hours constraints take priority. Explicit batching, cold-chain, and communication rules constrain proposals. Future stored preferences may make these rules stricter; they cannot relax them. Assistant behavior is defined in the system prompt; the [prompt notes](../prompts/rules-moved-to-system-prompt.md) explain the separation. A separate guardrail layer is planned.
 
-Task 9 test query ("why are my deliveries slipping when it rains?") should retrieve DD-WEATHER-001 *What to expect in heavy rain*, DD-DIAG-001 *Common causes by stage*, or DD-QUICKREF-001 *High ride time with the rain flag on* in the top 3.
+The normal, backlog, and rain [scenario files](../../scenario_data/) seed operational tables. Rain YAML includes synthetic candidate-route adjacency, detour assumptions, and illustrative ETA inputs. These are not verified map results, are not persisted in the four operational tables, and are not available to chat. A general zone adjacency map, recorded incentive cap, and store closing time remain undefined.
 
-## Decision log
+## Retrieval review
+
+For the rain-delay question, inspect whether the top three passages include both delay-diagnosis and rain-playbook guidance. Other useful checks cover frozen-item batching, unsafe rider pressure, mandatory breaks, and the eight-minute queue boundary. A similarity score alone does not establish that every rule needed for an answer was retrieved.
+
+## Recorded policy decisions
 
 | Date | Decision | Affects |
 | --- | --- | --- |
@@ -53,10 +43,4 @@ Task 9 test query ("why are my deliveries slipping when it rains?") should retri
 | 2026-09-28 | Rain alone does not declare a surge; the manager must declare it | DD-WEATHER-001 |
 | 2026-09-29 | Restored playbook content missing from v1.0 (SLA cliff, causes by stage, rain expectations, rider protections, incentive sign-off); added quick reference; moved assistant-behavior rules to the system prompt | All |
 
-## Known data gaps
-
-Zone adjacency and detours, the incentive cap, and a store closing time are not defined in the corpus or the sample dataset. Until they are added to the dataset, a batch depending on unknown geography cannot be recommended, an incentive proposal needs a recorded cap, and shift decisions use policy maximums and verified rider hours.
-
-## Change control
-
-When a team decision resolves an open boundary, change the relevant source document and this README together, add a row to the decision log, then rerun retrieval checks for the affected query. Do not change thresholds in prompts or code while leaving corpus text stale.
+When policy changes, update its document and record the decision here. Reingest changed documents and check affected retrieval queries. Keep policy thresholds consistent with the system prompt and any future code checks.

@@ -1,29 +1,32 @@
 # DispatchDesk
 
-A Gradio assistant for dispatch managers. Answers use the dispatch playbook, Jina embeddings, PostgreSQL/pgvector retrieval, and Groq. Conversations retain history within the current session.
+A dispatch assistant that answers questions using a simulated operating playbook. The current application provides Gradio chat with session history, Jina embeddings, PostgreSQL/pgvector retrieval, and Groq answer generation.
 
-Demo tools load **normal**, **backlog**, and **rain** scenarios and display orders, riders, zones, and hourly metrics. The current scenario is read from the database; Refresh shows saved changes. Other scenarios preview their YAML starting data. Loading a scenario replaces operational data and clears chat. Scenario rows are not sent to the chat model.
+Demo tools load **normal**, **backlog**, and **rain** starting snapshots and inspect orders, riders, hourly metrics, and zones. Current data comes from PostgreSQL; Refresh reads saved changes. Other scenarios preview their YAML definitions. Loading a scenario replaces operational rows and clears chat.
 
-## Local setup
+Chat uses the question, conversation history, and retrieved policy passages. Operational scenario rows are not sent to the chat model. Operational tools, persistent preference memory, and action execution are planned work.
+
+## Setup
 
 Requires Python 3.13, uv, PostgreSQL with pgvector, and Jina/Groq API keys.
 
+From the repository root:
+
 ```bash
 cd backend
-cp .env.example .env
 uv sync --locked
+cp .env.example .env
 ```
 
-Set these values in `backend/.env` or your environment:
+Set these values in `backend/.env` or the process environment. Environment variables take precedence; `.env` is ignored by Git.
 
 | Variable | Purpose |
 | --- | --- |
-| `DATABASE_URL` | PostgreSQL connection URL; `DB_URL` is also accepted |
-| `JINA_API_KEY` | Embeddings |
-| `GROQ_API_KEY` | Answer generation |
-| `PORT` | HTTP port; defaults to `7860` |
+| `DATABASE_URL` | PostgreSQL URL; `DB_URL` is also accepted |
+| `JINA_API_KEY` | Jina embeddings |
+| `GROQ_API_KEY` | Groq answer generation |
 
-Use a SQLAlchemy connection URL such as `postgresql+psycopg://user:password@localhost:5432/dispatchdesk`. The local `.env` is ignored by Git.
+Example database URL: `postgresql+psycopg://user:password@localhost:5432/dispatchdesk`.
 
 Run from `backend/`:
 
@@ -33,13 +36,23 @@ uv run python -m service.ingestion
 uv run python -m ui.gradio_app
 ```
 
-Open http://localhost:7860. Migrations are manual; application startup does not migrate, ingest documents, or reset scenarios.
+Open http://localhost:7860. Migrations are manual and run from your local machine. Application startup does not migrate, ingest documents, or load a scenario.
 
-Ingestion upserts documents and chunks from `backend/service/rag_data/corpus/`. Defaults are `jina-embeddings-v5-text-nano`, Markdown section chunking, and Groq's `openai/gpt-oss-20b`. Reingest after changing the embedding model or chunking strategy.
+To change the listening port, set `PORT` in the process environment:
 
-## RAG notebook
+```bash
+PORT=8080 uv run python -m ui.gradio_app
+```
 
-Open [simple_rag.ipynb](backend/notebooks/simple_rag.ipynb) using `backend/.venv/bin/python` as the kernel. It walks through chunking, embedding, database storage, retrieval, and a conversation with a follow-up. Running the storage cell writes document data; provider cells make API calls.
+`PORT` defaults to `7860`; adding it to `.env` does not change the listening port.
+
+## RAG
+
+The corpus is in [`backend/service/rag_data/corpus/`](backend/service/rag_data/corpus/README.md). Default Markdown section chunking produces 37 chunks from seven operational documents. Ingestion upserts document and chunk rows in one transaction. The corpus README and prompt files are excluded from ingestion.
+
+Defaults are `jina-embeddings-v5-text-nano` for embeddings and Groq's `openai/gpt-oss-20b` for answers. Provider and chunking options are listed in [`backend/.env.example`](backend/.env.example). Reingest after changing the embedding model or chunking strategy.
+
+The [RAG notebook](backend/notebooks/simple_rag.ipynb) demonstrates chunking, embedding, storage, retrieval, and a conversation with a follow-up. Select `backend/.venv/bin/python` as its kernel. The storage cell writes document data; provider cells make API calls.
 
 ## Railway
 
@@ -48,23 +61,27 @@ Open [simple_rag.ipynb](backend/notebooks/simple_rag.ipynb) using `backend/.venv
 | Root directory | `/backend` |
 | Builder | Railpack |
 | Start command | `python -m ui.gradio_app` |
-| Healthcheck | `/` |
+| Healthcheck path | `/` |
 | Watch paths | `/backend/**` |
-| Domain target port | Match `PORT` |
+| Variable `PORT` | `8080` |
+| Domain target port | `8080` |
 
-Set `DATABASE_URL`, `JINA_API_KEY`, and `GROQ_API_KEY` as service variables. The application binds to `0.0.0.0` and the configured port. Apply migrations locally before deploying schema changes.
+Set `DATABASE_URL`, `JINA_API_KEY`, and `GROQ_API_KEY` on the application service in its production environment, then deploy the variable changes. Gradio binds to `0.0.0.0:$PORT`. The `/` healthcheck verifies that the homepage responds; it does not check database connectivity or AI credentials. Schema changes require local migrations before deployment.
 
 ## Code layout
 
-- `backend/ui/`: Gradio callbacks and styles.
-- `backend/service/`: scenarios, ingestion, RAG, provider services, and chunking strategies.
-- `backend/queries/`: database operations.
-- `backend/domain/`: data contracts.
-- `backend/database/` and `backend/alembic/`: SQLAlchemy models and migrations.
+| Path | Purpose |
+| --- | --- |
+| `backend/ui/` | Gradio callbacks, styles, and favicon |
+| `backend/service/` | RAG, ingestion, provider services, chunking, and scenarios |
+| `backend/queries/` | Database operations |
+| `backend/domain/` | Data contracts |
+| `backend/database/` | SQLAlchemy models and sessions |
+| `backend/alembic/` | Migrations |
+| `backend/config.py` | Pydantic settings |
+| `backend/service/factory.py` | Provider and chunking composition |
 
-Provider and chunking implementations are composed in `service/factory.py`; settings are in `config.py`.
-
-## Checks
+## Development checks
 
 Run from `backend/`:
 
@@ -75,6 +92,6 @@ uv run mypy . --exclude alembic/versions
 uv run pytest --cov=. --cov-report=term-missing
 ```
 
-Vector-store integration tests require `TEST_DATABASE_URL` pointing to a disposable PostgreSQL/pgvector database. They clear document tables in that database; otherwise they are skipped. CI requires 90% coverage.
+CI requires 90% coverage. Vector-store integration tests need `TEST_DATABASE_URL` pointing to a disposable PostgreSQL/pgvector database; they clear its document tables. Without that variable, those tests are skipped.
 
-See [requirements](docs/initial/requirements.md) and [scenario documentation](docs/scenarios.md).
+See the [team](docs/team.md), [scenario guide](docs/scenarios.md), and [original requirements](docs/initial/requirements.md).
