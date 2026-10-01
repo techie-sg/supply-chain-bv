@@ -2,68 +2,66 @@
 
 ## Press release
 
-### DispatchDesk launches to help dark store managers make safe calls when deliveries slip
+### DispatchDesk launches an AI assistant to help dark store managers run operations more efficiently
 
-**Understand where orders are slowing down, review practical options, and keep control of dispatch without putting riders under unsafe pressure.**
+**Store data, operating policies, and manager preferences come together in one conversation to help managers set priorities, assess options, and make informed decisions.**
 
-**BENGALURU:** DispatchDesk today launched a dispatch copilot for dark store managers facing evening peaks and rain delays. Managers can ask why deliveries are slipping and what they should do first. The assistant brings together the order queue, rider availability, delivery-stage history, and the store's operating rules to explain the situation and propose a safe next step.
+**BENGALURU:** DispatchDesk today launched an AI assistant for dark store managers who need to turn operational information into decisions throughout their shift. Managers can ask what needs attention, how to use available capacity, or what changed in their store's performance. DispatchDesk connects the order queue, rider availability, delivery-stage history, and operating policies to explain the situation and recommend practical next steps.
 
-For Karthik Reddy, a dark store manager in Koramangala, a falling delivery score starts a scramble. He checks packed orders, calls riders, compares yesterday's numbers, and looks up which orders can be batched. Regional operations wants the delivery promise met, but sending a tired rider back out or combining frozen goods with another delivery can create a bigger problem. Karthik needs an answer he can check and a decision he can explain.
+For Karthik Reddy, a dark store manager in Koramangala, running the store means making a sequence of connected decisions: which orders to prioritize, whether available riders can handle the queue, when to request support, and what to tell customers. The information he needs is spread across dispatch screens, hourly reports, and playbooks. Each decision takes time to assemble and check, especially when several parts of the operation need attention at once.
 
-With DispatchDesk, he can ask, “Packed orders are piling up. What should I do first?” The assistant checks the queue and rider states, identifies the oldest waiting work, and explains which options fit the playbook. Frozen-item orders remain single-drop. Standby call-ins, eligible batches, and customer updates appear as proposals for Karthik to approve. When he asks why last night went badly, it compares packing, rider wait, and travel time using the relevant records.
+With DispatchDesk, Karthik can start with, “What needs my attention in the store, and what should I do next?” The assistant checks the queue and available capacity, identifies where work is accumulating, and explains which priorities follow from the data. If packed orders are waiting, it can help him assess returning riders, eligible batches, or standby capacity. If the figures point to longer packing times, it directs his attention to that stage. Each recommendation includes the relevant facts and policies so Karthik can judge the action before approving it.
 
-DispatchDesk also remembers his store's alert thresholds and batching preferences across shifts. It refuses requests to make riders speed, skip breaks, or work beyond policy limits, and offers permitted alternatives. Every operational recommendation shows its supporting facts and rules; an unsupported delivery estimate is never presented as a promise.
+The same conversation supports decisions beyond the immediate queue. Karthik can compare two evenings, see how packing, rider wait, and travel time changed alongside order volume and weather, and use those findings to decide what needs a closer look next shift. DispatchDesk remembers his alert thresholds, batching preferences, and incentive caps, bringing that context into later conversations. Operating rules, including cold-chain requirements and working-hours limits, are applied as part of assessing every option.
 
-“During a rush, I need to know what is holding us up and what I can safely change,” says Karthik. “DispatchDesk helps me check the options before I give the instruction.”
+“I need to know where my attention will make a difference,” says Karthik. “Having the store's numbers and rules together helps me work through the options and explain why I'm making a particular call.”
 
-“We built DispatchDesk to help the manager make a clear call with the evidence in front of them,” says the DispatchDesk team. “Rider safety and the manager's approval are part of that decision.”
+“We built DispatchDesk to help managers spend less time piecing information together and more time managing the shift,” says the DispatchDesk team. “The assistant connects what is happening, what the policies allow, and what the manager wants to achieve. The manager stays in control of the decision.”
 
-Managers and reviewers can explore the experience at [DispatchDesk](https://supply-chain-bv-production.up.railway.app) using prepared synthetic store situations. The project demonstration simulates dispatch changes and does not contact real riders or customers.
+Explore [DispatchDesk](https://supply-chain-bv-production.up.railway.app) with prepared store scenarios, inspect the records, and ask an operational question. The demonstration uses synthetic data and simulates approved changes.
 
 ## Customer FAQs
 
-### 1. What does DispatchDesk add to my dashboard?
+### 1. How does DispatchDesk help me manage my store day to day?
 
-It helps you work through a decision using the queue, riders, delivery history, and playbook together. You can ask what is holding up packed orders or why one evening was worse than another, inspect the supporting facts, and ask a follow-up. The goal is to give Karthik a practical next step he can assess without assembling the explanation across several sources himself.
+It helps you understand the state of your operation, decide where to focus, and work through the next action. Ask which work needs attention, whether current rider capacity matches the queue, or how performance compares with a previous shift. DispatchDesk brings the relevant records and policies into the answer and prioritizes options with reasons. Its initial scope covers order flow, dispatch capacity, delivery performance, and customer communication.
 
-### 2. Can it help me batch orders in the rain and tell customers when to expect delivery?
+### 2. What makes its recommendations grounded in my store?
 
-It checks order age, item count, geography, detours, cold-chain restrictions, and rider eligibility before proposing a batch. Frozen-item orders must travel separately, and excluded orders are explained. An ETA is given only when operational data supports it, as a labeled estimate range with its data basis and observation time. A batching decision or the ten-minute service promise does not establish an order's arrival time.
+Recommendations use the relevant operational facts, applicable policies, and any saved manager preferences. For example, proposing a batch requires checking the actual orders and rider availability against geography, item, detour, and cold-chain rules. The answer shows the supporting figures, their observation time, and the relevant policy. It explains excluded options and separates what the records show from what it recommends you do. General policy questions can be answered from the playbook alone.
 
-### 3. Will it change dispatch or send a message without asking me?
+### 3. How can it help me decide whether to use existing capacity or request more support?
 
-No. Assignments, batches, incentives, service-area changes, standby call-ins, and messages are drafts requiring explicit approval. The proposed action must still fit the current situation before simulated execution. Approval cannot waive safety or cold-chain rules. In this project, execution affects only synthetic data.
+It looks at the work waiting, the age and attributes of orders, and riders who are available, returning, on break, or on standby. It then assesses the options permitted by the playbook, such as prioritizing eligible orders, batching compatible deliveries, requesting standby capacity, or adjusting serviceability. Customer updates can be prepared alongside the proposal. Missing availability, route information, or an incentive cap is identified before an option depending on it can be recommended.
 
-### 4. Will I have to repeat my store preferences every shift?
+### 4. Can I use it to improve how I run the next shift?
 
-You can save an alert threshold and its applicable time window, batching restrictions, and an incentive cap for the same manager and store. DispatchDesk confirms the values and applies them in a later session. It surfaces conflicts rather than silently overriding a preference. Preferences may be stricter than policy, but cannot relax mandatory rules. Background monitoring and unsolicited alerts are outside the core project.
+You can compare equivalent periods across days and see changes in order volume, riders online, packing time, rider wait, and travel time. DispatchDesk connects those observations to the operating guidance so you can identify where to investigate and what adjustments to consider. It distinguishes an observed change from a possible explanation. Any delivery estimate must come from operational data, be labeled as an estimate range, and carry its observation time.
 
-### 5. What happens to the data I enter?
+### 5. Will it remember how I want the store to operate?
 
-Use synthetic information for the demonstration. External embedding and language-model providers process text needed for retrieval and answering, including questions, conversation context, and policy passages. The intended completed system also uses relevant synthetic tool results and preferences to support its answers. Real customer or rider information should not be entered without established access and retention controls.
+You can save alert thresholds and their applicable time windows, batching restrictions, and an incentive cap for your store. DispatchDesk confirms these preferences and applies them when the same manager returns in a later session. Conflicts are surfaced for you to resolve. Preferences can impose stricter limits, but cannot relax mandatory policy. Thresholds are evaluated during your interactions; continuous background monitoring is outside the core scope.
 
-Today, Jina receives retrieval queries, recent conversation context for follow-ups, and corpus text during ingestion. Groq receives the question, session history, retrieved passages, and system prompt. Current scenario database rows are not supplied to chat.
+### 6. Who makes the final decision and carries out the action?
+
+You do. DispatchDesk prepares assignments, batches, incentives, service-area changes, call-ins, and messages as proposals. It explains the basis for each so you can approve, reject, or ask for another option. Execution is a separate step requiring explicit approval and a check that the proposal still fits the current state. In the demonstration, approved changes affect only synthetic data and never contact real riders or customers.
+
+### 7. What happens to the data I enter?
+
+The demonstration uses synthetic store records and sample policies. External providers process text for retrieval and answering: Jina receives retrieval queries, recent conversation context for follow-ups, and policy text during ingestion; Groq receives the question, session history, retrieved passages, and system prompt. Current scenario database rows are not supplied to chat. Connecting operational tools and saved preferences will add relevant synthetic results to answer context. Real customer or rider data requires established access, retention, and provider controls before use.
 
 ## Internal and guardrail FAQs
 
-### 6. How should DispatchDesk respond to unsafe rider pressure or over-hours requests?
+### 8. How do we keep efficiency recommendations consistent with store policy, rider safety, and working hours?
 
-It must refuse to encourage or draft instructions to speed, break traffic rules, skip mandatory breaks, or work beyond the shift limit. It must also refuse pay penalties for weather- or safety-related delays. Rider-specific decisions require verified hours and last-break information from the rider-status tool, not an assumption or an unsupported assertion in the question.
+Recommendations must satisfy the relevant dispatch, batching, cold-chain, customer-communication, and rider policies together. Frozen-item orders remain single-drop; rider assignments require verified hours and break status. DispatchDesk must decline requests to speed, break traffic rules, skip mandatory breaks, exceed shift limits, or impose pay penalties for weather- or safety-related delays. It cites the applicable rule and offers permitted alternatives. Manager approval cannot waive these limits. The demonstration uses illustrative operating policies.
 
-The answer should cite the relevant policy and offer permitted options, such as standby capacity, eligible batching, reduced serviceability, or an honest customer update. Manager approval cannot override these restrictions. The demonstration uses illustrative playbook limits, not a claim about employment law.
+### 9. What should the assistant do when the evidence is incomplete?
 
-### 7. What should happen when information is missing, stale, or ambiguous?
+State what is known, identify what is missing, and explain the next useful check. Unavailable or stale data must never become invented queue counts, rider states, timings, or ETAs. Older records carry their observation time. Ambiguous references need clarification when the available records cannot resolve them. Policy guidance can still help the manager work through a question, while specific recommendations wait for the facts they require.
 
-DispatchDesk should state what could not be verified and avoid inventing counts, rider states, timings, or ETAs. An older snapshot must show its observation time and must not be presented as current. Missing routing or rider information prevents a specific recommendation that depends on it. References such as “that rider” or “last night” need clarification when the available records cannot resolve them. General policy guidance remains useful when operational data is unavailable.
+### 10. How will we know DispatchDesk helps managers make better decisions?
 
-### 8. How do we check that the answers follow the requirements?
+Evaluate whether managers can identify the operational issue, assess the relevant options, and choose a policy-compliant action using evidence they can inspect. The six cases in the [requirements](initial/requirements.md) cover current priorities, performance comparison, capacity and batching, policy conflicts, preference recall, and working-hours decisions. Check correct figures and citations, explained exclusions, recall across two sessions, useful handling of unavailable data, and explicit approval before any action.
 
-Use the six queries in the [requirements](initial/requirements.md): backlog, evening comparison, rain batching and ETA, unsafe rider pressure, preference recall, and a rider nearing the shift limit. Check that operational claims trace to tool results, policies are retrieved and applied, excluded orders are explained, preferences persist across two sessions, and every action remains a proposal until approved.
-
-Also test unavailable data and benign questions about breaks. A refusal count alone does not show that the assistant is helpful. Record the evidence and actual response for each case; do not claim measured delivery improvements or universal safety from a finite demonstration.
-
-### 9. Does the mock announcement describe the application available today?
-
-It describes the intended completed DispatchDesk experience. The current prototype has policy RAG chat, session history, scenario loading, and database-backed data inspection. Operational tools, persistent preferences, a separate guardrail layer, and simulated approval/execution are planned capabilities. This Week 1 document defines the customer promise the later work must deliver.
-
-*Review status: draft for whole-team review and agreement, as required by Task 3.*
+To assess efficiency, compare the time and completeness of a decision with and without the assistant using the same records and policies. Record the results before claiming time savings or better delivery performance. The current prototype provides policy chat and separate scenario inspection; connected operational tools, persistent preferences, and simulated approval and execution are the next capabilities needed to evaluate the full experience.
