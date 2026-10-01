@@ -1,14 +1,11 @@
 # DispatchDesk team
 
-| Team member | Responsibility |
-| --- | --- |
-| Sunny Gupta | Remaining project work with Priya Ranjan and Sharad |
-| Vishnu Mohan | RAG pipeline and 6-pager with Ravisekhar |
-| Ravisekhar R | RAG pipeline and 6-pager with Vishnu |
-| Priya Ranjan | Remaining project work with Sunny and Sharad |
-| Sharad Nailwal | Remaining project work with Sunny and Priya Ranjan |
+| Group | Team members | Tasks |
+| --- | --- | --- |
+| 1 — RAG and 6-pager | Vishnu Mohan, Ravisekhar R | Prepare the policy corpus; implement chunking, Jina embeddings, document ingestion, pgvector retrieval, and Groq answer generation; validate retrieval and grounded responses; write and maintain the 6-pager. |
+| 2 — Setup and integration | Sunny Gupta, Priya Ranjan, Sharad Nailwal | Set up the repository, dependencies, and environment configuration; implement database models, migrations, and scenario loading; integrate services with the Gradio UI; configure Railway deployment and CI; write the README and PR/FAQ. Implement the planned dispatch tools/MCP, preference memory, action approval, guardrails, caching, observability, and end-to-end evaluation; prepare the demo. |
 
-Sunny, Priya Ranjan, and Sharad share the work outside RAG and the 6-pager, including the application, scenario data, deployment, and the remaining planned tools, memory, guardrails, and observability. Individual task assignments are agreed within that group.
+Each group shares its listed tasks and coordinates integration and review with the other group.
 
 ## Current stack
 
