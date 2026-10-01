@@ -2,8 +2,8 @@
 
 | Group | Team members | Tasks |
 | --- | --- | --- |
-| 1 — RAG and 6-pager | Vishnu Mohan, Ravisekhar R | Prepare the policy corpus; implement chunking, Jina embeddings, document ingestion, pgvector retrieval, and Groq answer generation; validate retrieval and grounded responses; write and maintain the 6-pager. |
-| 2 — Setup and integration | Sunny Gupta, Priya Ranjan, Sharad Nailwal | Set up the repository, dependencies, and environment configuration; implement database models, migrations, and scenario loading; integrate services with the Gradio UI; configure Railway deployment and CI; write the README and PR/FAQ. Implement the planned dispatch tools/MCP, preference memory, action approval, guardrails, caching, observability, and end-to-end evaluation; prepare the demo. |
+| 1 : RAG and 6-pager | Vishnu Mohan, Ravisekhar R | Prepare the policy corpus; implement chunking, Jina embeddings, document ingestion, pgvector retrieval, and Groq answer generation; validate retrieval and grounded responses; write and maintain the 6-pager. |
+| 2 : Setup and integration | Sunny Gupta, Priya Ranjan, Sharad Nailwal | Set up the repository, dependencies, and environment configuration; implement database models, migrations, and scenario loading; integrate services with the Gradio UI; configure Railway deployment and CI; write the README and PR/FAQ. Implement the planned dispatch tools/MCP, preference memory, action approval, guardrails, caching, observability, and end-to-end evaluation; prepare the demo. |
 
 Each group shares its listed tasks and coordinates integration and review with the other group.
 
