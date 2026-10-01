@@ -60,8 +60,6 @@ Recommendations must satisfy the relevant dispatch, batching, cold-chain, custom
 
 State what is known, identify what is missing, and explain the next useful check. Unavailable or stale data must never become invented queue counts, rider states, timings, or ETAs. Older records carry their observation time. Ambiguous references need clarification when the available records cannot resolve them. Policy guidance can still help the manager work through a question, while specific recommendations wait for the facts they require.
 
-### 10. How will we know DispatchDesk helps managers make better decisions?
+### 10. How will we measure success?
 
-Evaluate whether managers can identify the operational issue, assess the relevant options, and choose a policy-compliant action using evidence they can inspect. The six example cases in the [requirements](initial/requirements.md) cover current priorities, performance comparison, capacity and batching, policy conflicts, preference recall, and working-hours decisions. Check correct figures and citations, explained exclusions, recall across two sessions, useful handling of unavailable data, and explicit approval before any action.
-
-To assess efficiency, compare the time and completeness of a decision with and without the assistant using the same records and policies. Record the results before claiming time savings or better delivery performance. The current prototype provides policy chat and separate scenario inspection; connected operational tools, persistent preferences, and simulated approval and execution are the next capabilities needed to evaluate the full experience.
+We will compare decision time and quality with and without DispatchDesk, starting with the six example cases in the [requirements](initial/requirements.md). Success means managers make decisions faster, grounded in accurate data and relevant policies, with their preferences respected and explicit approval before any action.
