@@ -8,37 +8,12 @@ from langchain_core.messages import AIMessage
 
 import gradio_app
 from config import require
-from service import chunker, embedder, ingestion, llm, rag, vector_store
+from service import chunker, embedder, ingestion, llm, rag
 
 
 class FakeTokenizer:
     def encode(self, text: str) -> list[str]:
         return text.split()
-
-
-class FakeSupabase:
-    def __init__(self, data: list[dict[str, Any]]) -> None:
-        self.data = data
-        self.calls: list[tuple[str, Any]] = []
-
-    def schema(self, name: str) -> "FakeSupabase":
-        self.calls.append(("schema", name))
-        return self
-
-    def table(self, name: str) -> "FakeSupabase":
-        self.calls.append(("table", name))
-        return self
-
-    def upsert(self, rows: list[dict], on_conflict: str) -> "FakeSupabase":
-        self.calls.append(("upsert", rows))
-        return self
-
-    def rpc(self, name: str, params: dict) -> "FakeSupabase":
-        self.calls.append(("rpc", params))
-        return self
-
-    def execute(self) -> SimpleNamespace:
-        return SimpleNamespace(data=self.data)
 
 
 def test_require_rejects_missing_values_without_leaking(monkeypatch) -> None:
@@ -48,8 +23,8 @@ def test_require_rejects_missing_values_without_leaking(monkeypatch) -> None:
     assert require(Settings(_env_file=None).jina_api_key, "JINA_API_KEY") == (  # type: ignore[call-arg]
         "secret-value"
     )
-    with pytest.raises(RuntimeError, match="Set SUPABASE_URL") as exc:
-        require("  ", "SUPABASE_URL")
+    with pytest.raises(RuntimeError, match="Set JINA_API_KEY") as exc:
+        require("  ", "JINA_API_KEY")
     assert "secret" not in str(exc.value)
 
 
@@ -112,41 +87,13 @@ def test_embed_texts(monkeypatch) -> None:
         embedder.embed_texts(["a"], api_key="k")
 
 
-def test_vector_store_and_llm_clients(monkeypatch) -> None:
-    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
-    monkeypatch.setenv("SUPABASE_KEY", "key")
+def test_llm_client(monkeypatch) -> None:
     monkeypatch.setenv("GROQ_API_KEY", "groq")
-    monkeypatch.setattr(vector_store, "create_client", lambda url, key: (url, key))
-    assert vector_store.get_supabase_client() == ("https://example.supabase.co", "key")
     assert llm.get_llm().model_name == llm.DEFAULT_MODEL
-
-    client = FakeSupabase([{"id": "doc-uuid", "chunk_id": 0}])
-    metadata = {
-        "doc_id": "d",
-        "title": "t",
-        "section": "s",
-        "version": "1.1 (2026-09-29)",
-        "source": "corpus/d.md",
-        "file_hash": "ab" * 32,
-    }
-    docs = [Document(page_content=c, metadata=metadata) for c in ("one", "two")]
-    assert vector_store.insert_chunks(client, docs, [[0.1], [0.2]]) == 1  # type: ignore[arg-type]
-    upserts = [rows for call, rows in client.calls if call == "upsert"]
-    assert upserts[0]["file_hash"] == "\\x" + "ab" * 32
-    assert upserts[0]["document_date"] == "2026-09-29"
-    assert [r["chunk_id"] for r in upserts[1]] == [0, 1]
-    assert {r["document_id"] for r in upserts[1]} == {"doc-uuid"}
-    assert ("schema", "app") in client.calls
-    client.calls.clear()
-    assert vector_store.retrieve(client, [0.1], 2) == client.data  # type: ignore[arg-type]
-    assert client.calls[0] == ("schema", "app")
-    with pytest.raises(ValueError, match="same length"):
-        vector_store.insert_chunks(client, docs, [])  # type: ignore[arg-type]
 
 
 def test_answer_question(monkeypatch) -> None:
     monkeypatch.setattr(rag, "embed_texts", lambda texts: [[0.1]])
-    monkeypatch.setattr(rag, "get_supabase_client", lambda: None)
     monkeypatch.setattr(rag, "retrieve", lambda **kw: [])
     assert "could not find" in rag.answer_question("q")
 
@@ -168,7 +115,6 @@ def test_answer_question(monkeypatch) -> None:
 def test_ingestion_main(monkeypatch) -> None:
     monkeypatch.setattr(ingestion, "validate_chunk_sizes", lambda **kw: {"x": 1})
     monkeypatch.setattr(ingestion, "embed_texts", lambda texts: [[0.0]] * len(texts))
-    monkeypatch.setattr(ingestion, "get_supabase_client", lambda: None)
     stored: list[int] = []
 
     def insert_chunks(**kw: Any) -> int:

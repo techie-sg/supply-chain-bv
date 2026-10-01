@@ -2,12 +2,9 @@ from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from queries.vector_store import retrieve
 from service.embedder import embed_texts
 from service.llm import get_llm
-from service.vector_store import (
-    get_supabase_client,
-    retrieve,
-)
 
 PROMPT_PATH = (
     Path(__file__).resolve().parent
@@ -45,10 +42,7 @@ def answer_question(
     query_embedding = embed_texts([question])[0]
 
     # 2. Retrieve evidence
-    supabase = get_supabase_client()
-
     results = retrieve(
-        client=supabase,
         query_embedding=query_embedding,
         match_count=top_k,
     )

@@ -3,7 +3,7 @@
 A dispatch copilot for dark-store managers. It has two parts:
 
 - **Flask API**, which serves synthetic dispatch scenarios (orders, riders, zones, hourly metrics) from Postgres.
-- **RAG assistant**, which answers operational questions ("why are deliveries slipping in the rain?") using the dispatch playbook corpus. It uses Jina embeddings, a Supabase vector store and a Groq-hosted LLM, with a Gradio chat UI.
+- **RAG assistant**, which answers operational questions ("why are deliveries slipping in the rain?") using the dispatch playbook corpus. It uses Jina embeddings, a PostgreSQL/pgvector store and a Groq-hosted LLM, with a Gradio chat UI.
 
 Background: [requirements](docs/initial/requirements.md), [task plan](docs/initial/tasks.md), [6-pager](docs/6-pager.md), [PR/FAQ](docs/pr-faq.md).
 
@@ -26,13 +26,13 @@ supply-chain-bv/
 │   │   ├── scenario_data/    #   Scenario definitions (normal, backlog, rain)
 │   │   ├── chunker.py        #   Split corpus Markdown into section chunks
 │   │   ├── embedder.py       #   Jina embeddings client
-│   │   ├── vector_store.py   #   Supabase upsert + similarity search
 │   │   ├── llm.py            #   Groq chat model
 │   │   ├── rag.py            #   Retrieve → build context → answer
 │   │   ├── ingestion.py      #   One-off job: chunk, embed and upsert the corpus
 │   │   └── rag_data/
 │   │       ├── corpus/       #   Operational playbook documents (the knowledge base)
 │   │       └── prompts/      #   System prompt for the assistant
+│   ├── queries/              # SQLAlchemy document upsert and pgvector search
 │   ├── domain/               # Pydantic models that validate scenario files
 │   ├── database/             # SQLAlchemy models and session handling
 │   ├── alembic/              # Database migrations
@@ -50,8 +50,8 @@ supply-chain-bv/
 
 - **Python 3.13** (pinned in `backend/.python-version`)
 - **[uv](https://docs.astral.sh/uv/getting-started/installation/)**, which manages the virtualenv and dependencies
-- **Postgres** (with pgvector) for the scenario API. Only needed for the database endpoints.
-- Accounts and keys for **Jina**, **Groq** and **Supabase** for the RAG assistant
+- **Postgres** (with pgvector) for the scenario API and RAG storage.
+- Accounts and keys for **Jina** and **Groq** for the RAG assistant
 
 ## Setup
 
@@ -66,11 +66,9 @@ uv sync --locked        # creates backend/.venv with runtime + dev dependencies
 
 | Variable | Needed for | Description |
 |---|---|---|
-| `DATABASE_URL` (or `DB_URL`) | Scenario API, migrations | Postgres URL, e.g. `postgresql+psycopg://user:pass@localhost:5432/dispatchdesk` |
+| `DATABASE_URL` (or `DB_URL`) | Scenario API, RAG storage, migrations | Postgres URL, e.g. `postgresql+psycopg://user:pass@localhost:5432/dispatchdesk` |
 | `JINA_API_KEY` | RAG | Jina embeddings API key |
 | `GROQ_API_KEY` | RAG | Groq API key for the chat model |
-| `SUPABASE_URL` | RAG | Supabase project URL |
-| `SUPABASE_KEY` | RAG | Supabase API key |
 
 `backend/.env` is git-ignored, so never commit it. Real environment variables override values in `.env`.
 
@@ -109,9 +107,9 @@ See [docs/scenarios.md](docs/scenarios.md) for scenario details and [the Postman
 
 ### 3. RAG assistant
 
-The Supabase project must already contain the `document_chunks` table and the `match_document_chunks` similarity-search function. Their SQL is not in this repository; set them up in Supabase first.
+The assistant uses the same `DATABASE_URL` and the `app.documents` / `app.document_chunks` tables defined by the Alembic migrations. Retrieval queries pgvector directly; no REST API client or RPC endpoint is required.
 
-Load the corpus into Supabase. Rerun it whenever files in `service/rag_data/corpus/` change; it upserts, so reruns are safe.
+Load the corpus into PostgreSQL. Rerunning unchanged files upserts their existing document and chunk rows in one transaction.
 
 ```bash
 uv run python -m service.ingestion
@@ -145,7 +143,7 @@ uv run mypy . --exclude alembic/versions
 uv run pytest --cov=. --cov-report=term-missing
 ```
 
-CI fails if coverage drops below 90%. Tests fake Jina, Groq, Supabase and the database, so they need no API keys or running services.
+CI fails if coverage drops below 90%. Tests fake Jina and Groq, so no API keys are needed. Vector-store integration tests use a dedicated PostgreSQL database with pgvector; CI provisions it automatically. Locally, set `TEST_DATABASE_URL` to a disposable test database to run those tests. They clear the document tables in that test database; without this variable, those tests are skipped.
 
 Conventions:
 - New HTTP routes go in `blueprints/` and business logic in `service/`.

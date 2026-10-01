@@ -17,8 +17,6 @@ class Settings(BaseSettings):
     )
     jina_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
-    supabase_url: str | None = None
-    supabase_key: SecretStr | None = None
 
 
 def get_settings() -> Settings:

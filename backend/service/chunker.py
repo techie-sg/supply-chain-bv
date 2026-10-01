@@ -1,9 +1,12 @@
 import hashlib
+import logging
 import re
 from pathlib import Path
 
 from langchain_core.documents import Document
 from transformers import AutoTokenizer
+
+logger = logging.getLogger(__name__)
 
 
 def parse_metadata(markdown: str, source: Path, repo_root: Path) -> dict[str, str]:
@@ -122,9 +125,11 @@ def validate_chunk_sizes(
 
     longest_id = max(token_counts, key=token_counts.__getitem__)
 
-    print(
-        f"Longest chunk: {longest_id} "
-        f"({token_counts[longest_id]} tokens, limit {max_tokens})"
+    logger.info(
+        "Longest chunk: %s (%s tokens, limit %s)",
+        longest_id,
+        token_counts[longest_id],
+        max_tokens,
     )
 
     too_long = [
