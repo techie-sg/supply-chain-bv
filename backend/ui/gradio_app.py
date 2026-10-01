@@ -98,7 +98,8 @@ def _scenario_summary(context: dict[str, Any]) -> str:
     return (
         '<section class="scenario-preview" aria-label="Selected scenario preview">'
         '<div class="preview-heading"><div><span class="section-kicker">SCENARIO PREVIEW</span>'
-        f"<h2>{escape(context['title'])}</h2></div>"
+        f"<h2>{escape(context['title'])}</h2>"
+        f'<span class="store-badge">Store <strong>{escape(context["store_id"])}</strong></span></div>'
         f'<span class="weather-pill {weather_class}"><span aria-hidden="true">'
         f"{'☂' if context['is_raining'] else '☀'}</span> {weather}</span></div>"
         "</section>"
@@ -150,14 +151,30 @@ def _table_views(context: dict[str, Any]) -> tuple[dict, dict, dict, dict]:
         "has_frozen_items": "Frozen items",
         "assigned_rider_id": "Assigned rider",
         "item_count": "Items",
-        "minutes_since_last_break": "Since last break (min)",
+        "minutes_since_last_break": "Break ago (min)",
+        "current_zone": "Zone",
+        "employment_type": "Employment",
+        "hours_on_shift": "Shift (h)",
+        "deliveries_today": "Deliveries",
+        "eta_back_min": "Return (min)",
+        "scenario_key": "Scenario",
+        "avg_pick_pack_min": "Pick / pack (min)",
+        "avg_rider_wait_min": "Rider wait (min)",
+        "avg_ride_min": "Ride (min)",
+        "riders_online": "Riders online",
+        "rain_flag": "Rain",
+        "distance_from_store_km": "Distance (km)",
+        "avg_ride_min_dry": "Dry ride (min)",
+        "avg_ride_min_rain": "Rain ride (min)",
         "sla_10min_pct": "10-min SLA (%)",
     }
     views = []
     for name in ("orders", "riders", "hourly_metrics", "zones"):
         table = context["tables"][name]
         columns = priority[name] + [
-            header for header in table["headers"] if header not in priority[name]
+            header
+            for header in table["headers"]
+            if header not in priority[name] and header not in {"as_of", "store_id"}
         ]
         indices = [table["headers"].index(column) for column in columns]
         views.append(
@@ -275,18 +292,33 @@ def chat(
 
 
 def _assistant_context(context: dict[str, Any] | None) -> str:
-    """Show the manager the data source and age, without demo configuration."""
+    """Identify the loaded scenario, independently of the demo preview."""
     if not context:
-        return (
-            '<div class="store-context"><span class="context-label">STORE DATA UNAVAILABLE</span>'
-            "<span>Playbook guidance is available; operational details cannot be verified.</span></div>"
-        )
-    as_of = datetime.fromisoformat(context["as_of"]).astimezone(TIMEZONE)
+        return '<div class="current-scenario"><span>Scenario unavailable</span></div>'
     return (
-        '<div class="store-context">'
-        f"<strong>{escape(context['store_id'])}</strong>"
-        f'<span class="snapshot-label">Simulated snapshot · {as_of:%d %b %Y, %H:%M:%S} IST</span></div>'
+        '<div class="current-scenario"><span>Current scenario</span>'
+        f"<strong>{escape(context['title'])}</strong></div>"
     )
+
+
+def _restore_tab(request: gr.Request) -> dict:
+    view = request.query_params.get("view", "assistant")
+    return gr.update(selected="demo" if view == "demo" else "assistant")
+
+
+TAB_URL_JS = """
+async () => {
+    await new Promise(requestAnimationFrame);
+    const tab = document.querySelector(
+        '#workspace-tabs > .tab-wrapper [role="tab"][aria-selected="true"]'
+    );
+    const view = tab?.dataset.tabId;
+    if (view !== 'assistant' && view !== 'demo') return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('view', view);
+    window.history.replaceState(null, '', url);
+}
+"""
 
 
 def build_app() -> gr.Blocks:
@@ -312,12 +344,13 @@ def build_app() -> gr.Blocks:
             ):
                 with gr.Row(elem_id="assistant-heading"):
                     context_banner = gr.HTML(
-                        '<div class="store-context"><span>Connecting to store data…</span></div>'
+                        '<div class="current-scenario"><span>Checking scenario…</span></div>'
                         if choices
                         else _assistant_context(None),
                         apply_default_css=False,
                         elem_id="assistant-context",
-                        visible=False,
+                        scale=0,
+                        min_width=0,
                     )
                     clear = gr.Button(
                         "Clear chat",
@@ -461,7 +494,7 @@ def build_app() -> gr.Blocks:
                                             interactive=False,
                                             type="array",
                                             datatype="auto",
-                                            wrap=True,
+                                            wrap=False,
                                             show_search="filter",
                                             show_row_numbers=True,
                                             pinned_columns=1,
@@ -474,8 +507,12 @@ def build_app() -> gr.Blocks:
                             "Synthetic starting snapshots · Times shown in IST (+05:30) · Not a live feed",
                             elem_classes="panel-note",
                         )
+        app.load(_restore_tab, outputs=workspace, queue=False)
+        workspace.change(fn=None, js=TAB_URL_JS)
         back.click(
-            lambda: gr.update(selected="assistant"), outputs=workspace, queue=False
+            lambda: gr.update(selected="assistant"),
+            outputs=workspace,
+            queue=False,
         )
         for button, (_, question) in zip(prompt_buttons, prompts, strict=True):
             button.click(lambda q=question: q, outputs=message, queue=False).then(
@@ -508,6 +545,8 @@ def build_app() -> gr.Blocks:
                 chat,
                 inputs=[message, chatbot, current],
                 outputs=[chatbot, message],
+                show_progress="minimal",
+                show_progress_on=chatbot,
                 concurrency_id="workspace",
                 concurrency_limit=1,
             )
@@ -516,6 +555,7 @@ def build_app() -> gr.Blocks:
             inputs=chatbot,
             outputs=suggestions,
             queue=False,
+            show_progress="hidden",
         )
         clear.click(lambda: ([], ""), outputs=[chatbot, message], queue=False)
     return app

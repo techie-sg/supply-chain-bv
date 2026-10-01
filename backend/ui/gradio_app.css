@@ -52,7 +52,7 @@ body { margin: 0; background: var(--desk-bg); }
 .page-heading h1 { font-size: clamp(26px, 2.5vw, 34px); font-weight: 550; line-height: 1.25; letter-spacing: -1.1px; color: var(--desk-ink); margin: 12px 0 0; }
 .page-heading h1 > span { color: var(--desk-accent); }
 .page-heading p { margin: 10px 0 0; color: var(--desk-muted); font-size: 13px; line-height: 1.7; }
-#assistant-context { flex: 1 1 0 !important; min-width: 0 !important; }
+#assistant-context { flex: 0 1 auto !important; width: auto !important; min-width: 0 !important; }
 .store-context { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; color: var(--desk-muted); font-size: 11px; line-height: 1.6; }
 .context-label { font-size: 9px; letter-spacing: 1.3px; }
 .store-context strong { font-size: 12px; font-weight: 550; color: var(--desk-ink); }
@@ -291,3 +291,33 @@ body { margin: 0; background: var(--desk-bg); }
 #send-message, #load-scenario { gap: 4px; }
 .scenario-table .header-cell .header-content { padding-right: 0; width: 100%; text-align: left; }
 .scenario-table .header-cell .header.text { font-size: 12px; line-height: 1.5; font-weight: 600; letter-spacing: .01em; text-align: left; word-break: normal; overflow-wrap: normal; }
+
+/* Size columns to unbroken labels; never trade readability for a forced fit. */
+.scenario-table { --input-text-size: 12px; --text-sm: 12px; --table-row-focus: #2c2833; }
+.scenario-table .header-cell .header.text { white-space: nowrap !important; word-break: normal; overflow-wrap: normal; }
+.scenario-table .header-cell .cell-wrap { min-height: 40px; padding: 10px 8px; letter-spacing: 0; }
+.scenario-table .header-cell .header-content { width: auto; min-width: max-content; }
+.scenario-table .body-cell .cell-wrap { min-height: 38px; padding: 9px 8px; font-size: 12px; line-height: 1.6; }
+.scenario-table .header-table { background: #2e2a35; }
+.scenario-table .virtual-table-viewport { scrollbar-color: #625c6b #232325; }
+.scenario-table .header-table { margin: 0 !important; }
+
+#data-titlebar .preview-heading > div { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.store-badge { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px; border: 1px solid #574b67; border-radius: 7px; background: #302a39; color: #c5b4df; font-size: 12px; white-space: nowrap; }
+.store-badge strong { color: #ece3f8; font-weight: 600; }
+
+.current-scenario { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 9px; padding: 7px 11px; border: 1px solid var(--desk-line); border-radius: 8px; background: #232126; font-size: 12px; line-height: 1.5; }
+.current-scenario > span { color: var(--desk-muted); }
+.current-scenario > strong { color: #ddd0ee; font-weight: 500; }
+@media (max-width: 550px) {
+  .current-scenario { padding: 6px 9px; font-size: 11px; gap: 2px 7px; }
+}
+/* Message actions are quiet text controls, with a usable keyboard/touch target. */
+#conversation .icon-button-wrapper:not(.top-panel) { border: 0; background: transparent; padding: 0; box-shadow: none; }
+#conversation .icon-button-wrapper:not(.top-panel) .icon-button { display: inline-flex; flex-direction: row; align-items: center; justify-content: center; gap: 6px; min-width: 66px; min-height: 32px; padding: 6px 9px; border: 0; border-radius: 7px; background: transparent; box-shadow: none; color: #bcb5c7 !important; }
+#conversation .icon-button-wrapper:not(.top-panel) .icon-button > div { width: 15px; height: 15px; }
+#conversation .icon-button-wrapper:not(.top-panel) .icon-button:hover { background: #302b38; color: #e1d6ef !important; }
+#conversation .icon-button-wrapper:not(.top-panel) .icon-button[aria-label="Copy message"]::after { content: "Copy"; font-family: "DM Sans", sans-serif; font-size: 12px; font-weight: 500; line-height: 18px; }
+#conversation .icon-button-wrapper:not(.top-panel) .icon-button[aria-label="Copied message"]::after { content: "Copied"; font-family: "DM Sans", sans-serif; font-size: 12px; font-weight: 500; line-height: 18px; }
+#conversation .icon-button-wrapper:not(.top-panel) .icon-button { min-width: 80px; }
+#conversation .icon-button-wrapper:not(.top-panel) .icon-button[aria-label="Copied message"] { color: #d7c5ed !important; }
