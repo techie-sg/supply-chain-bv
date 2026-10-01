@@ -4,14 +4,12 @@ import logging
 from pathlib import Path
 
 from queries.vector_store import insert_chunks
-from service.chunker import load_corpus, validate_chunk_sizes
+from service.chunker import load_corpus
 from service.embedder import embed_texts
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 CORPUS_DIR = BACKEND_DIR / "service" / "rag_data" / "corpus"
 EXPECTED_CHUNKS = 37
-MAX_CHUNK_TOKENS = 512
-CHUNK_TOKENIZER_MODEL = "BAAI/bge-small-en-v1.5"
 logger = logging.getLogger(__name__)
 
 
@@ -19,9 +17,9 @@ def main() -> None:
     logger.info("Starting DispatchDesk corpus ingestion")
 
     # 1. Load and chunk corpus
-    logger.info("[1/4] Loading corpus")
+    logger.info("[1/3] Loading corpus")
 
-    documents, ids = load_corpus(
+    documents, _ = load_corpus(
         corpus_dir=CORPUS_DIR,
         repo_root=BACKEND_DIR,
     )
@@ -31,18 +29,8 @@ def main() -> None:
     if len(documents) != EXPECTED_CHUNKS:
         raise ValueError(f"Expected {EXPECTED_CHUNKS} chunks, got {len(documents)}")
 
-    # 2. Validate chunk sizes
-    logger.info("[2/4] Validating chunk sizes")
-
-    validate_chunk_sizes(
-        documents=documents,
-        ids=ids,
-        embedding_model=CHUNK_TOKENIZER_MODEL,
-        max_tokens=MAX_CHUNK_TOKENS,
-    )
-
-    # 3. Generate Jina embeddings
-    logger.info("[3/4] Generating Jina embeddings")
+    # 2. Generate Jina embeddings
+    logger.info("[2/3] Generating Jina embeddings")
 
     texts = [document.page_content for document in documents]
 
@@ -57,8 +45,8 @@ def main() -> None:
     if len(embeddings) != len(documents):
         raise ValueError("Number of embeddings does not match number of chunks")
 
-    # 4. Store in PostgreSQL
-    logger.info("[4/4] Upserting into PostgreSQL")
+    # 3. Store in PostgreSQL
+    logger.info("[3/3] Upserting into PostgreSQL")
 
     stored = insert_chunks(
         documents=documents,

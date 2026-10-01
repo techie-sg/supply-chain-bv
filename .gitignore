@@ -11,4 +11,4 @@ htmlcov/
 .env.*
 !.env.example
 .DS_Store
-data/vectorstore/
+.ipynb_checkpoints/

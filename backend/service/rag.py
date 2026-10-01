@@ -1,4 +1,6 @@
+import json
 from pathlib import Path
+from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -35,11 +37,13 @@ def build_context(results: list[dict]) -> str:
 def answer_question(
     question: str,
     top_k: int = 3,
+    *,
+    scenario_context: dict[str, Any] | None = None,
 ) -> str:
     """Retrieve relevant evidence and generate a grounded answer."""
 
     # 1. Embed question
-    query_embedding = embed_texts([question])[0]
+    query_embedding = embed_texts([question], task="retrieval.query")[0]
 
     # 2. Retrieve evidence
     results = retrieve(
@@ -58,11 +62,20 @@ def answer_question(
 
     # 5. Ask LLM
     llm = get_llm()
+    scenario = ""
+    if scenario_context is not None:
+        scenario = (
+            "\n\nLoaded scenario snapshot (synthetic data captured at its as_of timestamp; "
+            "not a continuously live feed):\n"
+            + json.dumps(scenario_context, ensure_ascii=False)
+        )
 
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(
-            content=(f"Retrieved context:\n\n{context}\n\nQuestion: {question}")
+            content=(
+                f"Retrieved context:\n\n{context}{scenario}\n\nQuestion: {question}"
+            )
         ),
     ]
 

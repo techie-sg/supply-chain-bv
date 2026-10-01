@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import math
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import yaml
 from pydantic import ValidationError
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine
 
 from database.models import HourlyMetric, Order, Rider, Zone
-from database.session import get_session
 from domain.scenario import ScenarioData
+from queries.scenarios import replace_scenario
 
 SCENARIO_DIR = Path(__file__).resolve().parent / "scenario_data"
 TIMEZONE = ZoneInfo("Asia/Kolkata")
@@ -129,11 +129,39 @@ def build_scenario(key: str, as_of: datetime) -> tuple[list[object], dict[str, A
 def load_scenario(key: str, engine: Engine | None = None) -> dict[str, Any]:
     """Atomically replace all operational rows with one validated scenario."""
     rows, context = build_scenario(key, datetime.now(TIMEZONE))
-    with get_session(engine) as session:
-        session.execute(
-            text("TRUNCATE TABLE app.orders, app.riders, app.hourly_metrics, app.zones")
-        )
-        for model in (Zone, HourlyMetric, Rider, Order):
-            session.add_all(row for row in rows if isinstance(row, model))
-            session.flush()
+    context["tables"] = _scenario_tables(rows)
+    replace_scenario(rows, engine)
     return context
+
+
+def _scenario_tables(rows: list[object]) -> dict[str, dict[str, Any]]:
+    """Serialize snapshot rows for the UI and assistant without database reads."""
+    tables = {}
+    for model in (Order, Rider, HourlyMetric, Zone):
+        columns = list(model.__table__.columns)
+        values = []
+        for row in rows:
+            if not isinstance(row, model):
+                continue
+            record = []
+            for column in columns:
+                value = getattr(row, column.key)
+                if isinstance(value, datetime):
+                    value = value.astimezone(TIMEZONE).isoformat(
+                        sep=" ", timespec="seconds"
+                    )
+                elif isinstance(value, date):
+                    value = value.isoformat()
+                record.append(value)
+            values.append(record)
+        tables[model.__tablename__] = {
+            "headers": [column.name for column in columns],
+            "data": values,
+        }
+    return tables
+
+
+def scenario_details(key: str) -> dict[str, Any]:
+    """Preview any scenario as formatted tables without loading the database."""
+    rows, context = build_scenario(key, datetime.now(TIMEZONE))
+    return {**context, "tables": _scenario_tables(rows)}

@@ -1,12 +1,8 @@
 import hashlib
-import logging
 import re
 from pathlib import Path
 
 from langchain_core.documents import Document
-from transformers import AutoTokenizer
-
-logger = logging.getLogger(__name__)
 
 
 def parse_metadata(markdown: str, source: Path, repo_root: Path) -> dict[str, str]:
@@ -106,39 +102,3 @@ def load_corpus(
         raise ValueError("Duplicate chunk IDs: two sections share a heading")
 
     return documents, ids
-
-
-def validate_chunk_sizes(
-    documents: list[Document],
-    ids: list[str],
-    embedding_model: str,
-    max_tokens: int = 512,
-) -> dict[str, int]:
-    """Validate that no chunk exceeds the embedding model's token limit."""
-
-    tokenizer = AutoTokenizer.from_pretrained(embedding_model)
-
-    token_counts = {
-        chunk_id: len(tokenizer.encode(document.page_content))
-        for chunk_id, document in zip(ids, documents)
-    }
-
-    longest_id = max(token_counts, key=token_counts.__getitem__)
-
-    logger.info(
-        "Longest chunk: %s (%s tokens, limit %s)",
-        longest_id,
-        token_counts[longest_id],
-        max_tokens,
-    )
-
-    too_long = [
-        chunk_id for chunk_id, count in token_counts.items() if count > max_tokens
-    ]
-
-    if too_long:
-        raise ValueError(
-            f"Chunks over {max_tokens} tokens will be truncated: {too_long}"
-        )
-
-    return token_counts

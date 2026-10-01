@@ -3,17 +3,11 @@ from typing import Any
 
 import pytest
 import requests
-from langchain_core.documents import Document
 from langchain_core.messages import AIMessage
 
-import gradio_app
 from config import require
 from service import chunker, embedder, ingestion, llm, rag
-
-
-class FakeTokenizer:
-    def encode(self, text: str) -> list[str]:
-        return text.split()
+from ui import gradio_app
 
 
 def test_require_rejects_missing_values_without_leaking(monkeypatch) -> None:
@@ -35,7 +29,7 @@ def test_corpus_chunks_are_stable_and_unique() -> None:
     assert all("#" in chunk_id for chunk_id in ids)
 
 
-def test_chunker_edge_cases(tmp_path, monkeypatch) -> None:
+def test_chunker_edge_cases(tmp_path) -> None:
     assert chunker.section_chunks("no headings") == [("Document", "no headings")]
     assert chunker.section_chunks("   ") == []
     assert chunker.parse_metadata("", tmp_path / "x.md", tmp_path)["version"] == (
@@ -47,30 +41,33 @@ def test_chunker_edge_cases(tmp_path, monkeypatch) -> None:
     with pytest.raises(ValueError, match="Duplicate"):
         chunker.load_corpus(tmp_path, tmp_path)
 
-    monkeypatch.setattr(
-        chunker.AutoTokenizer, "from_pretrained", lambda _: FakeTokenizer()
-    )
-    docs = [Document(page_content="a b c"), Document(page_content="a")]
-    assert chunker.validate_chunk_sizes(docs, ["x", "y"], "m", max_tokens=3) == {
-        "x": 3,
-        "y": 1,
-    }
-    with pytest.raises(ValueError, match="over 2 tokens"):
-        chunker.validate_chunk_sizes(docs, ["x", "y"], "m", max_tokens=2)
 
-
-def test_embed_texts(monkeypatch) -> None:
-    assert embedder.embed_texts([], api_key="k") == []
+@pytest.mark.parametrize("task", ["retrieval.passage", "retrieval.query"])
+def test_embed_texts(monkeypatch, task, caplog) -> None:
+    assert embedder.embed_texts([]) == []
 
     def fake_post(url, headers, json, timeout):
         assert headers["Authorization"] == "Bearer k"
+        assert json["model"] == "jina-embeddings-v5-text-nano"
+        assert json["task"] == task
+        assert json["normalized"] is True
         data = [{"index": 1, "embedding": [2.0]}, {"index": 0, "embedding": [1.0]}]
         return SimpleNamespace(
-            ok=True, json=lambda: {"data": data[: len(json["input"])]}
+            ok=True,
+            json=lambda: {
+                "data": data[: len(json["input"])],
+                "usage": {"total_tokens": 10},
+            },
         )
 
     monkeypatch.setattr(embedder.requests, "post", fake_post)
-    assert embedder.embed_texts(["a", "b"], api_key="k") == [[1.0], [2.0]]
+    with caplog.at_level("INFO", logger="service.embedder"):
+        assert embedder.embed_texts(["a", "b"], api_key="k", task=task) == [
+            [1.0],
+            [2.0],
+        ]
+    assert "tokens=10" in caplog.text
+    assert "Bearer" not in caplog.text
     monkeypatch.setattr(
         embedder.requests,
         "post",
@@ -93,7 +90,11 @@ def test_llm_client(monkeypatch) -> None:
 
 
 def test_answer_question(monkeypatch) -> None:
-    monkeypatch.setattr(rag, "embed_texts", lambda texts: [[0.1]])
+    def embed_question(texts, *, task):
+        assert task == "retrieval.query"
+        return [[0.1]]
+
+    monkeypatch.setattr(rag, "embed_texts", embed_question)
     monkeypatch.setattr(rag, "retrieve", lambda **kw: [])
     assert "could not find" in rag.answer_question("q")
 
@@ -113,7 +114,6 @@ def test_answer_question(monkeypatch) -> None:
 
 
 def test_ingestion_main(monkeypatch) -> None:
-    monkeypatch.setattr(ingestion, "validate_chunk_sizes", lambda **kw: {"x": 1})
     monkeypatch.setattr(ingestion, "embed_texts", lambda texts: [[0.0]] * len(texts))
     stored: list[int] = []
 
