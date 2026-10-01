@@ -1,7 +1,6 @@
 """Jina implementation of the embedding service."""
 
 import logging
-from typing import Literal
 
 import requests
 from pydantic import SecretStr
@@ -23,17 +22,12 @@ class JinaEmbeddingService(EmbeddingService):
         self._api_key = api_key
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return self._embed(texts, task="retrieval.passage")
+        return self._embed(texts)
 
     def embed_query(self, text: str) -> list[float]:
-        return self._embed([text], task="retrieval.query")[0]
+        return self._embed([text])[0]
 
-    def _embed(
-        self,
-        texts: list[str],
-        *,
-        task: Literal["retrieval.passage", "retrieval.query"],
-    ) -> list[list[float]]:
+    def _embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
 
@@ -47,8 +41,6 @@ class JinaEmbeddingService(EmbeddingService):
             json={
                 "model": self.model,
                 "input": texts,
-                "task": task,
-                "normalized": True,
             },
             timeout=60,
         )
@@ -65,9 +57,8 @@ class JinaEmbeddingService(EmbeddingService):
             raise ValueError("Jina returned invalid embedding indices")
 
         logger.info(
-            "Jina embeddings: model=%s task=%s inputs=%s tokens=%s",
+            "Jina embeddings: model=%s inputs=%s tokens=%s",
             self.model,
-            task,
             len(texts),
             body.get("usage", {}).get("total_tokens"),
         )

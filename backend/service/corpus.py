@@ -36,7 +36,7 @@ class CorpusService:
         ids = []
         for source in source_files:
             raw = source.read_bytes()
-            markdown = raw.decode("utf-8")
+            markdown = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
             metadata = self._metadata(markdown, source)
             metadata["file_hash"] = hashlib.sha256(raw).hexdigest()
             for section, body in self.strategy.split(markdown):

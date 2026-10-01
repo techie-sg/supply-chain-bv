@@ -9,7 +9,7 @@ from service.jina_embedding_service import JinaEmbeddingService
 
 
 @pytest.mark.parametrize("is_query", [False, True])
-def test_jina_preserves_input_order_and_uses_correct_task(
+def test_jina_preserves_input_order_and_main_request_payload(
     monkeypatch, caplog, is_query
 ) -> None:
     service = JinaEmbeddingService(api_key=SecretStr("test-key"))
@@ -18,9 +18,7 @@ def test_jina_preserves_input_order_and_uses_correct_task(
     def post(url, headers, json, timeout):
         assert url == jina.JINA_API_URL and timeout == 60
         assert headers["Authorization"] == "Bearer test-key"
-        assert json["model"] == jina.JINA_MODEL and json["normalized"] is True
-        assert json["input"] == texts
-        assert json["task"] == ("retrieval.query" if is_query else "retrieval.passage")
+        assert json == {"model": jina.JINA_MODEL, "input": texts}
         data = [
             {"index": index, "embedding": [float(index + 1)]}
             for index in reversed(range(len(texts)))

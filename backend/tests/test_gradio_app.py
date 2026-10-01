@@ -139,6 +139,78 @@ def test_chat_callbacks_receive_no_scenario_state() -> None:
     )
 
 
+def test_chat_preserves_nonblank_message_whitespace(monkeypatch) -> None:
+    seen = []
+
+    def answer(question):
+        seen.append(question)
+        return "reply"
+
+    monkeypatch.setattr(gradio_app, "answer_question", answer)
+    message = "  Should riders speed?\n"
+    history, draft = gradio_app.chat(message, [])
+    assert seen == [message]
+    assert history[0]["content"] == message
+    assert draft == ""
+    assert gradio_app.chat(" \n\t", history) == (history, "")
+    assert seen == [message]
+
+
+def test_clear_chat_waits_for_outstanding_workspace_callbacks() -> None:
+    clear = next(
+        item
+        for item in gradio_app.app.blocks.values()
+        if isinstance(item, gr.Button) and item.elem_id == "clear-chat"
+    )
+    callback = next(
+        callback
+        for callback in gradio_app.app.fns.values()
+        if (clear._id, "click") in callback.targets
+    )
+    assert callback.queue is True
+    assert callback.concurrency_id == "workspace"
+    assert callback.concurrency_limit == 1
+    assert callback.fn is not None
+    assert callback.fn() == ([], "")
+    assert all(
+        chat_callback.queue
+        and chat_callback.concurrency_id == callback.concurrency_id
+        and chat_callback.concurrency_limit == callback.concurrency_limit
+        for chat_callback in gradio_app.app.fns.values()
+        if chat_callback.fn is gradio_app.chat
+    )
+
+
+@pytest.mark.parametrize("error", [ValueError("Invalid YAML"), OSError("Unreadable")])
+def test_unavailable_scenarios_do_not_prevent_assistant_startup(
+    monkeypatch, caplog, error
+) -> None:
+    def unavailable():
+        raise error
+
+    monkeypatch.setattr(gradio_app, "scenario_names", unavailable)
+    app = gradio_app.build_app()
+    dropdown = next(
+        item for item in app.blocks.values() if isinstance(item, gr.Dropdown)
+    )
+    load = next(
+        item
+        for item in app.blocks.values()
+        if isinstance(item, gr.Button) and item.elem_id == "load-scenario"
+    )
+    status = next(
+        item
+        for item in app.blocks.values()
+        if isinstance(item, gr.HTML) and item.elem_id == "load-status"
+    )
+    assert dropdown.value is None and not dropdown.interactive
+    assert not load.interactive
+    assert "Scenarios unavailable" in status.value
+    assert "Assistant chat is still available" in status.value
+    assert sum(callback.fn is gradio_app.chat for callback in app.fns.values()) == 2
+    assert "Could not list scenarios" in caplog.text
+
+
 def test_dropdown_lists_all_scenarios_and_handles_empty_inventory(monkeypatch) -> None:
     dropdown = next(
         item for item in gradio_app.app.blocks.values() if isinstance(item, gr.Dropdown)

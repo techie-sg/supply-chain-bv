@@ -42,7 +42,7 @@ supply-chain-bv/
 │   ├── pyproject.toml        # Dependencies and tool config
 │   ├── uv.lock               # Locked dependency versions
 │   └── requirements.txt      # Runtime dependencies for pip-based deploys
-└── docs/                     # Product docs, team docs, scenario docs, Postman collection
+└── docs/                     # Product docs, team docs, and scenario docs
     └── initial/              #   Original brief and sample data (not read by the app)
 ```
 
@@ -91,10 +91,10 @@ uv run alembic upgrade head
 uv run python -m ui.gradio_app
 ```
 
-Open http://localhost:7860. The **Assistant** view opens first and automatically
-reconnects to the snapshot already saved in the database. Ask a dispatch question
-directly; the store and snapshot timestamp appear above the conversation.
-The interface follows your system's light or dark appearance.
+Open http://localhost:7860. The **Assistant** view opens first. The current
+scenario title appears above the conversation; Demo tools restores the saved
+dataset and shows its store and timestamp. The interface uses a dark theme.
+Ask a dispatch question directly; chat retrieves guidance from the playbook.
 
 Use **Demo tools** to preview tables or load a different simulated situation.
 **Load scenario** replaces the operational rows and clears the conversation.
@@ -117,7 +117,7 @@ uv run python -m service.ingestion
 
 Ingestion accepts any nonempty corpus. The current Markdown-section strategy produces 37 chunks, but this is not a runtime requirement. Reingesting the same document also removes surplus chunks from its previous ingestion.
 
-Embeddings use `jina-embeddings-v5-text-nano`: `retrieval.passage` for corpus ingestion and `retrieval.query` for questions. The embedding client logs the API-reported token usage. Re-run ingestion when changing the embedding model or retrieval task so stored vectors match the query setup.
+Embeddings use `jina-embeddings-v5-text-nano`. Both passage and query methods preserve the original Jina request options (`model` and `input`), using the provider's default mode. The embedding client logs the API-reported token usage. Re-run ingestion when changing the embedding model so stored vectors match the query setup.
 
 For an interactive walkthrough, open [`backend/notebooks/simple_rag.ipynb`](backend/notebooks/simple_rag.ipynb) with a Python kernel using the backend dependencies. It loads the corpus, creates Jina embeddings, upserts documents and chunks through the existing PostgreSQL queries, and retrieves guidance. The notebook's database-write cell runs when you execute it.
 

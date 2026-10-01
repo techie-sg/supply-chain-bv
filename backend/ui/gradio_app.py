@@ -265,8 +265,7 @@ def chat(
 ) -> tuple[list[dict], str]:
     """Keep the user's draft and history intact if a backend request fails."""
     history = history or []
-    message = message.strip()
-    if not message:
+    if not message.strip():
         return history, ""
     try:
         answer = answer_question(message)
@@ -317,7 +316,13 @@ async () => {
 
 
 def build_app() -> gr.Blocks:
-    scenarios = scenario_names()
+    scenarios_unavailable = False
+    try:
+        scenarios = scenario_names()
+    except (ValueError, OSError):
+        logger.exception("Could not list scenarios; demo controls are unavailable")
+        scenarios = []
+        scenarios_unavailable = True
     choices = [(scenario["title"], scenario["key"]) for scenario in scenarios]
     default = next(
         (key for _, key in choices if key == "normal"),
@@ -439,6 +444,8 @@ def build_app() -> gr.Blocks:
                             load_status = gr.HTML(
                                 '<div class="empty-status"><strong>Checking saved scenario…</strong></div>'
                                 if choices
+                                else '<div class="empty-status"><strong>Scenarios unavailable</strong><span>Check the scenario configuration. Assistant chat is still available.</span></div>'
+                                if scenarios_unavailable
                                 else '<div class="empty-status"><strong>No scenarios available</strong></div>',
                                 apply_default_css=False,
                                 scale=1,
@@ -543,7 +550,13 @@ def build_app() -> gr.Blocks:
             queue=False,
             show_progress="hidden",
         )
-        clear.click(lambda: ([], ""), outputs=[chatbot, message], queue=False)
+        clear.click(
+            lambda: ([], ""),
+            outputs=[chatbot, message],
+            queue=True,
+            concurrency_id="workspace",
+            concurrency_limit=1,
+        )
     return app
 
 
