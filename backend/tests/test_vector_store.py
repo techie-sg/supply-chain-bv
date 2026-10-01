@@ -14,7 +14,9 @@ from queries.vector_store import insert_chunks, retrieve
 
 
 def corpus_document(
-    content: str, source: str = "policy.md", **overrides
+    content: str,
+    source: str = "policy.md",
+    **overrides,
 ) -> CorpusDocument:
     return CorpusDocument(
         page_content=content,
@@ -41,7 +43,8 @@ def vector_engine() -> Iterator[Engine]:
             connection.execute(text("CREATE SCHEMA IF NOT EXISTS app"))
             Base.metadata.tables["app.documents"].create(connection, checkfirst=True)
             Base.metadata.tables["app.document_chunks"].create(
-                connection, checkfirst=True
+                connection,
+                checkfirst=True,
             )
             connection.execute(delete(DocumentChunk))
             connection.execute(delete(Document))
@@ -64,12 +67,12 @@ def test_upsert_is_repeatable_and_preserves_document_id(vector_engine: Engine) -
         assert connection.execute(select(Document.id)).scalar_one() == original_id
         assert (
             connection.execute(
-                select(func.count()).select_from(DocumentChunk)
+                select(func.count()).select_from(DocumentChunk),
             ).scalar_one()
             == 2
         )
         assert connection.execute(
-            select(Document.file_hash)
+            select(Document.file_hash),
         ).scalar_one() == bytes.fromhex("ab" * 32)
         assert (
             str(connection.execute(select(Document.document_date)).scalar_one())
@@ -119,7 +122,7 @@ def test_multi_document_write_rolls_back_on_failure(vector_engine: Engine) -> No
         )
         assert (
             connection.execute(
-                select(func.count()).select_from(DocumentChunk)
+                select(func.count()).select_from(DocumentChunk),
             ).scalar_one()
             == 0
         )
@@ -127,7 +130,9 @@ def test_multi_document_write_rolls_back_on_failure(vector_engine: Engine) -> No
 
 def test_document_without_version_date(vector_engine: Engine) -> None:
     insert_chunks(
-        [corpus_document("guidance", version="unknown")], [[1.0, 0.0]], vector_engine
+        [corpus_document("guidance", version="unknown")],
+        [[1.0, 0.0]],
+        vector_engine,
     )
     with vector_engine.connect() as connection:
         assert connection.execute(select(Document.document_date)).scalar_one() is None

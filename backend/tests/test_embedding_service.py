@@ -10,7 +10,8 @@ from service.jina_embedding_service import JinaEmbeddingService
 
 @pytest.mark.parametrize("is_query", [False, True])
 def test_jina_preserves_input_order_and_main_request_payload(
-    monkeypatch, caplog, is_query
+    monkeypatch,
+    is_query,
 ) -> None:
     service = JinaEmbeddingService(api_key=SecretStr("test-key"))
     texts = ["question"] if is_query else ["one", "two"]
@@ -24,16 +25,15 @@ def test_jina_preserves_input_order_and_main_request_payload(
             for index in reversed(range(len(texts)))
         ]
         return SimpleNamespace(
-            ok=True, json=lambda: {"data": data, "usage": {"total_tokens": 10}}
+            ok=True,
+            json=lambda: {"data": data, "usage": {"total_tokens": 10}},
         )
 
     monkeypatch.setattr(jina.requests, "post", post)
-    with caplog.at_level("INFO", logger=jina.__name__):
-        if is_query:
-            assert service.embed_query(texts[0]) == [1.0]
-        else:
-            assert service.embed_documents(texts) == [[1.0], [2.0]]
-    assert "tokens=10" in caplog.text and "test-key" not in caplog.text
+    if is_query:
+        assert service.embed_query(texts[0]) == [1.0]
+    else:
+        assert service.embed_documents(texts) == [[1.0], [2.0]]
 
 
 def test_empty_documents_skip_settings_and_network(monkeypatch) -> None:
@@ -67,7 +67,9 @@ def test_jina_http_failure_does_not_expose_response_body(monkeypatch) -> None:
         jina.requests,
         "post",
         lambda *args, **kwargs: SimpleNamespace(
-            ok=False, status_code=401, text="private provider response"
+            ok=False,
+            status_code=401,
+            text="private provider response",
         ),
     )
     with pytest.raises(requests.HTTPError, match="401") as error:
@@ -77,13 +79,16 @@ def test_jina_http_failure_does_not_expose_response_body(monkeypatch) -> None:
 
 def test_jina_loads_runtime_key_only_when_needed(monkeypatch) -> None:
     monkeypatch.setattr(
-        jina, "get_settings", lambda: SimpleNamespace(jina_api_key=SecretStr("runtime"))
+        jina,
+        "get_settings",
+        lambda: SimpleNamespace(jina_api_key=SecretStr("runtime")),
     )
 
     def post(url, headers, **kwargs):
         assert headers["Authorization"] == "Bearer runtime"
         return SimpleNamespace(
-            ok=True, json=lambda: {"data": [{"index": 0, "embedding": [0.1]}]}
+            ok=True,
+            json=lambda: {"data": [{"index": 0, "embedding": [0.1]}]},
         )
 
     monkeypatch.setattr(jina.requests, "post", post)

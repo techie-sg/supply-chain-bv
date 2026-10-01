@@ -51,15 +51,19 @@ def upgrade() -> None:
         sa.Column("employment_type", sa.String(32), nullable=False),
         sa.PrimaryKeyConstraint("scenario_key", "rider_id", name="pk_riders"),
         sa.ForeignKeyConstraint(
-            ["current_zone"], ["app.zones.zone_id"], ondelete="RESTRICT"
+            ["current_zone"],
+            ["app.zones.zone_id"],
+            ondelete="RESTRICT",
         ),
         sa.CheckConstraint("hours_on_shift >= 0", name="ck_riders_shift_hours"),
         sa.CheckConstraint("deliveries_today >= 0", name="ck_riders_deliveries"),
         sa.CheckConstraint(
-            "minutes_since_last_break >= 0", name="ck_riders_break_minutes"
+            "minutes_since_last_break >= 0",
+            name="ck_riders_break_minutes",
         ),
         sa.CheckConstraint(
-            "eta_back_min IS NULL OR eta_back_min >= 0", name="ck_riders_eta_back"
+            "eta_back_min IS NULL OR eta_back_min >= 0",
+            name="ck_riders_eta_back",
         ),
         schema="app",
     )
@@ -83,7 +87,9 @@ def upgrade() -> None:
         sa.Column("assigned_rider_id", sa.String(32), nullable=True),
         sa.PrimaryKeyConstraint("scenario_key", "order_id", name="pk_orders"),
         sa.ForeignKeyConstraint(
-            ["zone_id"], ["app.zones.zone_id"], ondelete="RESTRICT"
+            ["zone_id"],
+            ["app.zones.zone_id"],
+            ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
             ["scenario_key", "assigned_rider_id"],
@@ -115,10 +121,12 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("store_id", "date", "hour", name="pk_hourly_metrics"),
         sa.CheckConstraint("hour BETWEEN 0 AND 23", name="ck_hourly_metrics_hour"),
         sa.CheckConstraint(
-            "orders >= 0 AND riders_online >= 0", name="ck_hourly_metrics_counts"
+            "orders >= 0 AND riders_online >= 0",
+            name="ck_hourly_metrics_counts",
         ),
         sa.CheckConstraint(
-            "sla_10min_pct BETWEEN 0 AND 100", name="ck_hourly_metrics_sla"
+            "sla_10min_pct BETWEEN 0 AND 100",
+            name="ck_hourly_metrics_sla",
         ),
         schema="app",
     )
@@ -131,7 +139,10 @@ def upgrade() -> None:
         sa.Column("version", sa.String(64), nullable=False),
         sa.Column("status", sa.String(32), nullable=False),
         sa.Column(
-            "metadata", JSONB(), server_default=sa.text("'{}'::jsonb"), nullable=False
+            "metadata",
+            JSONB(),
+            server_default=sa.text("'{}'::jsonb"),
+            nullable=False,
         ),
         sa.Column(
             "created_at",
@@ -142,7 +153,8 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("file_hash", "version", name="uq_documents_hash_version"),
         sa.CheckConstraint(
-            "octet_length(file_hash) = 32", name="ck_documents_hash_length"
+            "octet_length(file_hash) = 32",
+            name="ck_documents_hash_length",
         ),
         schema="app",
     )
@@ -154,7 +166,9 @@ def upgrade() -> None:
         sa.Column("embedding", Vector(), nullable=False),
         sa.PrimaryKeyConstraint("document_id", "chunk_id", name="pk_document_chunks"),
         sa.ForeignKeyConstraint(
-            ["document_id"], ["app.documents.id"], ondelete="CASCADE"
+            ["document_id"],
+            ["app.documents.id"],
+            ondelete="CASCADE",
         ),
         sa.CheckConstraint("chunk_id >= 0", name="ck_document_chunks_id"),
         schema="app",

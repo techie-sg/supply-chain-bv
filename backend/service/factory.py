@@ -16,7 +16,8 @@ def create_embedding_service(settings: Settings | None = None) -> EmbeddingServi
     settings = settings or get_settings()
     if settings.embedding_provider == "jina":
         return JinaEmbeddingService(
-            model=settings.embedding_model, api_key=settings.jina_api_key
+            model=settings.embedding_model,
+            api_key=settings.jina_api_key,
         )
     raise ValueError(f"Unsupported embedding provider: {settings.embedding_provider}")
 
@@ -34,6 +35,7 @@ def create_chunking_strategy(settings: Settings | None = None) -> ChunkingStrate
         return MarkdownSectionChunkingStrategy()
     if settings.chunking_strategy == "fixed_size":
         return FixedSizeChunkingStrategy(
-            chunk_size=settings.chunk_size, overlap=settings.chunk_overlap
+            chunk_size=settings.chunk_size,
+            overlap=settings.chunk_overlap,
         )
     raise ValueError(f"Unsupported chunking strategy: {settings.chunking_strategy}")

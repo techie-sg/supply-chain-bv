@@ -33,7 +33,8 @@ def test_database_url_alias_and_secret_are_loaded_from_environment(monkeypatch) 
 
 
 def test_local_env_file_is_loaded_but_process_environment_wins(
-    tmp_path, monkeypatch
+    tmp_path,
+    monkeypatch,
 ) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("DATABASE_URL=postgresql://local@localhost/demo\n")

@@ -47,6 +47,8 @@ def test_missing_corpus_and_duplicate_chunk_ids_are_rejected(tmp_path) -> None:
 def test_metadata_falls_back_to_filename(tmp_path) -> None:
     (tmp_path / "plain.md").write_text("plain text")
     documents, _ = CorpusService(
-        tmp_path, tmp_path, MarkdownSectionChunkingStrategy()
+        tmp_path,
+        tmp_path,
+        MarkdownSectionChunkingStrategy(),
     ).load()
     assert documents[0].metadata["title"] == "plain"

@@ -29,7 +29,7 @@ class CorpusService:
         )
         if not source_files:
             raise FileNotFoundError(
-                f"No operational Markdown documents found in {self.corpus_dir}"
+                f"No operational Markdown documents found in {self.corpus_dir}",
             )
 
         documents = []
@@ -44,7 +44,7 @@ class CorpusService:
                     Document(
                         page_content=f"{metadata['title']} > {section}\n\n{body}",
                         metadata={**metadata, "section": section},
-                    )
+                    ),
                 )
                 slug = re.sub(r"[^a-z0-9]+", "-", section.lower()).strip("-")
                 ids.append(f"{metadata['doc_id']}#{slug}")

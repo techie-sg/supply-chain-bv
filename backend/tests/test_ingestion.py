@@ -25,10 +25,13 @@ class FakeEmbeddingService(EmbeddingService):
 
 
 @pytest.mark.parametrize(
-    "strategy", [MarkdownSectionChunkingStrategy(), FixedSizeChunkingStrategy(10, 2)]
+    "strategy",
+    [MarkdownSectionChunkingStrategy(), FixedSizeChunkingStrategy(10, 2)],
 )
 def test_ingestion_accepts_each_strategy_and_preserves_embedding_alignment(
-    tmp_path, monkeypatch, strategy
+    tmp_path,
+    monkeypatch,
+    strategy,
 ) -> None:
     (tmp_path / "policy.md").write_text("# Policy\n## Rain\nSlow down in rain.")
     corpus = CorpusService(tmp_path, tmp_path, strategy)
@@ -56,10 +59,11 @@ def test_empty_corpus_is_rejected_before_embedding_or_database_work(tmp_path) ->
 
 
 def test_misaligned_embeddings_are_rejected_before_database_write(
-    tmp_path, monkeypatch
+    tmp_path,
+    monkeypatch,
 ) -> None:
     (tmp_path / "policy.md").write_text(
-        "# Policy\n## Rain\nSlow down.\n## Dry\nNormal."
+        "# Policy\n## Rain\nSlow down.\n## Dry\nNormal.",
     )
     embeddings = FakeEmbeddingService()
     monkeypatch.setattr(embeddings, "embed_documents", lambda texts: [[0.1]])
@@ -74,7 +78,9 @@ def test_ingestion_cli_composes_services(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(ingestion, "BACKEND_DIR", tmp_path)
     monkeypatch.setattr(ingestion, "get_settings", lambda: Settings(_env_file=None))  # type: ignore[call-arg]
     monkeypatch.setattr(
-        ingestion, "create_embedding_service", lambda settings: FakeEmbeddingService()
+        ingestion,
+        "create_embedding_service",
+        lambda settings: FakeEmbeddingService(),
     )
     stored = []
 
