@@ -1,160 +1,71 @@
 # DispatchDesk PR/FAQ
 
-**Working Backwards draft, 1 October 2026.** The press release and customer FAQs describe the intended completed DispatchDesk demonstration at a future launch. They do not announce capabilities available in today's application. The store, persona, and quotes are illustrative. The launch date remains an open decision. Internal FAQs identify what must be built and proved before that announcement is credible.
+*Mock launch announcement for [Task 3](initial/tasks.md). It describes the intended completed project. Karthik and the quotes are illustrative; this is not a statement that every feature is available today.*
 
 ## Press release
 
-### DispatchDesk helps dark store managers understand delivery delays and choose a safe next step
+### DispatchDesk launches to help dark store managers make safe calls when deliveries slip
 
-**A browser assistant brings the queue, rider availability, delivery history, and store rules into one conversation, with every dispatch change left for the manager to approve.**
+**Understand where orders are slowing down, review practical options, and keep control of dispatch without putting riders under unsafe pressure.**
 
-**BENGALURU, [launch date]:** DispatchDesk today introduced a dispatch copilot for dark store managers facing evening peaks and rain delays. Managers can ask what is holding up orders, see the evidence behind the answer, and review a practical next step. The guided demonstration recreates these decisions in a simulated store, showing how managers can keep control of dispatch while working through delivery pressure.
+**BENGALURU:** DispatchDesk today launched a dispatch copilot for dark store managers facing evening peaks and rain delays. Managers can ask why deliveries are slipping and what they should do first. The assistant brings together the order queue, rider availability, delivery-stage history, and the store's operating rules to explain the situation and propose a safe next step.
 
-A falling delivery score leaves the manager with several possible problems and little time to distinguish them. Orders may still be getting packed, packed bags may be waiting for riders, or journeys may be taking longer. The manager must piece together queue screens, rider availability, yesterday's numbers, and the operating playbook before deciding what to change. A hurried response can target the wrong bottleneck or put a tired rider back on the road.
+For Karthik Reddy, a dark store manager in Koramangala, a falling delivery score starts a scramble. He checks packed orders, calls riders, compares yesterday's numbers, and looks up which orders can be batched. Regional operations wants the delivery promise met, but sending a tired rider back out or combining frozen goods with another delivery can create a bigger problem. Karthik needs an answer he can check and a decision he can explain.
 
-DispatchDesk brings those checks into the conversation. When Karthik, a manager in Koramangala, asks, “Packed orders are piling up. What should I do first?”, the assistant checks the simulated queue and rider roster, identifies the oldest waiting work, and explains the constraints on each option. It distinguishes orders that could share a rider from frozen-item orders that must travel separately. A recommendation to use standby capacity or prepare a customer update appears with its supporting facts and policy, ready for Karthik to review.
+With DispatchDesk, he can ask, “Packed orders are piling up. What should I do first?” The assistant checks the queue and rider states, identifies the oldest waiting work, and explains which options fit the playbook. Frozen-item orders remain single-drop. Standby call-ins, eligible batches, and customer updates appear as proposals for Karthik to approve. When he asks why last night went badly, it compares packing, rider wait, and travel time using the relevant records.
 
-The same conversation helps Karthik understand yesterday's slowdown and carry his preferences into the next shift. He can compare time spent packing, waiting for riders, and travelling, then ask how the findings change his next decision. His saved thresholds and batching restrictions apply when he returns. If a request would pressure riders to speed, skip a break, or work beyond the shift limit, DispatchDesk explains the rule and offers permitted alternatives. It does not make a delivery promise from an unsupported estimate.
+DispatchDesk also remembers his store's alert thresholds and batching preferences across shifts. It refuses requests to make riders speed, skip breaks, or work beyond policy limits, and offers permitted alternatives. Every operational recommendation shows its supporting facts and rules; an unsupported delivery estimate is never presented as a promise.
 
-“The manager should be able to see why a next step makes sense before asking anyone to act,” says the DispatchDesk team. “We bring the evidence and the operating rules together, and keep the decision in the manager's hands.”
+“During a rush, I need to know what is holding us up and what I can safely change,” says Karthik. “DispatchDesk helps me check the options before I give the instruction.”
 
-“I used to see the delivery score falling and start calling people to work out what was wrong,” says Karthik Reddy, a dark store manager in Koramangala. “Now I can check what is waiting, see which options fit our rules, and explain the call I'm making.”
+“We built DispatchDesk to help the manager make a clear call with the evidence in front of them,” says the DispatchDesk team. “Rider safety and the manager's approval are part of that decision.”
 
-At launch, managers and reviewers can open [DispatchDesk](https://supply-chain-bv-production.up.railway.app) in a browser, choose a prepared store situation, inspect its records, and ask their own dispatch questions. The project team will support guided walkthroughs and review of simulated proposals. No demonstration action contacts a real rider or customer or changes a real order.
+Managers and reviewers can explore the experience at [DispatchDesk](https://supply-chain-bv-production.up.railway.app) using prepared synthetic store situations. The project demonstration simulates dispatch changes and does not contact real riders or customers.
 
 ## Customer FAQs
 
-These answers describe the same future demonstration announced above.
+### 1. What does DispatchDesk add to my dashboard?
 
-### 1. Who is DispatchDesk for?
+It helps you work through a decision using the queue, riders, delivery history, and playbook together. You can ask what is holding up packed orders or why one evening was worse than another, inspect the supporting facts, and ask a follow-up. The goal is to give Karthik a practical next step he can assess without assembling the explanation across several sources himself.
 
-Dark store managers who must decide what to do when deliveries slip, especially during evening demand and rain. It is for questions that require combining current dispatch information with operating rules: which constraint is active, what options are allowed, and what should be checked before acting. The demonstration supports English and uses a prepared synthetic store.
+### 2. Can it help me batch orders in the rain and tell customers when to expect delivery?
 
-### 2. What does it add to my dispatch dashboard?
+It checks order age, item count, geography, detours, cold-chain restrictions, and rider eligibility before proposing a batch. Frozen-item orders must travel separately, and excluded orders are explained. An ETA is given only when operational data supports it, as a labeled estimate range with its data basis and observation time. A batching decision or the ten-minute service promise does not establish an order's arrival time.
 
-You can ask a question that crosses the queue, riders, delivery history, and policy without assembling that explanation yourself. The answer links the observed situation to the relevant rule and a proposed next step. You can inspect the evidence and ask a follow-up. Your dashboard remains useful for monitoring; DispatchDesk helps you work through a decision.
+### 3. Will it change dispatch or send a message without asking me?
 
-### 3. How do I know where an answer came from?
+No. Assignments, batches, incentives, service-area changes, standby call-ins, and messages are drafts requiring explicit approval. The proposed action must still fit the current situation before simulated execution. Approval cannot waive safety or cold-chain rules. In this project, execution affects only synthetic data.
 
-Operational figures carry the snapshot time or historical period they describe. Policy recommendations cite the relevant playbook passages. Derived figures show their inputs and calculation. If the evidence is incomplete, DispatchDesk names the missing check rather than presenting a possible explanation as a confirmed cause. You can inspect the evidence used for that answer.
+### 4. Will I have to repeat my store preferences every shift?
 
-### 4. Can it tell me why yesterday was worse or which orders to batch in the rain?
+You can save an alert threshold and its applicable time window, batching restrictions, and an incentive cap for the same manager and store. DispatchDesk confirms the values and applies them in a later session. It surfaces conflicts rather than silently overriding a preference. Preferences may be stricter than policy, but cannot relax mandatory rules. Background monitoring and unsolicited alerts are outside the core project.
 
-It compares matching periods across evenings and shows how packing, rider wait, and travel changed alongside demand, riders online, and weather. For a batch proposal, it checks order age, item count, cold-chain restrictions, geography, detours, and rider eligibility. Frozen-item orders go separately. If verified inputs support a delivery estimate, it presents a labeled range with its data basis; otherwise it says an estimate is unavailable.
+### 5. What happens to the data I enter?
 
-### 5. Will it send instructions or change dispatch by itself?
+Use synthetic information for the demonstration. External embedding and language-model providers process text needed for retrieval and answering, including questions, conversation context, and policy passages. The intended completed system also uses relevant synthetic tool results and preferences to support its answers. Real customer or rider information should not be entered without established access and retention controls.
 
-No. Assignments, batches, incentives, service-area changes, standby call-ins, and messages remain proposals until you approve the specific action. If conditions change, the proposal is checked again before simulated execution. Approval cannot override a safety or cold-chain rule. In this demonstration, execution changes only synthetic state; it does not contact people or operate real systems.
+Today, Jina receives retrieval queries, recent conversation context for follow-ups, and corpus text during ingestion. Groq receives the question, session history, retrieved passages, and system prompt. Current scenario database rows are not supplied to chat.
 
-### 6. What if I ask riders to speed, skip a break, or accept a pay penalty for delays?
+## Internal and guardrail FAQs
 
-It will not draft requests to speed, break traffic rules, skip mandatory breaks, exceed shift limits, or dock pay for weather- or safety-related delays. It explains the applicable policy and offers permitted options. Rider-specific advice requires verified hours and break information. The demo's working-hours limits come from its illustrative playbook, not a statement about employment law or your operator's policy. Real use would require your operator's authoritative rules.
+### 6. How should DispatchDesk respond to unsafe rider pressure or over-hours requests?
 
-### 7. Will it remember my preferences next shift?
+It must refuse to encourage or draft instructions to speed, break traffic rules, skip mandatory breaks, or work beyond the shift limit. It must also refuse pay penalties for weather- or safety-related delays. Rider-specific decisions require verified hours and last-break information from the rider-status tool, not an assumption or an unsupported assertion in the question.
 
-Yes. You can save an alert threshold and its time window, batching restrictions, and an incentive cap for the same manager and store. DispatchDesk confirms the saved values and applies them in a later session. Conflicts are shown for review, and preferences cannot loosen mandatory policy. Thresholds are checked during your interactions; background monitoring and unsolicited alerts are outside this release.
+The answer should cite the relevant policy and offer permitted options, such as standby capacity, eligible batching, reduced serviceability, or an honest customer update. Manager approval cannot override these restrictions. The demonstration uses illustrative playbook limits, not a claim about employment law.
 
-### 8. What happens when data is missing, old, or unavailable?
+### 7. What should happen when information is missing, stale, or ambiguous?
 
-The answer identifies what could not be verified. An older snapshot may be shown with its observation time, but is not described as the current queue. An unsupported ETA, rider assignment, or batch is withheld. An ambiguous reference prompts a question before a decision depends on it. You can still discuss general policy when operational information cannot be reached.
+DispatchDesk should state what could not be verified and avoid inventing counts, rider states, timings, or ETAs. An older snapshot must show its observation time and must not be presented as current. Missing routing or rider information prevents a specific recommendation that depends on it. References such as “that rider” or “last night” need clarification when the available records cannot resolve them. General policy guidance remains useful when operational data is unavailable.
 
-### 9. What information leaves the application?
+### 8. How do we check that the answers follow the requirements?
 
-The demonstration uses synthetic records. External embedding and language-model providers receive the text needed for retrieval and answering; that can include questions, conversation history, policy passages, and selected synthetic operational context. Persistent preferences are scoped to the demonstration's manager and store. Do not enter real customer or rider information. The internal FAQ describes the current data flow and the controls needed before any real-store trial.
+Use the six queries in the [requirements](initial/requirements.md): backlog, evening comparison, rain batching and ETA, unsafe rider pressure, preference recall, and a rider nearing the shift limit. Check that operational claims trace to tool results, policies are retrieved and applied, excluded orders are explained, preferences persist across two sessions, and every action remains a proposal until approved.
 
-### 10. How do I get started, get help, and find the price?
+Also test unavailable data and benign questions about breaks. A refusal count alone does not show that the assistant is helpful. Record the evidence and actual response for each case; do not claim measured delivery improvements or universal safety from a finite demonstration.
 
-At launch, open DispatchDesk, choose a prepared store situation, inspect its records, and ask a dispatch question. The team supports the walkthrough and collects feedback. There is no commercial subscription offer in this release; production pricing, onboarding, and ongoing support have not been decided.
+### 9. Does the mock announcement describe the application available today?
 
-## Internal FAQs
+It describes the intended completed DispatchDesk experience. The current prototype has policy RAG chat, session history, scenario loading, and database-backed data inspection. Operational tools, persistent preferences, a separate guardrail layer, and simulated approval/execution are planned capabilities. This Week 1 document defines the customer promise the later work must deliver.
 
-### 1. What decision is this document asking us to make?
-
-Agree on the customer experience the completed project must demonstrate, then determine whether it is worth delivering. The proposed benefit is less work assembling evidence for a dispatch decision while retaining manager control and rider protections. The press release is a destination. It does not establish that the benefit has been measured or that a production service is ready.
-
-The immediate commitment is to finish and evaluate the simulated copilot against the six required interactions. A real-store integration or commercial launch needs a separate decision. A launch date must follow confirmed capacity and acceptance evidence; this draft does not create a calendar commitment.
-
-### 2. Who would use it, who would pay, and what evidence supports the problem?
-
-The on-shift manager is the intended user. An operator or regional operations team is a possible buyer, but neither purchasing authority nor willingness to pay has been validated. Karthik's store and operating pressures come from the [requirements](initial/requirements.md). They are design assumptions, not customer interviews or field measurements.
-
-We need to observe how actual managers diagnose delays, what information they already have together, how often they must switch sources, and what mistakes or delays matter. Until then, we cannot claim a market size, adoption forecast, management-time saving, or delivery improvement. Estimating demand requires the number of operators with this problem, their data readiness, integration cost, and willingness to pay.
-
-### 3. Why would a manager change their existing workflow?
-
-The proposed advantage is an explanation and checked next step assembled from operational evidence and policy in one interaction. Existing alternatives include reading a dashboard and SOP, calling colleagues, searching policy, or using a rules-based dashboard. A general chat model may answer quickly but lacks verified store evidence unless it is supplied.
-
-We should compare these alternatives using the same records and rules. If the dashboard already makes the cause and safe action clear, or the conversation adds latency without improving the decision, the assistant has not earned its place. Both the burden of assembling evidence and a manager's willingness to consult chat during a peak are unvalidated adoption assumptions. The claimed benefit must survive that comparison rather than depend on enthusiasm for chat.
-
-### 4. What is built today, and what separates it from the launch promise?
-
-Today the Gradio application provides policy RAG with Jina embeddings, PostgreSQL/pgvector retrieval, Groq answers, and conversation history within a session. Separate demo controls load normal, backlog, and rain YAML snapshots into four operational tables and display fresh saved rows. Scenario loading replaces the shared operational dataset; it is not isolated per chat session.
-
-Chat does not receive those operational rows. There are no connected dispatch tools, persistent store preferences, response evidence panel, simulated approval/execution workflow, deterministic response guardrail layer, cache, or observability dashboard. Those are delivery requirements for the future experience. The site linked in the release currently hosts this policy-chat prototype; the same address is intended for the completed demonstration. The three fixture names are starting datasets, not proof that the six required interactions work.
-
-### 5. What are the hardest problems, and how do we propose to solve them?
-
-| Problem | Proposed approach | Evidence needed |
-| --- | --- | --- |
-| Facts can be stale or inconsistent | Tools return a consistent store snapshot and observation time; define a freshness limit and explicit unavailable-data behavior. | Concurrent edits and timeouts do not produce unsupported current-state claims. |
-| The model can invent figures or omit a constraint | Code calculates stage differences and checks rider hours, breaks, batch eligibility, and supported ETA inputs; validate the response against that evidence. | Grounding and safety checks pass direct, indirect, and benign requests. |
-| An approved proposal can become invalid | Associate approval with a specific proposal and revalidate current state immediately before a transactional simulated change. | Changed data invalidates an incompatible approval; no action occurs without approval. |
-| Preferences can leak or be forgotten | Persist preferences under manager and store identity, confirm writes, and retrieve them in later sessions. | Cross-session recall, conflict handling, and identity isolation are demonstrated. |
-| A retrieved passage can be relevant but incomplete | Evaluate retrieval and the resulting answer together, including excluded orders and missing policy inputs. | Required rules appear and are applied correctly across varied questions. |
-
-The corpus provides illustrative demo policy. Synthetic route assumptions are not map verification, and historical hourly values are supplied aggregates. Missing ETA or routing inputs must yield an explicit limitation, not a fabricated estimate.
-
-### 6. What will we deliberately leave out?
-
-Real order-management, rider, payment, messaging, and maps integrations; autonomous dispatch; real-world route optimization; demand forecasting; and background alerts. Demo approvals simulate an action only. We do not claim that this work proves improved real-store SLAs or that prompt instructions alone guarantee safe outputs.
-
-Policy guidance remains available when operational tools fail. Specific operational advice remains dependent on verified inputs. Additional features should not delay these basic boundaries.
-
-### 7. How will we know the launch experience works?
-
-| Required interaction | Acceptance evidence |
-| --- | --- |
-| Backlog | Fresh queue and rider facts, oldest-order age, and policy-supported priorities presented as proposals. |
-| Two evenings | Matching periods and correct stage differences, with order volume, rider availability, and rain as context; measured changes are distinguished from possible causes. |
-| Rain, batches, and ETA | Eligible pairs checked against every rule, exclusions explained, and an estimate range only when its inputs support it. |
-| Unsafe speed and pay pressure | Prohibited instructions are refused without drafting them; compliant alternatives are offered. |
-| Store preferences | Values confirmed in one session and correctly recalled for the same manager and store in a second, with conflicts surfaced. |
-| Rider near a limit | Hours and last break verified; work beyond policy limits declined with alternatives. |
-
-Also test timeouts, ambiguous references, missing policy, preference conflicts, stale data, and benign break questions. Record inputs, model settings, retrieved sources, tool results, proposed changes, and per-case outcomes. An invented operational figure, unsafe recommendation, unapproved action, or silent preference override blocks technical acceptance. Passing this finite set establishes behavior under those conditions, not a universal safety guarantee.
-
-### 8. How will we test whether the assistant is useful rather than just functional?
-
-After technical acceptance, run a supervised comparison with actual managers using matched scenarios. Compare DispatchDesk with direct access to the same dashboard records and policies. Measure correct compliant decisions, decision time, evidence inspection, and understanding of uncertainty. Record sample sizes and conditions before drawing conclusions.
-
-Teammate role-play can improve the demo but cannot establish customer adoption. If managers reach equally good decisions more easily with the existing workflow, simplify the product or change the interface before investing in integrations.
-
-### 9. What dependencies and data controls are required?
-
-The current implementation depends on Gradio, Jina, Groq, and PostgreSQL/pgvector. Retrieval sends Jina the query text, including the recent exchange for follow-ups; ingestion sends corpus text. Groq receives the system prompt, retrieved passages, current question, and session history. Current scenario rows are not sent to either provider by chat.
-
-The future demo adds selected tool results and preferences to response context. Before that change, define what each provider receives, what is logged, who can inspect logs, and how long session, preference, and trace data is retained. Manager/store identity and access checks are prerequisites for persistent memory. All evaluation inputs remain synthetic.
-
-A real-store trial additionally requires operator permission, authoritative policy, suitable data contracts, provider and retention review, and access controls for customer and rider information. None is established by a successful simulated demo. Provider outages and rate limits require a clear error or evidence-backed fallback, never an invented answer.
-
-### 10. What investment and economics would make this worth continuing?
-
-The five-person project team is the current development resource. There is no agreed commercial price, validated effort estimate, or approved launch budget. Estimate work by dependency and measure actual effort; the source plan's task durations are not a delivery guarantee.
-
-Measure cost per completed interaction from embedding and model requests, retries, hosting, database usage, and support. For a future real-store service, add onboarding, integration, policy maintenance, and incident-response costs. Compare that with a buyer's demonstrated willingness to pay and measured workflow value. Free-tier availability does not establish sustainable unit economics.
-
-### 11. Who owns delivery, and what are the checkpoints?
-
-Vishnu Mohan and Ravisekhar R own corpus preparation, chunking, embeddings, ingestion, retrieval, grounded answers, and the 6-pager. Sunny Gupta, Priya Ranjan, and Sharad Nailwal own setup, database and scenarios, application integration, deployment, documentation, and the planned tools, memory, approval, guardrail, caching, observability, and evaluation work.
-
-Follow the [source plan](initial/tasks.md) through policy RAG, operational tools and memory, safety checks and caching, then evaluation and observability. Each stage needs reviewable evidence before the next depends on it. Confirm effort, provider capacity, and the demo launch date at those checkpoints.
-
-### 12. What would make us stop or change the idea?
-
-Pause launch if any critical grounding, safety, approval, or preference requirement fails. Narrow the promise if the available data cannot support it. Reconsider conversation if managers cannot verify the advice, do not find the combined evidence useful, or prefer a simpler dashboard. Do not proceed to real-store use without data rights, access controls, and authoritative policy.
-
-The next review should settle the demonstration scope, delivery estimate, launch date, and technical acceptance evidence. A production investment decision additionally needs manager research and a credible cost model. The release should be revised when those findings change the proposed customer experience.
-
-## Method references
-
-This draft uses the customer-first future-launch framing and separate customer/internal questions described in the [Working Backwards PR/FAQ guidance](https://workingbackwards.com/resources/working-backwards-pr-faq/). Its internal questions examine delivery risks and assumptions using [Bill Carr's FAQ guidance](https://workingbackwards.com/blog/how-to-craft-effective-faqs-in-the-amazon-pr-faq-process/). The press release structure follows [AWS guidance on writing a future press release](https://docs.aws.amazon.com/prescriptive-guidance/latest/oca-framework-align-leaders/business-case.html).
+*Review status: draft for whole-team review and agreement, as required by Task 3.*
