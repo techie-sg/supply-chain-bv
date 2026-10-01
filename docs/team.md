@@ -2,13 +2,13 @@
 
 | Team member | Responsibility |
 | --- | --- |
-| Sunny Gupta | Organizer; remaining project work with Priyaranjan and Sharad |
+| Sunny Gupta | Remaining project work with Priya Ranjan and Sharad |
 | Vishnu Mohan | RAG pipeline and 6-pager with Ravisekhar |
 | Ravisekhar R | RAG pipeline and 6-pager with Vishnu |
-| priyaranjan290@gmail.com | Remaining project work with Sunny and Sharad |
-| sharadnailwal96@gmail.com | Remaining project work with Sunny and Priyaranjan |
+| Priya Ranjan | Remaining project work with Sunny and Sharad |
+| Sharad Nailwal | Remaining project work with Sunny and Priya Ranjan |
 
-Sunny, Priyaranjan, and Sharad share the work outside RAG and the 6-pager, including the application, scenario data, deployment, and the remaining planned tools, memory, guardrails, and observability. Individual task assignments are agreed within that group.
+Sunny, Priya Ranjan, and Sharad share the work outside RAG and the 6-pager, including the application, scenario data, deployment, and the remaining planned tools, memory, guardrails, and observability. Individual task assignments are agreed within that group.
 
 ## Current stack
 
