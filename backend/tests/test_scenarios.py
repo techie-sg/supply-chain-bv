@@ -64,7 +64,9 @@ def test_each_file_can_define_its_own_data(monkeypatch, tmp_path) -> None:
     rows, context = build_scenario(
         "custom", datetime(2026, 10, 3, 19, 30, tzinfo=ZoneInfo("Asia/Kolkata"))
     )
-    assert scenario_names() == [{"key": "custom", "title": data["title"]}]
+    assert scenario_names() == [
+        {"key": "custom", "title": data["title"], "description": data["description"]}
+    ]
     assert context["store_id"] == "TEST-STORE"
     assert context["counts"]["hourly_metrics"] == 1
     assert any(isinstance(row, Zone) and row.zone_id == "TEST-ZONE" for row in rows)
@@ -105,7 +107,7 @@ def test_scenario_details_without_loading_database(monkeypatch) -> None:
     assert first["order_id"] == "ORD-01-001"
     as_of = datetime.fromisoformat(first["as_of"])
     placed_at = datetime.fromisoformat(first["placed_at"])
-    assert as_of.utcoffset() == timedelta(hours=5, minutes=30)
+    assert as_of.tzinfo is None and placed_at.tzinfo is None
     assert as_of - placed_at == timedelta(seconds=240)
 
 
@@ -120,14 +122,36 @@ def test_current_scenario_uses_saved_rows_and_original_time(monkeypatch) -> None
         raise AssertionError("Restoring a snapshot must never replace data")
 
     monkeypatch.setattr(scenarios, "replace_scenario", no_write)
+    monkeypatch.setattr(scenarios, "build_scenario", no_write)
     context = scenarios.current_scenario()
     assert context is not None
     assert context["scenario_key"] == "rain"
     assert context["as_of"] == as_of.isoformat()
     assert context["counts"]["packed_waiting"] == 7
-    assert context["rain_started_at"] < context["as_of"]
+    assert "rain_started_at" not in context
     table = context["tables"]["orders"]
     assert table["data"][0][table["headers"].index("status")] == "picking"
+
+
+def test_loading_reads_back_the_saved_rows(monkeypatch) -> None:
+    events = []
+    saved = []
+
+    def replace(rows, engine):
+        events.append("replace")
+        saved.extend(rows)
+        next(row for row in saved if isinstance(row, Order)).status = "delivered"
+
+    def read(engine):
+        events.append("read")
+        return saved
+
+    monkeypatch.setattr(scenarios, "replace_scenario", replace)
+    monkeypatch.setattr(scenarios, "read_scenario_rows", read)
+    context = scenarios.load_scenario("normal")
+    table = context["tables"]["orders"]
+    assert events == ["replace", "read"]
+    assert table["data"][0][table["headers"].index("status")] == "delivered"
 
 
 def test_current_scenario_handles_empty_and_rejects_mixed_snapshots(

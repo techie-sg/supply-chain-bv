@@ -14,6 +14,15 @@ def test_theme_supports_gradio_launch_analytics_comparison() -> None:
 
 
 @pytest.mark.parametrize("key", ["normal", "backlog", "rain"])
+def test_situation_heading_shows_the_yaml_description(key) -> None:
+    inventory = scenarios.scenario_names()
+    description = next(item["description"] for item in inventory if item["key"] == key)
+    heading = gradio_app._situation_heading(key, inventory)
+    assert description and description in heading
+    assert "Set up a situation." in heading
+
+
+@pytest.mark.parametrize("key", ["normal", "backlog", "rain"])
 def test_preview_tables_do_not_load_database(key, monkeypatch) -> None:
     def no_database(*args, **kwargs):
         raise AssertionError("Preview must not access the database")
@@ -41,7 +50,7 @@ def test_loading_uses_service_and_clears_chat_only_on_success(monkeypatch) -> No
     )
     assert called == ["backlog"]
     assert context["title"] in status and context["store_id"] in status
-    assert "IST" in status
+    assert "IST" not in status and "+05:30" not in status
     assert "CURRENT SCENARIO" in status
     assert current == context and len(tables) == 4
     assert context["title"] in summary
@@ -64,9 +73,7 @@ def test_invalid_preview_has_friendly_error() -> None:
 def test_new_session_restores_saved_scenario_for_chat_and_tables(monkeypatch) -> None:
     context = scenarios.scenario_details("rain")
     monkeypatch.setattr(gradio_app, "current_scenario", lambda: context)
-    status, current, selection, summary, *tables = gradio_app.restore_workspace(
-        "normal"
-    )
+    status, current, selection, summary, *tables = gradio_app.restore_workspace()
     assert current == context
     assert context["title"] in status
     assert selection["value"] == "rain"
@@ -78,18 +85,58 @@ def test_restore_distinguishes_empty_database_from_unavailable_database(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(gradio_app, "current_scenario", lambda: None)
-    status, current, _, _, *tables = gradio_app.restore_workspace("normal")
+    status, current, _, _, *tables = gradio_app.restore_workspace()
     assert "No saved scenario" in status
-    assert current is None and len(tables[0]["data"]) == 6
+    assert current is None and all(table["data"] == [] for table in tables)
 
     def unavailable():
         raise RuntimeError("private connection information")
 
     monkeypatch.setattr(gradio_app, "current_scenario", unavailable)
-    status, current, *_ = gradio_app.restore_workspace("normal")
+    status, current, _, _, *tables = gradio_app.restore_workspace()
     assert "Saved scenario unavailable" in status
     assert "private connection information" not in status
     assert current is None
+    assert all(table["data"] == [] for table in tables)
+
+
+def test_current_scenario_preview_reads_fresh_database_rows(monkeypatch) -> None:
+    context = scenarios.scenario_details("normal")
+    table = context["tables"]["orders"]
+    table["data"][0][table["headers"].index("status")] = "delivered"
+    monkeypatch.setattr(gradio_app, "current_scenario", lambda: context)
+
+    def no_yaml(key):
+        raise AssertionError("Current data must come from the database")
+
+    monkeypatch.setattr(gradio_app, "scenario_details", no_yaml)
+    _, orders, *_ = gradio_app.prepare_scenario("normal", {"scenario_key": "normal"})
+    assert orders["data"][0][orders["headers"].index("Status")] == "delivered"
+
+
+def test_refresh_updates_current_data_without_touching_chat(monkeypatch) -> None:
+    refresh = next(
+        item
+        for item in gradio_app.app.blocks.values()
+        if isinstance(item, gr.Button) and item.elem_id == "refresh-scenario"
+    )
+    callback = next(
+        callback
+        for callback in gradio_app.app.fns.values()
+        if (refresh._id, "click") in callback.targets
+    )
+    context = scenarios.scenario_details("backlog")
+    monkeypatch.setattr(gradio_app, "current_scenario", lambda: context)
+    assert callback.fn is gradio_app.restore_workspace
+    assert callback.inputs == []
+    assert not any(
+        isinstance(component, (gr.Chatbot, gr.Textbox))
+        for component in callback.outputs
+    )
+    status, current, selection, _, *tables = callback.fn()
+    assert current == context and context["title"] in status
+    assert selection["value"] == "backlog"
+    assert len(tables[0]["data"]) == 12
 
 
 def test_chat_failure_preserves_existing_history(monkeypatch) -> None:

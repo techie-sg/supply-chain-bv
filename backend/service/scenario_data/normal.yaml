@@ -1,4 +1,7 @@
 title: Normal operations
+description: >-
+  A regular dispatch shift: orders are moving, riders are available, and the roads are dry.
+  Keep deliveries on track without cutting corners on safety or cold-chain rules.
 store_id: DS-BLR-014
 is_raining: false
 zones:

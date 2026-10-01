@@ -99,6 +99,9 @@ Ask a dispatch question directly; chat retrieves guidance from the playbook.
 Use **Demo tools** to preview tables or load a different simulated situation.
 **Load scenario** replaces the operational rows and clears the conversation.
 Previewing data or switching between views preserves the conversation.
+The current scenario's tables read from PostgreSQL. The small **Refresh** button
+beside the **Store** badge shows its latest saved changes without resetting rows
+or clearing chat. Other scenarios still preview their YAML starting data.
 **Back to assistant** returns to the manager workspace.
 Chat receives the question and retrieved playbook passages. Scenario rows are
 available in Demo tools and are not supplied to the embedding or language-model services.

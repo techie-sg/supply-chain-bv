@@ -36,9 +36,13 @@ def _read_scenario(key: str) -> ScenarioData:
 
 
 def scenario_names() -> list[dict[str, str]]:
-    return [
-        {"key": key, "title": _read_scenario(key).title} for key in _scenario_paths()
-    ]
+    scenarios = []
+    for key in _scenario_paths():
+        data = _read_scenario(key)
+        scenarios.append(
+            {"key": key, "title": data.title, "description": data.description}
+        )
+    return scenarios
 
 
 def build_scenario(key: str, as_of: datetime) -> tuple[list[object], dict[str, Any]]:
@@ -128,9 +132,11 @@ def build_scenario(key: str, as_of: datetime) -> tuple[list[object], dict[str, A
 
 def load_scenario(key: str, engine: Engine | None = None) -> dict[str, Any]:
     """Atomically replace all operational rows with one validated scenario."""
-    rows, context = build_scenario(key, datetime.now(TIMEZONE))
-    context["tables"] = _scenario_tables(rows)
+    rows, _ = build_scenario(key, datetime.now(TIMEZONE))
     replace_scenario(rows, engine)
+    context = current_scenario(engine)
+    if context is None:
+        raise RuntimeError("No saved scenario after loading")
     return context
 
 
@@ -147,9 +153,14 @@ def current_scenario(engine: Engine | None = None) -> dict[str, Any] | None:
     if len(identities) != 1:
         raise ValueError("Saved rows do not describe a single scenario snapshot")
     key, store_id, as_of = identities.pop()
-    _, context = build_scenario(key, as_of)
-    context["store_id"] = store_id
-    context["tables"] = _scenario_tables(rows)
+    context: dict[str, Any] = {
+        "scenario_key": key,
+        "title": key.replace("_", " ").replace("-", " ").title(),
+        "as_of": as_of.astimezone(TIMEZONE).isoformat(),
+        "timezone": "Asia/Kolkata",
+        "store_id": store_id,
+        "tables": _scenario_tables(rows),
+    }
     context["counts"] = {
         **{name: len(table["data"]) for name, table in context["tables"].items()},
         "packed_waiting": sum(
@@ -161,7 +172,7 @@ def current_scenario(engine: Engine | None = None) -> dict[str, Any] | None:
 
 
 def _scenario_tables(rows: list[object]) -> dict[str, dict[str, Any]]:
-    """Serialize snapshot rows for the UI and assistant without database reads."""
+    """Serialize snapshot rows for the scenario tables."""
     tables = {}
     for model in (Order, Rider, HourlyMetric, Zone):
         columns = list(model.__table__.columns)
@@ -173,9 +184,7 @@ def _scenario_tables(rows: list[object]) -> dict[str, dict[str, Any]]:
             for column in columns:
                 value = getattr(row, column.key)
                 if isinstance(value, datetime):
-                    value = value.astimezone(TIMEZONE).isoformat(
-                        sep=" ", timespec="seconds"
-                    )
+                    value = value.astimezone(TIMEZONE).strftime("%Y-%m-%d %H:%M:%S")
                 elif isinstance(value, date):
                     value = value.isoformat()
                 record.append(value)

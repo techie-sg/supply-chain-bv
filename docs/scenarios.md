@@ -34,22 +34,30 @@ migration changes only the database selected by that URL.
 
 Start the Gradio workspace with `uv run python -m ui.gradio_app` from `backend/`.
 The scenario dropdown lists each YAML file by its title. Choose a scenario to
+see its short situation description from YAML under **Set up a situation**, and
 preview its row counts, then click **Load scenario** to replace the operational
 data. The workspace shows the loaded scenario, store, and timestamp. A successful
 load clears the conversation; a failed load keeps it intact.
 
 The **Demo tools** view shows searchable, read-only tables for orders,
-riders, hourly metrics, and zones. Dates are generated relative to preview time
-and timestamps include their timezone (+05:30 / IST). Choosing another scenario
+riders, hourly metrics, and zones. The current scenario's rows come from PostgreSQL;
+other scenarios preview their YAML starting data. Preview dates are generated
+relative to preview time; saved dates retain their original load time.
+All displayed timestamps are converted to IST and omit the timezone suffix.
+Choosing another scenario
 only changes the preview; it does not replace the saved operational rows.
+Click **Refresh** beside the **Store** badge to return to the current scenario and
+read its latest saved rows, including edits made since loading. Refresh does not
+reset any rows or clear chat. An empty or unavailable database shows no current
+rows rather than substituting YAML data.
 There is no Excel export or separate HTTP API.
 
 The **Current scenario** indicator identifies the saved operational dataset.
 On a successful load, the exact snapshot is shown in Demo tools. Chat uses the
 question and retrieved playbook passages; scenario rows are not supplied to it.
 The snapshot's `as_of` timestamp records
-when it was loaded; the snapshot is not a continuously live feed. Reload the
-scenario to establish a fresh starting point.
+when it was loaded. Refresh reads saved changes on demand; it does not advance
+the simulation. Reload the scenario to establish a fresh starting point.
 
 The loader validates the whole file before changing the database. It
 then deletes the current operational rows and inserts the chosen starting

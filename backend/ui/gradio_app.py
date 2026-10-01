@@ -93,20 +93,34 @@ CHAT_PLACEHOLDER = """
 
 
 def _scenario_summary(context: dict[str, Any]) -> str:
-    weather = "Rain conditions" if context["is_raining"] else "Dry conditions"
-    weather_class = "rain" if context["is_raining"] else "dry"
+    weather_pill = ""
+    if "is_raining" in context:
+        raining = context["is_raining"]
+        weather = "Rain conditions" if raining else "Dry conditions"
+        weather_class = "rain" if raining else "dry"
+        weather_pill = (
+            f'<span class="weather-pill {weather_class}"><span aria-hidden="true">'
+            f"{'☂' if raining else '☀'}</span> {weather}</span>"
+        )
+    source = "SCENARIO PREVIEW" if "is_raining" in context else "CURRENT SCENARIO"
     return (
-        '<section class="scenario-preview" aria-label="Selected scenario preview">'
-        '<div class="preview-heading"><div><span class="section-kicker">SCENARIO PREVIEW</span>'
+        '<section class="scenario-preview" aria-label="Scenario data">'
+        f'<div class="preview-heading"><div><span class="section-kicker">{source}</span>'
         f"<h2>{escape(context['title'])}</h2>"
         f'<span class="store-badge">Store <strong>{escape(context["store_id"])}</strong></span></div>'
-        f'<span class="weather-pill {weather_class}"><span aria-hidden="true">'
-        f"{'☂' if context['is_raining'] else '☀'}</span> {weather}</span></div>"
+        f"{weather_pill}</div>"
         "</section>"
     )
 
 
-def _table_views(context: dict[str, Any]) -> tuple[dict, dict, dict, dict]:
+def _table_views(context: dict[str, Any] | None) -> tuple[dict, dict, dict, dict]:
+    if context is None:
+        return (
+            {"headers": [], "data": []},
+            {"headers": [], "data": []},
+            {"headers": [], "data": []},
+            {"headers": [], "data": []},
+        )
     priority = {
         "orders": [
             "order_id",
@@ -191,14 +205,21 @@ def _table_views(context: dict[str, Any]) -> tuple[dict, dict, dict, dict]:
     return views[0], views[1], views[2], views[3]
 
 
-def prepare_scenario(key: str) -> tuple[str, dict, dict, dict, dict]:
-    """Inspect the selected scenario without changing the loaded snapshot."""
+def prepare_scenario(
+    key: str, current: dict[str, Any] | None = None
+) -> tuple[str, dict, dict, dict, dict]:
+    """Read current rows from the database; preview other starting scenarios."""
     try:
-        context = scenario_details(key)
-    except (KeyError, ValueError) as exc:
+        if current and key == current["scenario_key"]:
+            context = current_scenario()
+            if context is None:
+                raise RuntimeError("The saved scenario is no longer available")
+        else:
+            context = scenario_details(key)
+    except (KeyError, ValueError, SQLAlchemyError, RuntimeError) as exc:
         logger.exception("Could not prepare scenario %s", key)
         raise gr.Error(
-            "Could not prepare this scenario. Check its configuration."
+            "Could not prepare this scenario. Check its configuration and database connection."
         ) from exc
     return _scenario_summary(context), *_table_views(context)
 
@@ -230,17 +251,17 @@ def _loaded_status(context: dict[str, Any]) -> str:
         '<div class="loaded-status"><span class="status-dot"></span><div>'
         '<span class="current-label">CURRENT SCENARIO</span>'
         f"<strong>{escape(context['title'])}</strong>"
-        f"<span>{escape(context['store_id'])} · {loaded_at:%d %b %Y, %H:%M:%S} IST</span></div></div>"
+        f"<span>{escape(context['store_id'])} · {loaded_at:%d %b %Y, %H:%M:%S}</span></div></div>"
     )
 
 
-def restore_workspace(default_key: str) -> tuple:
-    """Reconnect a new session to saved data; never load or replace rows here."""
+def restore_workspace() -> tuple:
+    """Refresh saved data without replacing rows or changing the conversation."""
     try:
         context = current_scenario()
     except (KeyError, ValueError, SQLAlchemyError, RuntimeError):
         logger.warning("Could not restore the saved scenario")
-        status = '<div class="empty-status"><strong>Saved scenario unavailable</strong><span>Check the database connection, or choose a scenario to preview.</span></div>'
+        status = '<div class="empty-status"><strong>Saved scenario unavailable</strong><span>Check the database connection and refresh again.</span></div>'
         context = None
     else:
         status = (
@@ -256,7 +277,13 @@ def restore_workspace(default_key: str) -> tuple:
             _scenario_summary(context),
             *_table_views(context),
         )
-    return status, None, gr.skip(), *prepare_scenario(default_key)
+    return (
+        status,
+        None,
+        gr.skip(),
+        '<p class="muted">No current scenario data available.</p>',
+        *_table_views(None),
+    )
 
 
 def chat(
@@ -313,6 +340,18 @@ async () => {
     window.history.replaceState(null, '', url);
 }
 """
+
+
+def _situation_heading(key: str | None, scenarios: list[dict[str, str]]) -> str:
+    description = next(
+        (scenario["description"] for scenario in scenarios if scenario["key"] == key),
+        "",
+    )
+    return (
+        '<div class="page-heading"><span class="section-kicker">DEMO TOOLS</span>'
+        "<h1>Set up a situation.</h1>"
+        f"<p>{escape(description or 'Choose a scenario to inspect or load.')}</p></div>"
+    )
 
 
 def build_app() -> gr.Blocks:
@@ -400,10 +439,10 @@ def build_app() -> gr.Blocks:
                 gr.Column(elem_id="demo-workspace", min_width=0),
             ):
                 with gr.Row(elem_id="demo-heading"):
-                    gr.HTML(
-                        '<div class="page-heading"><span class="section-kicker">DEMO TOOLS</span>'
-                        "<h1>Set up a situation.</h1><p>Load and inspect a simulated dispatch dataset.</p></div>",
+                    situation = gr.HTML(
+                        _situation_heading(default, scenarios),
                         apply_default_css=False,
+                        elem_id="scenario-situation",
                     )
                     back = gr.Button(
                         "Back to assistant",
@@ -453,7 +492,7 @@ def build_app() -> gr.Blocks:
                                 elem_id="load-status",
                             )
                             gr.Markdown(
-                                "Selecting changes the preview. Loading replaces the demo data and clears the chat.",
+                                "Preview other scenarios before loading. Refresh shows the current saved data without resetting it or clearing the chat.",
                                 elem_classes="loader-note",
                                 scale=1,
                             )
@@ -469,6 +508,13 @@ def build_app() -> gr.Blocks:
                                 apply_default_css=False,
                                 elem_id="scenario-overview",
                                 scale=2,
+                            )
+                            refresh = gr.Button(
+                                "↻ Refresh",
+                                size="sm",
+                                scale=0,
+                                min_width=96,
+                                elem_id="refresh-scenario",
                             )
                         tables = []
                         with gr.Tabs(elem_id="data-tabs"):
@@ -497,7 +543,7 @@ def build_app() -> gr.Blocks:
                                         )
                                     )
                         gr.Markdown(
-                            "Synthetic starting snapshots · Times shown in IST (+05:30) · Not a live feed",
+                            "Synthetic starting snapshots · Refresh to see saved changes",
                             elem_classes="panel-note",
                         )
         app.load(_restore_tab, outputs=workspace, queue=False)
@@ -512,18 +558,25 @@ def build_app() -> gr.Blocks:
                 fn=None,
                 js="() => document.querySelector('#message-input textarea')?.focus()",
             )
-        if choices:
-            app.load(
+        for event in (app.load, refresh.click):
+            event(
                 restore_workspace,
-                inputs=scenario,
                 outputs=[load_status, current, scenario, preview, *tables],
                 concurrency_id="workspace",
                 concurrency_limit=1,
             ).then(_assistant_context, inputs=current, outputs=context_banner)
+        if choices:
+            scenario.change(
+                lambda key: _situation_heading(key, scenarios),
+                inputs=scenario,
+                outputs=situation,
+                queue=False,
+            )
             scenario.input(
                 prepare_scenario,
-                inputs=scenario,
+                inputs=[scenario, current],
                 outputs=[preview, *tables],
+                concurrency_id="workspace",
                 concurrency_limit=1,
             )
         load.click(
