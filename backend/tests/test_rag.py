@@ -1,195 +1,141 @@
-from types import SimpleNamespace
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
-import requests
-from langchain_core.documents import Document
-from langchain_core.messages import AIMessage
 
-import gradio_app
-from config import require
-from service import chunker, embedder, ingestion, llm, rag, vector_store
-
-
-class FakeTokenizer:
-    def encode(self, text: str) -> list[str]:
-        return text.split()
+from config import Settings
+from domain.chat import ChatMessage
+from service import rag
+from service.embedding_service import EmbeddingService
+from service.llm_service import LLMService
+from service.rag import RAGService
 
 
-class FakeSupabase:
-    def __init__(self, data: list[dict[str, Any]]) -> None:
-        self.data = data
-        self.calls: list[tuple[str, Any]] = []
+class FakeEmbeddingService(EmbeddingService):
+    model = "test-embedding"
 
-    def schema(self, name: str) -> "FakeSupabase":
-        self.calls.append(("schema", name))
-        return self
+    def __init__(self) -> None:
+        self.questions: list[str] = []
 
-    def table(self, name: str) -> "FakeSupabase":
-        self.calls.append(("table", name))
-        return self
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        raise AssertionError("RAG should embed only the question")
 
-    def upsert(self, rows: list[dict], on_conflict: str) -> "FakeSupabase":
-        self.calls.append(("upsert", rows))
-        return self
-
-    def rpc(self, name: str, params: dict) -> "FakeSupabase":
-        self.calls.append(("rpc", params))
-        return self
-
-    def execute(self) -> SimpleNamespace:
-        return SimpleNamespace(data=self.data)
+    def embed_query(self, text: str) -> list[float]:
+        self.questions.append(text)
+        return [0.1]
 
 
-def test_require_rejects_missing_values_without_leaking(monkeypatch) -> None:
-    monkeypatch.setenv("JINA_API_KEY", "secret-value")
-    from config import Settings
+class FakeLLMService(LLMService):
+    model = "test-llm"
 
-    assert require(Settings(_env_file=None).jina_api_key, "JINA_API_KEY") == (  # type: ignore[call-arg]
-        "secret-value"
+    def __init__(self) -> None:
+        self.messages: list[tuple[str, str]] = []
+        self.histories: list[list[ChatMessage]] = []
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_message: str,
+        history: Sequence[ChatMessage] | None = None,
+    ) -> str:
+        self.messages.append((system_prompt, user_message))
+        self.histories.append(list(history or []))
+        return "answer"
+
+
+def test_rag_uses_injected_services_and_keeps_roles_separate(monkeypatch) -> None:
+    embeddings = FakeEmbeddingService()
+    llm = FakeLLMService()
+    service = RAGService(embeddings, llm)
+    results = [
+        {"chunk_id": "doc#rain", "content": "Slow down in rain."},
+        {"chunk_id": "doc#break", "content": "Take regular breaks."},
+    ]
+
+    def retrieve(**kwargs: Any) -> list[dict]:
+        assert kwargs == {"query_embedding": [0.1], "match_count": 2}
+        return results
+
+    monkeypatch.setattr(rag, "retrieve", retrieve)
+    assert service.answer_question("why?", 2) == "answer"
+    assert embeddings.questions == ["why?"]
+    system, user = llm.messages[0]
+    assert system == rag.PROMPT_PATH.read_text(encoding="utf-8")
+    assert user == (
+        "Retrieved context:\n\n[Source: doc#rain]\nSlow down in rain."
+        "\n\n---\n\n[Source: doc#break]\nTake regular breaks.\n\nQuestion: why?"
     )
-    with pytest.raises(RuntimeError, match="Set SUPABASE_URL") as exc:
-        require("  ", "SUPABASE_URL")
-    assert "secret" not in str(exc.value)
 
 
-def test_corpus_chunks_are_stable_and_unique() -> None:
-    documents, ids = chunker.load_corpus(ingestion.CORPUS_DIR, ingestion.BACKEND_DIR)
-    assert len(documents) == ingestion.EXPECTED_CHUNKS == len(set(ids))
-    assert documents[0].metadata["source"].startswith("service/rag_data/corpus/")
-    assert all("#" in chunk_id for chunk_id in ids)
+def test_no_evidence_does_not_call_llm(monkeypatch) -> None:
+    llm = FakeLLMService()
+    service = RAGService(FakeEmbeddingService(), llm)
+    monkeypatch.setattr(rag, "retrieve", lambda **kwargs: [])
+    assert "could not find" in service.answer_question("q")
+    assert llm.messages == []
 
 
-def test_chunker_edge_cases(tmp_path, monkeypatch) -> None:
-    assert chunker.section_chunks("no headings") == [("Document", "no headings")]
-    assert chunker.section_chunks("   ") == []
-    assert chunker.parse_metadata("", tmp_path / "x.md", tmp_path)["version"] == (
-        "unknown"
-    )
-    with pytest.raises(FileNotFoundError):
-        chunker.load_corpus(tmp_path, tmp_path)
-    (tmp_path / "a.md").write_text("# A\n## Same\none\n## Same\ntwo\n")
-    with pytest.raises(ValueError, match="Duplicate"):
-        chunker.load_corpus(tmp_path, tmp_path)
+def test_invalid_top_k_is_rejected_before_embedding() -> None:
+    embeddings = FakeEmbeddingService()
+    service = RAGService(embeddings, FakeLLMService())
+    with pytest.raises(ValueError, match="positive"):
+        service.answer_question("q", 0)
+    assert embeddings.questions == []
 
+
+def test_ui_entry_point_composes_configured_services(monkeypatch) -> None:
+    monkeypatch.setattr(rag, "get_settings", lambda: Settings(_env_file=None))  # type: ignore[call-arg]
+    embeddings = FakeEmbeddingService()
+    llm = FakeLLMService()
+    monkeypatch.setattr(rag, "create_embedding_service", lambda settings: embeddings)
+    monkeypatch.setattr(rag, "create_llm_service", lambda settings: llm)
     monkeypatch.setattr(
-        chunker.AutoTokenizer, "from_pretrained", lambda _: FakeTokenizer()
+        rag,
+        "retrieve",
+        lambda **kwargs: [{"chunk_id": "doc#one", "content": "Guidance."}],
     )
-    docs = [Document(page_content="a b c"), Document(page_content="a")]
-    assert chunker.validate_chunk_sizes(docs, ["x", "y"], "m", max_tokens=3) == {
-        "x": 3,
-        "y": 1,
-    }
-    with pytest.raises(ValueError, match="over 2 tokens"):
-        chunker.validate_chunk_sizes(docs, ["x", "y"], "m", max_tokens=2)
+    assert rag.answer_question("q") == "answer"
+    assert embeddings.questions == ["q"]
 
 
-def test_embed_texts(monkeypatch) -> None:
-    assert embedder.embed_texts([], api_key="k") == []
-
-    def fake_post(url, headers, json, timeout):
-        assert headers["Authorization"] == "Bearer k"
-        data = [{"index": 1, "embedding": [2.0]}, {"index": 0, "embedding": [1.0]}]
-        return SimpleNamespace(
-            ok=True, json=lambda: {"data": data[: len(json["input"])]}
+def test_ui_entry_point_passes_conversation_to_llm(monkeypatch) -> None:
+    embeddings = FakeEmbeddingService()
+    llm = FakeLLMService()
+    monkeypatch.setattr(rag, "get_settings", lambda: Settings(_env_file=None))  # type: ignore[call-arg]
+    monkeypatch.setattr(rag, "create_embedding_service", lambda settings: embeddings)
+    monkeypatch.setattr(rag, "create_llm_service", lambda settings: llm)
+    monkeypatch.setattr(
+        rag,
+        "retrieve",
+        lambda **kwargs: [{"chunk_id": "doc#one", "content": "Guidance."}],
+    )
+    history: list[ChatMessage] = [
+        {"role": "user", "content": "Should riders jump red lights?"},
+        {"role": "assistant", "content": "No. Safety comes first."},
+    ]
+    assert rag.answer_question("Why?", history=history) == "answer"
+    assert llm.histories == [history]
+    assert embeddings.questions == [
+        (
+            "user: Should riders jump red lights?\n"
+            "assistant: No. Safety comes first.\nFollow-up question: Why?"
         )
+    ]
+    assert "continuing the conversation" in llm.messages[0][1]
+    assert "<context>" in llm.messages[0][1]
+    assert llm.messages[0][1].endswith("Question: Why?")
 
-    monkeypatch.setattr(embedder.requests, "post", fake_post)
-    assert embedder.embed_texts(["a", "b"], api_key="k") == [[1.0], [2.0]]
+
+def test_provider_failure_propagates_to_ui_error_handler(monkeypatch) -> None:
+    def fail(**kwargs):
+        raise RuntimeError("provider unavailable")
+
+    llm = FakeLLMService()
+    monkeypatch.setattr(llm, "generate", fail)
     monkeypatch.setattr(
-        embedder.requests,
-        "post",
-        lambda *a, **kw: SimpleNamespace(ok=True, json=lambda: {"data": []}),
+        rag,
+        "retrieve",
+        lambda **kwargs: [{"chunk_id": "doc#one", "content": "Guidance."}],
     )
-    with pytest.raises(ValueError, match="Expected 1"):
-        embedder.embed_texts(["a"], api_key="k")
-    monkeypatch.setattr(
-        embedder.requests,
-        "post",
-        lambda *a, **kw: SimpleNamespace(ok=False, status_code=401, text="denied"),
-    )
-    with pytest.raises(requests.HTTPError, match="401"):
-        embedder.embed_texts(["a"], api_key="k")
-
-
-def test_vector_store_and_llm_clients(monkeypatch) -> None:
-    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
-    monkeypatch.setenv("SUPABASE_KEY", "key")
-    monkeypatch.setenv("GROQ_API_KEY", "groq")
-    monkeypatch.setattr(vector_store, "create_client", lambda url, key: (url, key))
-    assert vector_store.get_supabase_client() == ("https://example.supabase.co", "key")
-    assert llm.get_llm().model_name == llm.DEFAULT_MODEL
-
-    client = FakeSupabase([{"id": "doc-uuid", "chunk_id": 0}])
-    metadata = {
-        "doc_id": "d",
-        "title": "t",
-        "section": "s",
-        "version": "1.1 (2026-09-29)",
-        "source": "corpus/d.md",
-        "file_hash": "ab" * 32,
-    }
-    docs = [Document(page_content=c, metadata=metadata) for c in ("one", "two")]
-    assert vector_store.insert_chunks(client, docs, [[0.1], [0.2]]) == 1  # type: ignore[arg-type]
-    upserts = [rows for call, rows in client.calls if call == "upsert"]
-    assert upserts[0]["file_hash"] == "\\x" + "ab" * 32
-    assert upserts[0]["document_date"] == "2026-09-29"
-    assert [r["chunk_id"] for r in upserts[1]] == [0, 1]
-    assert {r["document_id"] for r in upserts[1]} == {"doc-uuid"}
-    assert ("schema", "app") in client.calls
-    client.calls.clear()
-    assert vector_store.retrieve(client, [0.1], 2) == client.data  # type: ignore[arg-type]
-    assert client.calls[0] == ("schema", "app")
-    with pytest.raises(ValueError, match="same length"):
-        vector_store.insert_chunks(client, docs, [])  # type: ignore[arg-type]
-
-
-def test_answer_question(monkeypatch) -> None:
-    monkeypatch.setattr(rag, "embed_texts", lambda texts: [[0.1]])
-    monkeypatch.setattr(rag, "get_supabase_client", lambda: None)
-    monkeypatch.setattr(rag, "retrieve", lambda **kw: [])
-    assert "could not find" in rag.answer_question("q")
-
-    results = [{"chunk_id": "doc#rain", "content": "Slow down in rain."}]
-    monkeypatch.setattr(rag, "retrieve", lambda **kw: results)
-    seen: list[Any] = []
-
-    def invoke(messages: list[Any]) -> AIMessage:
-        seen.extend(messages)
-        return AIMessage(content="answer")
-
-    fake_llm = SimpleNamespace(invoke=invoke)
-    monkeypatch.setattr(rag, "get_llm", lambda: fake_llm)
-    assert rag.answer_question("why?") == "answer"
-    assert "[Source: doc#rain]" in seen[1].content
-    assert seen[0].content == rag.load_system_prompt()
-
-
-def test_ingestion_main(monkeypatch) -> None:
-    monkeypatch.setattr(ingestion, "validate_chunk_sizes", lambda **kw: {"x": 1})
-    monkeypatch.setattr(ingestion, "embed_texts", lambda texts: [[0.0]] * len(texts))
-    monkeypatch.setattr(ingestion, "get_supabase_client", lambda: None)
-    stored: list[int] = []
-
-    def insert_chunks(**kw: Any) -> int:
-        stored.append(len(kw["documents"]))
-        return len(kw["documents"])
-
-    monkeypatch.setattr(ingestion, "insert_chunks", insert_chunks)
-    ingestion.main()
-    assert stored == [ingestion.EXPECTED_CHUNKS]
-
-    monkeypatch.setattr(ingestion, "embed_texts", lambda texts: [[0.0]])
-    with pytest.raises(ValueError, match="does not match"):
-        ingestion.main()
-    monkeypatch.setattr(ingestion, "EXPECTED_CHUNKS", 1)
-    with pytest.raises(ValueError, match="Expected 1 chunks"):
-        ingestion.main()
-
-
-def test_gradio_chat(monkeypatch) -> None:
-    monkeypatch.setattr(gradio_app, "answer_question", lambda message: "reply")
-    assert gradio_app.chat("  ", None) == ([], "")
-    history, cleared = gradio_app.chat("hi", [])
-    assert cleared == ""
-    assert history[-1] == {"role": "assistant", "content": "reply"}
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        RAGService(FakeEmbeddingService(), llm).answer_question("q")

@@ -59,6 +59,7 @@ class RouteData(ScenarioRow):
 
 class ScenarioData(ScenarioRow):
     title: str
+    description: str = ""
     store_id: str
     is_raining: bool
     zones: list[ZoneData] = Field(min_length=1)

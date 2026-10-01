@@ -1,153 +1,80 @@
 # DispatchDesk
 
-A dispatch copilot for dark-store managers. It has two parts:
+A Gradio assistant for dispatch managers. Answers use the dispatch playbook, Jina embeddings, PostgreSQL/pgvector retrieval, and Groq. Conversations retain history within the current session.
 
-- **Flask API**, which serves synthetic dispatch scenarios (orders, riders, zones, hourly metrics) from Postgres.
-- **RAG assistant**, which answers operational questions ("why are deliveries slipping in the rain?") using the dispatch playbook corpus. It uses Jina embeddings, a Supabase vector store and a Groq-hosted LLM, with a Gradio chat UI.
+Demo tools load **normal**, **backlog**, and **rain** scenarios and display orders, riders, zones, and hourly metrics. The current scenario is read from the database; Refresh shows saved changes. Other scenarios preview their YAML starting data. Loading a scenario replaces operational data and clears chat. Scenario rows are not sent to the chat model.
 
-Background: [requirements](docs/initial/requirements.md), [task plan](docs/initial/tasks.md), [6-pager](docs/6-pager.md), [PR/FAQ](docs/pr-faq.md).
+## Local setup
 
-## Folder structure
-
-```text
-supply-chain-bv/
-├── .github/workflows/        # CI: lint, type check, tests + 90% coverage gate, PR description check
-├── backend/                  # All application code (a uv project; run commands from here)
-│   ├── .env.example          # Template for backend/.env (copy and fill in)
-│   ├── app.py                # Flask entry point; registers the blueprints
-│   ├── gradio_app.py         # Gradio chat UI for the RAG assistant
-│   ├── config.py             # Typed settings loaded from the environment / backend/.env
-│   ├── blueprints/           # HTTP routes (Flask blueprints)
-│   │   ├── health.py         #   GET /
-│   │   └── scenarios.py      #   /api/scenarios endpoints
-│   ├── service/              # Business logic
-│   │   ├── scenarios.py      #   Load a scenario YAML into the database
-│   │   ├── scenario_export.py#   Export a scenario as an Excel workbook
-│   │   ├── scenario_data/    #   Scenario definitions (normal, backlog, rain)
-│   │   ├── chunker.py        #   Split corpus Markdown into section chunks
-│   │   ├── embedder.py       #   Jina embeddings client
-│   │   ├── vector_store.py   #   Supabase upsert + similarity search
-│   │   ├── llm.py            #   Groq chat model
-│   │   ├── rag.py            #   Retrieve → build context → answer
-│   │   ├── ingestion.py      #   One-off job: chunk, embed and upsert the corpus
-│   │   └── rag_data/
-│   │       ├── corpus/       #   Operational playbook documents (the knowledge base)
-│   │       └── prompts/      #   System prompt for the assistant
-│   ├── domain/               # Pydantic models that validate scenario files
-│   ├── database/             # SQLAlchemy models and session handling
-│   ├── alembic/              # Database migrations
-│   ├── tests/                # Pytest suite (external services are faked)
-│   ├── pyproject.toml        # Dependencies and tool config
-│   ├── uv.lock               # Locked dependency versions
-│   └── requirements.txt      # Runtime dependencies for pip-based deploys
-├── docs/                     # Product docs, team docs, scenario docs, Postman collection
-│   ├── initial/              #   Original brief and sample data (not read by the app)
-│   └── postman/              #   Importable API collection
-└── notebooks/                # Early Chroma-based RAG prototype (exploration only)
-```
-
-## Prerequisites
-
-- **Python 3.13** (pinned in `backend/.python-version`)
-- **[uv](https://docs.astral.sh/uv/getting-started/installation/)**, which manages the virtualenv and dependencies
-- **Postgres** (with pgvector) for the scenario API. Only needed for the database endpoints.
-- Accounts and keys for **Jina**, **Groq** and **Supabase** for the RAG assistant
-
-## Setup
+Requires Python 3.13, uv, PostgreSQL with pgvector, and Jina/Groq API keys.
 
 ```bash
-git clone https://github.com/techie-sg/supply-chain-bv.git
-cd supply-chain-bv/backend
-cp .env.example .env    # then fill in the values
-uv sync --locked        # creates backend/.venv with runtime + dev dependencies
+cd backend
+cp .env.example .env
+uv sync --locked
 ```
 
-### Environment variables (`backend/.env`)
+Set these values in `backend/.env` or your environment:
 
-| Variable | Needed for | Description |
-|---|---|---|
-| `DATABASE_URL` (or `DB_URL`) | Scenario API, migrations | Postgres URL, e.g. `postgresql+psycopg://user:pass@localhost:5432/dispatchdesk` |
-| `JINA_API_KEY` | RAG | Jina embeddings API key |
-| `GROQ_API_KEY` | RAG | Groq API key for the chat model |
-| `SUPABASE_URL` | RAG | Supabase project URL |
-| `SUPABASE_KEY` | RAG | Supabase API key |
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL connection URL; `DB_URL` is also accepted |
+| `JINA_API_KEY` | Embeddings |
+| `GROQ_API_KEY` | Answer generation |
+| `PORT` | HTTP port; defaults to `7860` |
 
-`backend/.env` is git-ignored, so never commit it. Real environment variables override values in `.env`.
+Use a SQLAlchemy connection URL such as `postgresql+psycopg://user:password@localhost:5432/dispatchdesk`. The local `.env` is ignored by Git.
 
-## Running
-
-All commands run from `backend/`.
-
-### 1. Database (scenario API)
-
-Migrations are run manually; the app never runs them on startup.
+Run from `backend/`:
 
 ```bash
 uv run alembic upgrade head
-```
-
-### 2. Flask API
-
-```bash
-uv run flask --app app run --port 8080
-```
-
-Production-style:
-
-```bash
-uv run gunicorn -b 0.0.0.0:8080 app:app
-```
-
-| Method | Path | Purpose |
-|---|---|---|
-| GET | `/` | Health check |
-| GET | `/api/scenarios` | List scenarios |
-| POST | `/api/scenarios/<key>/load` | Reset the database to a scenario (`normal`, `backlog`, `rain`) |
-| GET | `/api/scenarios/<key>/download` | Download a scenario as `.xlsx` |
-
-See [docs/scenarios.md](docs/scenarios.md) for scenario details and [the Postman collection](docs/postman/DispatchDesk.postman_collection.json) to try the endpoints.
-
-### 3. RAG assistant
-
-The Supabase project must already contain the `document_chunks` table and the `match_document_chunks` similarity-search function. Their SQL is not in this repository; set them up in Supabase first.
-
-Load the corpus into Supabase. Rerun it whenever files in `service/rag_data/corpus/` change; it upserts, so reruns are safe.
-
-```bash
 uv run python -m service.ingestion
+uv run python -m ui.gradio_app
 ```
 
-The first run downloads the `BAAI/bge-small-en-v1.5` tokenizer from Hugging Face to check chunk sizes. The job expects exactly 37 chunks. If you add or remove `##` sections in the corpus, update `EXPECTED_CHUNKS` in `service/ingestion.py`.
+Open http://localhost:7860. Migrations are manual; application startup does not migrate, ingest documents, or reset scenarios.
 
-Start the chat UI, then open http://localhost:7860:
+Ingestion upserts documents and chunks from `backend/service/rag_data/corpus/`. Defaults are `jina-embeddings-v5-text-nano`, Markdown section chunking, and Groq's `openai/gpt-oss-20b`. Reingest after changing the embedding model or chunking strategy.
 
-```bash
-uv run python gradio_app.py
-```
+## RAG notebook
 
-## Development
+Open [simple_rag.ipynb](backend/notebooks/simple_rag.ipynb) using `backend/.venv/bin/python` as the kernel. It walks through chunking, embedding, database storage, retrieval, and a conversation with a follow-up. Running the storage cell writes document data; provider cells make API calls.
 
-These are the same checks CI runs on every push:
+## Railway
+
+| Setting | Value |
+| --- | --- |
+| Root directory | `/backend` |
+| Builder | Railpack |
+| Start command | `python -m ui.gradio_app` |
+| Healthcheck | `/` |
+| Watch paths | `/backend/**` |
+| Domain target port | Match `PORT` |
+
+Set `DATABASE_URL`, `JINA_API_KEY`, and `GROQ_API_KEY` as service variables. The application binds to `0.0.0.0` and the configured port. Apply migrations locally before deploying schema changes.
+
+## Code layout
+
+- `backend/ui/`: Gradio callbacks and styles.
+- `backend/service/`: scenarios, ingestion, RAG, provider services, and chunking strategies.
+- `backend/queries/`: database operations.
+- `backend/domain/`: data contracts.
+- `backend/database/` and `backend/alembic/`: SQLAlchemy models and migrations.
+
+Provider and chunking implementations are composed in `service/factory.py`; settings are in `config.py`.
+
+## Checks
+
+Run from `backend/`:
 
 ```bash
 uv run ruff check .
-```
-
-```bash
 uv run ruff format --check .
-```
-
-```bash
 uv run mypy . --exclude alembic/versions
-```
-
-```bash
 uv run pytest --cov=. --cov-report=term-missing
 ```
 
-CI fails if coverage drops below 90%. Tests fake Jina, Groq, Supabase and the database, so they need no API keys or running services.
+Vector-store integration tests require `TEST_DATABASE_URL` pointing to a disposable PostgreSQL/pgvector database. They clear document tables in that database; otherwise they are skipped. CI requires 90% coverage.
 
-Conventions:
-- New HTTP routes go in `blueprints/` and business logic in `service/`.
-- Add dependencies with `uv add <pkg>` (or `uv add --dev <pkg>`), then mirror runtime ones in `requirements.txt`.
-- Pull requests need a description of at least 20 characters.
+See [requirements](docs/initial/requirements.md) and [scenario documentation](docs/scenarios.md).

@@ -1,70 +1,68 @@
 """Chunk, embed, and upsert the RAG corpus: `uv run python -m service.ingestion`."""
 
+import logging
 from pathlib import Path
 
-from service.chunker import load_corpus, validate_chunk_sizes
-from service.embedder import embed_texts
-from service.vector_store import get_supabase_client, insert_chunks
+from config import get_settings
+from queries.vector_store import insert_chunks
+from service.corpus import CorpusService
+from service.embedding_service import EmbeddingService
+from service.factory import create_chunking_strategy, create_embedding_service
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 CORPUS_DIR = BACKEND_DIR / "service" / "rag_data" / "corpus"
-EXPECTED_CHUNKS = 37
-MAX_CHUNK_TOKENS = 512
-CHUNK_TOKENIZER_MODEL = "BAAI/bge-small-en-v1.5"
+logger = logging.getLogger(__name__)
+
+
+class IngestionService:
+    def __init__(
+        self, corpus_service: CorpusService, embedding_service: EmbeddingService
+    ) -> None:
+        self.corpus_service = corpus_service
+        self.embedding_service = embedding_service
+
+    def run(self) -> int:
+        """Chunk, embed, and store the corpus through the injected services."""
+        documents, _ = self.corpus_service.load()
+        if not documents:
+            raise ValueError("Corpus produced no chunks")
+        logger.info("Loaded %s chunks", len(documents))
+
+        embeddings = self.embedding_service.embed_documents(
+            [document.page_content for document in documents]
+        )
+        if len(embeddings) != len(documents):
+            raise ValueError("Number of embeddings does not match number of chunks")
+        logger.info(
+            "Generated %s embeddings with dimension %s",
+            len(embeddings),
+            len(embeddings[0]),
+        )
+        stored = insert_chunks(documents=documents, embeddings=embeddings)
+        logger.info(
+            "Upserted %s chunks into app.documents / app.document_chunks", stored
+        )
+        return stored
 
 
 def main() -> None:
-    print("=== DispatchDesk Corpus Ingestion ===")
-
-    # 1. Load and chunk corpus
-    print("\n[1/4] Loading corpus...")
-
-    documents, ids = load_corpus(
-        corpus_dir=CORPUS_DIR,
-        repo_root=BACKEND_DIR,
+    """CLI entry point composing the configured services."""
+    settings = get_settings()
+    service = IngestionService(
+        corpus_service=CorpusService(
+            corpus_dir=CORPUS_DIR,
+            repo_root=BACKEND_DIR,
+            strategy=create_chunking_strategy(settings),
+        ),
+        embedding_service=create_embedding_service(settings),
     )
-
-    print(f"Loaded {len(documents)} chunks")
-
-    if len(documents) != EXPECTED_CHUNKS:
-        raise ValueError(f"Expected {EXPECTED_CHUNKS} chunks, got {len(documents)}")
-
-    # 2. Validate chunk sizes
-    print("\n[2/4] Validating chunk sizes...")
-
-    validate_chunk_sizes(
-        documents=documents,
-        ids=ids,
-        embedding_model=CHUNK_TOKENIZER_MODEL,
-        max_tokens=MAX_CHUNK_TOKENS,
-    )
-
-    # 3. Generate Jina embeddings
-    print("\n[3/4] Generating Jina embeddings...")
-
-    texts = [document.page_content for document in documents]
-
-    embeddings = embed_texts(texts)
-
-    print(f"Generated {len(embeddings)} embeddings with dimension {len(embeddings[0])}")
-
-    if len(embeddings) != len(documents):
-        raise ValueError("Number of embeddings does not match number of chunks")
-
-    # 4. Store in Supabase
-    print("\n[4/4] Upserting into Supabase...")
-
-    supabase = get_supabase_client()
-
-    stored = insert_chunks(
-        client=supabase,
-        documents=documents,
-        embeddings=embeddings,
-    )
-
-    print(f"Upserted {stored} chunks into app.documents / app.document_chunks")
-    print("\n=== Ingestion complete ===")
+    logger.info("Starting DispatchDesk corpus ingestion")
+    service.run()
+    logger.info("Ingestion complete")
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+    )
     main()

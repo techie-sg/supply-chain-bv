@@ -1,4 +1,7 @@
 title: Rain and batch eligibility
+description: >-
+  Rain has slowed the roads, and packed orders are waiting for riders.
+  Check which batches are allowed, protect frozen items, and set honest expectations without pushing riders into unsafe shortcuts.
 store_id: DS-BLR-014
 is_raining: true
 zones:
