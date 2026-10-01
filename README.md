@@ -52,6 +52,8 @@ The corpus is in [`backend/service/rag_data/corpus/`](backend/service/rag_data/c
 
 Defaults are `jina-embeddings-v5-text-nano` for embeddings and Groq's `openai/gpt-oss-20b` for answers. Provider and chunking options are listed in [`backend/.env.example`](backend/.env.example). Reingest after changing the embedding model or chunking strategy.
 
+Assistant instructions live in [dispatch_manager_system.md](backend/service/rag_data/prompts/dispatch_manager_system.md), which the RAG service loads directly for each answer.
+
 The [RAG notebook](backend/notebooks/simple_rag.ipynb) demonstrates chunking, embedding, storage, retrieval, and a conversation with a follow-up. Select `backend/.venv/bin/python` as its kernel. The storage cell writes document data; provider cells make API calls.
 
 ## Railway

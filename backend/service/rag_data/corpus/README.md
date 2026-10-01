@@ -26,7 +26,7 @@ The assistant retrieves the nearest three passages by default using pgvector cos
 
 The corpus supplies rules, not live queue counts, rider states, weather observations, or ETAs. The current chat pipeline has no operational tools and does not receive scenario database rows. Tools and persistent store preferences described in the policy documents are intended interfaces for later project stages.
 
-Hard safety and hours constraints take priority. Explicit batching, cold-chain, and communication rules constrain proposals. Future stored preferences may make these rules stricter; they cannot relax them. Assistant behavior is defined in the system prompt; the [prompt notes](../prompts/rules-moved-to-system-prompt.md) explain the separation. A separate guardrail layer is planned.
+Hard safety and hours constraints take priority. Explicit batching, cold-chain, and communication rules constrain proposals. Future stored preferences may make these rules stricter; they cannot relax them. Assistant behavior is defined in [dispatch_manager_system.md](../prompts/dispatch_manager_system.md), which `RAGService` loads directly. Rules moved out of the corpus are included in that prompt. A separate guardrail layer is planned.
 
 The normal, backlog, and rain [scenario files](../../scenario_data/) seed operational tables. Rain YAML includes synthetic candidate-route adjacency, detour assumptions, and illustrative ETA inputs. These are not verified map results, are not persisted in the four operational tables, and are not available to chat. A general zone adjacency map, recorded incentive cap, and store closing time remain undefined.
 
