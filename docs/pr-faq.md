@@ -6,7 +6,7 @@
 
 **Dark store managers can understand why orders are falling behind and choose what to do next, while keeping riders safe and control of dispatch in their hands.**
 
-BENGALURU — DispatchDesk today announced its dispatch assistant for dark store managers facing a growing queue of late deliveries. Managers can ask what is holding up orders and get a next step they can check against the situation in their store. By bringing the explanation and the supporting evidence together, DispatchDesk helps managers make a decision they can explain to the people waiting for their instructions.
+BENGALURU : DispatchDesk today announced its dispatch assistant for dark store managers facing a growing queue of late deliveries. Managers can ask what is holding up orders and get a next step they can check against the situation in their store. By bringing the explanation and the supporting evidence together, DispatchDesk helps managers make a decision they can explain to the people waiting for their instructions.
 
 During the evening rush, a manager's phone can start ringing just as rain slows the riders and packed orders begin to pile up. The dispatch screen shows that deliveries are late, but the manager still has to work out where the delay starts and which intervention will help. Calling for more riders is little use when orders are still being packed. Sending an exhausted rider back out can turn a missed delivery promise into a safety problem. The pressure to act arrives before the picture is clear.
 

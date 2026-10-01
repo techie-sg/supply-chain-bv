@@ -709,6 +709,7 @@ def main() -> None:
         share=False,
         theme=THEME,
         css_paths=CSS_PATH,
+        favicon_path=Path(__file__).with_name("favicon.svg"),
         footer_links=[],
     )
 
