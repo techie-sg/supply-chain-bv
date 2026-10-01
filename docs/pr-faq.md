@@ -46,21 +46,17 @@ You can save alert thresholds and their applicable time windows, batching restri
 
 You do. DispatchDesk prepares assignments, batches, incentives, service-area changes, call-ins, and messages as proposals. It explains the basis for each so you can approve, reject, or ask for another option. Execution is a separate step requiring explicit approval and a check that the proposal still fits the current state. In the demonstration, approved changes affect only synthetic data and never contact real riders or customers.
 
-### 7. What happens to the data I enter?
-
-The demonstration uses synthetic store records and sample policies. External providers process text for retrieval and answering: Jina receives retrieval queries, recent conversation context for follow-ups, and policy text during ingestion; Groq receives the question, session history, retrieved passages, and system prompt. Current scenario database rows are not supplied to chat. Connecting operational tools and saved preferences will add relevant synthetic results to answer context. Real customer or rider data requires established access, retention, and provider controls before use.
-
 ## Internal and guardrail FAQs
 
-### 8. How do we keep efficiency recommendations consistent with store policy, rider safety, and working hours?
+### 7. How do we keep efficiency recommendations consistent with store policy, rider safety, and working hours?
 
 Recommendations must satisfy the relevant dispatch, batching, cold-chain, customer-communication, and rider policies together. Frozen-item orders remain single-drop; rider assignments require verified hours and break status. DispatchDesk must decline requests to speed, break traffic rules, skip mandatory breaks, exceed shift limits, or impose pay penalties for weather- or safety-related delays. It cites the applicable rule and offers permitted alternatives. Manager approval cannot waive these limits. The demonstration uses illustrative operating policies.
 
-### 9. What should the assistant do when the evidence is incomplete?
+### 8. What should the assistant do when the evidence is incomplete?
 
 State what is known, identify what is missing, and explain the next useful check. Unavailable or stale data must never become invented queue counts, rider states, timings, or ETAs. Older records carry their observation time. Ambiguous references need clarification when the available records cannot resolve them. Policy guidance can still help the manager work through a question, while specific recommendations wait for the facts they require.
 
-### 10. How will we know DispatchDesk helps managers make better decisions?
+### 9. How will we know DispatchDesk helps managers make better decisions?
 
 Evaluate whether managers can identify the operational issue, assess the relevant options, and choose a policy-compliant action using evidence they can inspect. The six cases in the [requirements](initial/requirements.md) cover current priorities, performance comparison, capacity and batching, policy conflicts, preference recall, and working-hours decisions. Check correct figures and citations, explained exclusions, recall across two sessions, useful handling of unavailable data, and explicit approval before any action.
 
