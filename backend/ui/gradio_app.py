@@ -2,7 +2,7 @@
 
 import logging
 import os
-from datetime import datetime
+from collections.abc import Iterator
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -11,9 +11,9 @@ import gradio as gr
 import requests
 from sqlalchemy.exc import SQLAlchemyError
 
+from domain.chat import ChatMessage
 from service.rag import answer_question
 from service.scenarios import (
-    TIMEZONE,
     current_scenario,
     load_scenario,
     scenario_details,
@@ -86,9 +86,40 @@ def _icon(name: str) -> str:
 CHAT_PLACEHOLDER = """
 <div class="chat-welcome">
     <div class="welcome-orbit" aria-hidden="true"><span class="welcome-emblem"></span></div>
-    <h1>Pressure’s on. <span>Ask away.</span></h1>
-    <p>Tough calls. Straight answers. Backed by your dispatch playbook.</p>
+    <h1>Let’s make <span>the right call.</span></h1>
+    <p>Ask a question or talk through a decision.<br>Get clear guidance grounded in your playbook.</p>
 </div>
+"""
+
+
+PROCESSING_STATUS = """
+<div class="thinking-indicator" role="status" aria-live="polite">
+    <span class="thinking-spark" aria-hidden="true">✦</span>
+    <span>Thinking…</span>
+</div>
+"""
+
+
+SEND_MESSAGE_JS = """
+(message, history) => {
+    const busy = Boolean(message.trim());
+    const update = (props) => ({__type__: 'update', ...props});
+    return [
+        busy ? message : '',
+        busy ? [...(history || []), {role: 'user', content: [{type: 'text', text: message}]}] : (history || []),
+        update({value: '', interactive: !busy}),
+        update({interactive: !busy}),
+        update({visible: busy})
+    ];
+}
+"""
+
+FINISH_CHAT_JS = """
+() => [
+    {__type__: 'update', visible: false},
+    {__type__: 'update', interactive: true},
+    {__type__: 'update', interactive: true}
+]
 """
 
 
@@ -226,7 +257,7 @@ def prepare_scenario(
 
 def load_selected_scenario(
     key: str,
-) -> tuple[str, dict[str, Any], list[dict], str, str, dict, dict, dict, dict]:
+) -> tuple[dict[str, Any], list[dict], str, str, dict, dict, dict, dict]:
     """Load through the existing service, clearing stale conversation on success."""
     try:
         context = load_scenario(key)
@@ -236,22 +267,11 @@ def load_selected_scenario(
             "Scenario could not be loaded. Check the database connection and migrations."
         ) from exc
     return (
-        _loaded_status(context),
         context,
         [],
         "",
         _scenario_summary(context),
         *_table_views(context),
-    )
-
-
-def _loaded_status(context: dict[str, Any]) -> str:
-    loaded_at = datetime.fromisoformat(context["as_of"]).astimezone(TIMEZONE)
-    return (
-        '<div class="loaded-status"><span class="status-dot"></span><div>'
-        '<span class="current-label">CURRENT SCENARIO</span>'
-        f"<strong>{escape(context['title'])}</strong>"
-        f"<span>{escape(context['store_id'])} · {loaded_at:%d %b %Y, %H:%M:%S}</span></div></div>"
     )
 
 
@@ -261,29 +281,42 @@ def restore_workspace() -> tuple:
         context = current_scenario()
     except (KeyError, ValueError, SQLAlchemyError, RuntimeError):
         logger.warning("Could not restore the saved scenario")
-        status = '<div class="empty-status"><strong>Saved scenario unavailable</strong><span>Check the database connection and refresh again.</span></div>'
+        empty_message = "Saved scenario unavailable. Check the database connection and refresh again."
         context = None
     else:
-        status = (
-            _loaded_status(context)
-            if context
-            else '<div class="empty-status"><strong>No saved scenario</strong><span>Choose and load a scenario to get started.</span></div>'
-        )
+        empty_message = "No saved scenario. Choose and load a scenario to get started."
     if context:
         return (
-            status,
             context,
             gr.update(value=context["scenario_key"]),
             _scenario_summary(context),
             *_table_views(context),
         )
     return (
-        status,
         None,
         gr.skip(),
-        '<p class="muted">No current scenario data available.</p>',
+        f'<p class="muted">{empty_message}</p>',
         *_table_views(None),
     )
+
+
+def _conversation_history(history: list[dict]) -> list[ChatMessage]:
+    """Convert Gradio's text blocks to provider-independent chat messages."""
+    messages: list[ChatMessage] = []
+    for message in history:
+        role = message.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        content = message.get("content", "")
+        if isinstance(content, list):
+            content = "\n".join(
+                block["text"]
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+        if isinstance(content, str) and content:
+            messages.append({"role": role, "content": content})
+    return messages
 
 
 def chat(
@@ -295,7 +328,7 @@ def chat(
     if not message.strip():
         return history, ""
     try:
-        answer = answer_question(message)
+        answer = answer_question(message, history=_conversation_history(history))
     except (
         requests.RequestException,
         SQLAlchemyError,
@@ -310,6 +343,24 @@ def chat(
         {"role": "user", "content": message},
         {"role": "assistant", "content": answer},
     ], ""
+
+
+def respond_to_pending(
+    message: str, history: list[dict] | None
+) -> Iterator[tuple[list[dict], str]]:
+    """Answer the message already displayed by the browser without duplicating it."""
+    history = history or []
+    if not message.strip():
+        yield history, ""
+        return
+    previous = (
+        history[:-1] if history and history[-1].get("role") == "user" else history
+    )
+    try:
+        yield chat(message, previous)
+    except gr.Error:
+        yield previous, message
+        raise
 
 
 def _assistant_context(context: dict[str, Any] | None) -> str:
@@ -343,14 +394,23 @@ async () => {
 
 
 def _situation_heading(key: str | None, scenarios: list[dict[str, str]]) -> str:
-    description = next(
-        (scenario["description"] for scenario in scenarios if scenario["key"] == key),
-        "",
+    scenario = next(
+        (scenario for scenario in scenarios if scenario["key"] == key),
+        {},
+    )
+    title = scenario.get(
+        "title",
+        key.replace("_", " ").replace("-", " ").title()
+        if key
+        else "No scenario loaded",
+    )
+    description = scenario.get(
+        "description", "Choose and load a scenario to get started."
     )
     return (
-        '<div class="page-heading"><span class="section-kicker">DEMO TOOLS</span>'
-        "<h1>Set up a situation.</h1>"
-        f"<p>{escape(description or 'Choose a scenario to inspect or load.')}</p></div>"
+        '<div class="page-heading"><span class="section-kicker">CURRENT SITUATION</span>'
+        f"<h1>{escape(title)}</h1>"
+        f"<p>{escape(description)}</p></div>"
     )
 
 
@@ -369,10 +429,11 @@ def build_app() -> gr.Blocks:
     )
     with gr.Blocks(title="DispatchDesk", delete_cache=(3600, 86400)) as app:
         gr.HTML(
-            '<header class="desk-header"><div class="brand"><span class="brand-mark">'
+            '<header class="desk-header"><a href="/?view=assistant" class="brand" aria-label="Reload Assistant"><span class="brand-mark">'
             f'{_icon("box")}</span><span>Dispatch<span class="brand-light">Desk</span></span>'
-            "</div></header>",
+            "</a></header>",
             apply_default_css=False,
+            elem_id="brand-home",
         )
         current = gr.State(None)
         with gr.Tabs(selected="assistant", elem_id="workspace-tabs") as workspace:
@@ -393,6 +454,7 @@ def build_app() -> gr.Blocks:
                     )
                     clear = gr.Button(
                         "Clear chat",
+                        visible=False,
                         size="sm",
                         scale=0,
                         min_width=88,
@@ -401,29 +463,38 @@ def build_app() -> gr.Blocks:
                 chatbot = gr.Chatbot(
                     label="Conversation",
                     show_label=False,
-                    height="calc(100dvh - 320px)",
+                    height="auto",
+                    autoscroll=False,
                     layout="bubble",
                     placeholder=CHAT_PLACEHOLDER,
                     buttons=["copy"],
                     elem_id="conversation",
                 )
-                with gr.Row(elem_id="message-composer"):
-                    message = gr.Textbox(
-                        label="Ask your dispatch assistant",
-                        show_label=False,
-                        placeholder="Ask the tough dispatch question…",
-                        lines=1,
-                        max_lines=6,
-                        container=False,
-                        elem_id="message-input",
+                pending_message = gr.Textbox(visible="hidden", interactive=False)
+                with gr.Column(elem_id="composer-dock", min_width=0):
+                    processing = gr.HTML(
+                        PROCESSING_STATUS,
+                        visible=False,
+                        apply_default_css=False,
+                        elem_id="chat-processing",
                     )
-                    submit = gr.Button(
-                        "Send",
-                        variant="primary",
-                        scale=0,
-                        min_width=88,
-                        elem_id="send-message",
-                    )
+                    with gr.Row(elem_id="message-composer"):
+                        message = gr.Textbox(
+                            label="Ask your dispatch assistant",
+                            show_label=False,
+                            placeholder="What's on your mind?",
+                            lines=1,
+                            max_lines=6,
+                            container=False,
+                            elem_id="message-input",
+                        )
+                        submit = gr.Button(
+                            "Send",
+                            variant="primary",
+                            scale=0,
+                            min_width=88,
+                            elem_id="send-message",
+                        )
                 with gr.Row(elem_id="starter-prompts") as suggestions:
                     prompts = [
                         "We're missing the 10-minute promise. Should I ask my riders to jump red lights and speed?",
@@ -440,62 +511,41 @@ def build_app() -> gr.Blocks:
             ):
                 with gr.Row(elem_id="demo-heading"):
                     situation = gr.HTML(
-                        _situation_heading(default, scenarios),
+                        _situation_heading(None, scenarios),
                         apply_default_css=False,
                         elem_id="scenario-situation",
                     )
-                    back = gr.Button(
-                        "Back to assistant",
-                        scale=0,
-                        min_width=160,
-                        elem_id="back-to-assistant",
-                    )
                 with gr.Column(elem_id="demo-layout", min_width=0):
-                    with gr.Column(elem_id="scenario-toolbar", min_width=0):
-                        with gr.Row(elem_id="scenario-controls"):
-                            gr.HTML(
-                                '<div class="loader-heading"><h2>Scenario loader</h2>'
-                                "<p>Choose a situation to inspect or load.</p></div>",
-                                apply_default_css=False,
-                                scale=1,
-                                min_width=230,
-                            )
-                            scenario = gr.Dropdown(
-                                choices=choices,
-                                value=default,
-                                label="Choose a scenario",
-                                show_label=False,
-                                interactive=bool(choices),
-                                filterable=False,
-                                scale=0,
-                                min_width=300,
-                                elem_id="scenario-picker",
-                            )
-                            load = gr.Button(
-                                "Load scenario",
-                                variant="primary",
-                                interactive=bool(choices),
-                                scale=0,
-                                min_width=168,
-                                elem_id="load-scenario",
-                            )
-                        with gr.Row(elem_id="scenario-info"):
-                            load_status = gr.HTML(
-                                '<div class="empty-status"><strong>Checking saved scenario…</strong></div>'
-                                if choices
-                                else '<div class="empty-status"><strong>Scenarios unavailable</strong><span>Check the scenario configuration. Assistant chat is still available.</span></div>'
-                                if scenarios_unavailable
-                                else '<div class="empty-status"><strong>No scenarios available</strong></div>',
-                                apply_default_css=False,
-                                scale=1,
-                                min_width=260,
-                                elem_id="load-status",
-                            )
-                            gr.Markdown(
-                                "Preview other scenarios before loading. Refresh shows the current saved data without resetting it or clearing the chat.",
-                                elem_classes="loader-note",
-                                scale=1,
-                            )
+                    with (
+                        gr.Column(elem_id="scenario-toolbar", min_width=0),
+                        gr.Row(elem_id="scenario-controls"),
+                    ):
+                        gr.HTML(
+                            '<div class="loader-heading"><h2>Scenario loader</h2>'
+                            "<p>Choose a situation to inspect or load.</p></div>",
+                            apply_default_css=False,
+                            scale=1,
+                            min_width=230,
+                        )
+                        scenario = gr.Dropdown(
+                            choices=choices,
+                            value=default,
+                            label="Choose a scenario",
+                            show_label=False,
+                            interactive=bool(choices),
+                            filterable=False,
+                            scale=0,
+                            min_width=300,
+                            elem_id="scenario-picker",
+                        )
+                        load = gr.Button(
+                            "Load scenario",
+                            variant="primary",
+                            interactive=bool(choices),
+                            scale=0,
+                            min_width=168,
+                            elem_id="load-scenario",
+                        )
                     with gr.Column(scale=1, min_width=0, elem_id="data-panel"):
                         with gr.Row(elem_id="data-titlebar"):
                             gr.Markdown(
@@ -504,7 +554,9 @@ def build_app() -> gr.Blocks:
                                 scale=1,
                             )
                             preview = gr.HTML(
-                                '<p class="muted">Choose a scenario to inspect its data.</p>',
+                                '<p class="muted">Scenarios unavailable. Check the scenario configuration. Assistant chat is still available.</p>'
+                                if scenarios_unavailable
+                                else '<p class="muted">Choose a scenario to inspect its data.</p>',
                                 apply_default_css=False,
                                 elem_id="scenario-overview",
                                 scale=2,
@@ -548,11 +600,6 @@ def build_app() -> gr.Blocks:
                         )
         app.load(_restore_tab, outputs=workspace, queue=False)
         workspace.change(fn=None, js=TAB_URL_JS)
-        back.click(
-            lambda: gr.update(selected="assistant"),
-            outputs=workspace,
-            queue=False,
-        )
         for button, question in zip(prompt_buttons, prompts, strict=True):
             button.click(lambda q=question: q, outputs=message, queue=False).then(
                 fn=None,
@@ -561,17 +608,20 @@ def build_app() -> gr.Blocks:
         for event in (app.load, refresh.click):
             event(
                 restore_workspace,
-                outputs=[load_status, current, scenario, preview, *tables],
+                outputs=[current, scenario, preview, *tables],
                 concurrency_id="workspace",
                 concurrency_limit=1,
             ).then(_assistant_context, inputs=current, outputs=context_banner)
+        current.change(
+            lambda context: _situation_heading(
+                context["scenario_key"] if context else None, scenarios
+            ),
+            inputs=current,
+            outputs=situation,
+            queue=False,
+            show_progress="hidden",
+        )
         if choices:
-            scenario.change(
-                lambda key: _situation_heading(key, scenarios),
-                inputs=scenario,
-                outputs=situation,
-                queue=False,
-            )
             scenario.input(
                 prepare_scenario,
                 inputs=[scenario, current],
@@ -582,26 +632,61 @@ def build_app() -> gr.Blocks:
         load.click(
             load_selected_scenario,
             inputs=scenario,
-            outputs=[load_status, current, chatbot, message, preview, *tables],
+            outputs=[current, chatbot, message, preview, *tables],
             concurrency_id="workspace",
             concurrency_limit=1,
         ).success(_assistant_context, inputs=current, outputs=context_banner)
         for event in (submit.click, message.submit):
             event(
-                chat,
+                fn=None,
+                js=SEND_MESSAGE_JS,
                 inputs=[message, chatbot],
+                outputs=[pending_message, chatbot, message, submit, processing],
+                queue=False,
+                show_progress="hidden",
+            ).then(
+                respond_to_pending,
+                inputs=[pending_message, chatbot],
                 outputs=[chatbot, message],
-                show_progress="minimal",
-                show_progress_on=chatbot,
+                show_progress="hidden",
                 concurrency_id="workspace",
                 concurrency_limit=1,
+            ).then(
+                fn=None,
+                js=FINISH_CHAT_JS,
+                outputs=[processing, submit, message],
+                queue=False,
+                show_progress="hidden",
             )
         chatbot.change(
-            lambda history: gr.update(visible=not bool(history)),
+            fn=None,
+            js="""(history) => [
+                {__type__: 'update', visible: !(history && history.length)},
+                {__type__: 'update', visible: Boolean(history && history.length)},
+                {__type__: 'update', placeholder: history && history.length
+                    ? 'Ask a follow-up…' : "What's on your mind?"}
+            ]""",
             inputs=chatbot,
-            outputs=suggestions,
+            outputs=[suggestions, clear, message],
             queue=False,
             show_progress="hidden",
+        ).then(
+            fn=None,
+            js="""async () => {
+                await new Promise(requestAnimationFrame);
+                await new Promise(requestAnimationFrame);
+                const messages = document.querySelectorAll('#conversation .message.user, #conversation .message.bot');
+                const latest = messages[messages.length - 1];
+                if (!latest) return;
+                const bounds = latest.getBoundingClientRect();
+                const dock = document.querySelector('#composer-dock').getBoundingClientRect();
+                const bottom = dock.top - 24;
+                const target = bounds.height > bottom - 24
+                    ? scrollY + bounds.top - 24
+                    : scrollY + bounds.bottom - bottom;
+                window.scrollTo({top: Math.max(0, target), behavior:
+                    matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
+            }""",
         )
         clear.click(
             lambda: ([], ""),

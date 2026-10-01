@@ -1,8 +1,10 @@
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
 
 from config import Settings
+from domain.chat import ChatMessage
 from service import rag
 from service.embedding_service import EmbeddingService
 from service.llm_service import LLMService
@@ -28,9 +30,16 @@ class FakeLLMService(LLMService):
 
     def __init__(self) -> None:
         self.messages: list[tuple[str, str]] = []
+        self.histories: list[list[ChatMessage]] = []
 
-    def generate(self, system_prompt: str, user_message: str) -> str:
+    def generate(
+        self,
+        system_prompt: str,
+        user_message: str,
+        history: Sequence[ChatMessage] | None = None,
+    ) -> str:
         self.messages.append((system_prompt, user_message))
+        self.histories.append(list(history or []))
         return "answer"
 
 
@@ -87,6 +96,34 @@ def test_ui_entry_point_composes_configured_services(monkeypatch) -> None:
     )
     assert rag.answer_question("q") == "answer"
     assert embeddings.questions == ["q"]
+
+
+def test_ui_entry_point_passes_conversation_to_llm(monkeypatch) -> None:
+    embeddings = FakeEmbeddingService()
+    llm = FakeLLMService()
+    monkeypatch.setattr(rag, "get_settings", lambda: Settings(_env_file=None))  # type: ignore[call-arg]
+    monkeypatch.setattr(rag, "create_embedding_service", lambda settings: embeddings)
+    monkeypatch.setattr(rag, "create_llm_service", lambda settings: llm)
+    monkeypatch.setattr(
+        rag,
+        "retrieve",
+        lambda **kwargs: [{"chunk_id": "doc#one", "content": "Guidance."}],
+    )
+    history: list[ChatMessage] = [
+        {"role": "user", "content": "Should riders jump red lights?"},
+        {"role": "assistant", "content": "No. Safety comes first."},
+    ]
+    assert rag.answer_question("Why?", history=history) == "answer"
+    assert llm.histories == [history]
+    assert embeddings.questions == [
+        (
+            "user: Should riders jump red lights?\n"
+            "assistant: No. Safety comes first.\nFollow-up question: Why?"
+        )
+    ]
+    assert "continuing the conversation" in llm.messages[0][1]
+    assert "<context>" in llm.messages[0][1]
+    assert llm.messages[0][1].endswith("Question: Why?")
 
 
 def test_provider_failure_propagates_to_ui_error_handler(monkeypatch) -> None:

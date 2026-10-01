@@ -121,7 +121,7 @@ The [sample dataset](initial/sample_data/dispatch_dataset_sample.xlsx) and playb
 
 We are in Week 1. The repository contains the Flask hello-world route and test, package configuration, CI workflows, planning documents, and sample data. The dispatch experience remains to be built.
 
-The [source plan](initial/tasks.md) targets retrieval and Gradio in Week 1, tools and memory in Week 2, guardrails and caching in Week 3, and evaluation, observability, and demonstration readiness in Week 4. Groups of two or three people will take tasks as work progresses, recording ownership, reviewers, and evidence in the [tracker](task-tracker.md). Team capacity and remaining effort must be confirmed before setting the demonstration date.
+The [source plan](initial/tasks.md) targets retrieval and Gradio in Week 1, tools and memory in Week 2, guardrails and caching in Week 3, and evaluation, observability, and demonstration readiness in Week 4. Groups of two or three people will take tasks as work progresses, recording ownership, reviewers, and completion evidence. Team capacity and remaining effort must be confirmed before setting the demonstration date.
 
 ### 10. Who would pay for this, and what would it cost to operate?
 

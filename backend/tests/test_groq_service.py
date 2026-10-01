@@ -47,3 +47,33 @@ def test_groq_loads_runtime_credentials_on_first_generation(monkeypatch) -> None
 
     monkeypatch.setattr(groq, "ChatGroq", client)
     assert GroqService().generate("system", "question") == "answer"
+
+
+def test_groq_preserves_previous_user_and_assistant_turns(monkeypatch) -> None:
+    seen = []
+
+    def invoke(messages):
+        seen.extend(messages)
+        return SimpleNamespace(text="follow-up answer")
+
+    monkeypatch.setattr(
+        groq, "ChatGroq", lambda **kwargs: SimpleNamespace(invoke=invoke)
+    )
+    service = GroqService(api_key=SecretStr("test-key"))
+    assert (
+        service.generate(
+            "system",
+            "Retrieved context: policy\nQuestion: Why?",
+            history=[
+                {"role": "user", "content": "Should riders jump red lights?"},
+                {"role": "assistant", "content": "No. Safety comes first."},
+            ],
+        )
+        == "follow-up answer"
+    )
+    assert [(message.type, message.content) for message in seen] == [
+        ("system", "system"),
+        ("human", "Should riders jump red lights?"),
+        ("ai", "No. Safety comes first."),
+        ("human", "Retrieved context: policy\nQuestion: Why?"),
+    ]
