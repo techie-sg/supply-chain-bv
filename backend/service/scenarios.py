@@ -14,7 +14,7 @@ from sqlalchemy import Engine
 
 from database.models import HourlyMetric, Order, Rider, Zone
 from domain.scenario import ScenarioData
-from queries.scenarios import replace_scenario
+from queries.scenarios import read_scenario_rows, replace_scenario
 
 SCENARIO_DIR = Path(__file__).resolve().parent / "scenario_data"
 TIMEZONE = ZoneInfo("Asia/Kolkata")
@@ -131,6 +131,32 @@ def load_scenario(key: str, engine: Engine | None = None) -> dict[str, Any]:
     rows, context = build_scenario(key, datetime.now(TIMEZONE))
     context["tables"] = _scenario_tables(rows)
     replace_scenario(rows, engine)
+    return context
+
+
+def current_scenario(engine: Engine | None = None) -> dict[str, Any] | None:
+    """Restore saved rows and their original timestamp for a new UI session."""
+    rows = read_scenario_rows(engine)
+    orders = [row for row in rows if isinstance(row, Order)]
+    riders = [row for row in rows if isinstance(row, Rider)]
+    identities = {
+        (row.scenario_key, row.store_id, row.as_of) for row in orders + riders
+    }
+    if not identities:
+        return None
+    if len(identities) != 1:
+        raise ValueError("Saved rows do not describe a single scenario snapshot")
+    key, store_id, as_of = identities.pop()
+    _, context = build_scenario(key, as_of)
+    context["store_id"] = store_id
+    context["tables"] = _scenario_tables(rows)
+    context["counts"] = {
+        **{name: len(table["data"]) for name, table in context["tables"].items()},
+        "packed_waiting": sum(
+            order.status == "packed_waiting_rider" for order in orders
+        ),
+        "available_riders": sum(rider.status == "available" for rider in riders),
+    }
     return context
 
 

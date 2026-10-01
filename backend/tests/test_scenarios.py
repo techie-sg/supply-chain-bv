@@ -107,3 +107,37 @@ def test_scenario_details_without_loading_database(monkeypatch) -> None:
     placed_at = datetime.fromisoformat(first["placed_at"])
     assert as_of.utcoffset() == timedelta(hours=5, minutes=30)
     assert as_of - placed_at == timedelta(seconds=240)
+
+
+def test_current_scenario_uses_saved_rows_and_original_time(monkeypatch) -> None:
+    as_of = datetime(2026, 10, 1, 10, 15, tzinfo=ZoneInfo("Asia/Kolkata"))
+    rows, _ = build_scenario("rain", as_of)
+    order = next(row for row in rows if isinstance(row, Order))
+    order.status = "picking"
+    monkeypatch.setattr(scenarios, "read_scenario_rows", lambda engine: rows)
+
+    def no_write(*args):
+        raise AssertionError("Restoring a snapshot must never replace data")
+
+    monkeypatch.setattr(scenarios, "replace_scenario", no_write)
+    context = scenarios.current_scenario()
+    assert context is not None
+    assert context["scenario_key"] == "rain"
+    assert context["as_of"] == as_of.isoformat()
+    assert context["counts"]["packed_waiting"] == 7
+    assert context["rain_started_at"] < context["as_of"]
+    table = context["tables"]["orders"]
+    assert table["data"][0][table["headers"].index("status")] == "picking"
+
+
+def test_current_scenario_handles_empty_and_rejects_mixed_snapshots(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(scenarios, "read_scenario_rows", lambda engine: [])
+    assert scenarios.current_scenario() is None
+    as_of = datetime(2026, 10, 1, tzinfo=ZoneInfo("Asia/Kolkata"))
+    normal, _ = build_scenario("normal", as_of)
+    rain, _ = build_scenario("rain", as_of)
+    monkeypatch.setattr(scenarios, "read_scenario_rows", lambda engine: normal + rain)
+    with pytest.raises(ValueError, match="single scenario"):
+        scenarios.current_scenario()

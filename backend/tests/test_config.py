@@ -1,5 +1,17 @@
-from config import Settings
+import pytest
+
+from config import Settings, require
 from database.session import database_url
+
+
+def test_require_rejects_missing_values_without_leaking(monkeypatch) -> None:
+    monkeypatch.setenv("JINA_API_KEY", "secret-value")
+    assert require(Settings(_env_file=None).jina_api_key, "JINA_API_KEY") == (  # type: ignore[call-arg]
+        "secret-value"
+    )
+    with pytest.raises(RuntimeError, match="Set JINA_API_KEY") as exc:
+        require("  ", "JINA_API_KEY")
+    assert "secret" not in str(exc.value)
 
 
 def test_database_url_alias_and_secret_are_loaded_from_environment(monkeypatch) -> None:

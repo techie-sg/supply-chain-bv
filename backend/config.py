@@ -5,6 +5,8 @@ from pathlib import Path
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE, GROQ_MODEL, JINA_MODEL
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -17,6 +19,13 @@ class Settings(BaseSettings):
     )
     jina_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
+    embedding_provider: str = "jina"
+    embedding_model: str = JINA_MODEL
+    llm_provider: str = "groq"
+    llm_model: str = GROQ_MODEL
+    chunking_strategy: str = "markdown_sections"
+    chunk_size: int = Field(default=DEFAULT_CHUNK_SIZE, gt=0)
+    chunk_overlap: int = Field(default=DEFAULT_CHUNK_OVERLAP, ge=0)
 
 
 def get_settings() -> Settings:

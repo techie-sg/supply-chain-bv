@@ -1,9 +1,20 @@
 """Persist synthetic dispatch scenarios in a single transaction."""
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, select, text
 
 from database.models import HourlyMetric, Order, Rider, Zone
 from database.session import get_session
+
+
+def read_scenario_rows(engine: Engine | None = None) -> list[object]:
+    """Read the saved operational snapshot without replacing any data."""
+    with get_session(engine) as session:
+        rows: list[object] = []
+        for model in (Order, Rider, HourlyMetric, Zone):
+            rows.extend(
+                session.scalars(select(model).order_by(*model.__table__.primary_key))
+            )
+        return rows
 
 
 def replace_scenario(rows: list[object], engine: Engine | None = None) -> None:

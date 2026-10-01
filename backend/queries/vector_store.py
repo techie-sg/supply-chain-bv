@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from langchain_core.documents import Document as CorpusDocument
-from sqlalchemy import Engine, String, Table, select, text
+from sqlalchemy import Engine, String, Table, delete, select, text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import insert
 
@@ -56,6 +56,12 @@ def insert_chunks(
                 set_={name: document_insert.excluded[name] for name in values},
             ).returning(Document.id)
             document_id = session.execute(statement).scalar_one()
+            session.execute(
+                delete(DocumentChunk).where(
+                    DocumentChunk.document_id == document_id,
+                    DocumentChunk.chunk_id >= len(chunks),
+                )
+            )
 
             rows = [
                 {

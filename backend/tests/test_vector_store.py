@@ -77,6 +77,20 @@ def test_upsert_is_repeatable_and_preserves_document_id(vector_engine: Engine) -
         )
 
 
+def test_reingestion_removes_chunks_left_by_the_previous_strategy(
+    vector_engine: Engine,
+) -> None:
+    insert_chunks(
+        [corpus_document("one"), corpus_document("two"), corpus_document("three")],
+        [[1.0, 0.0]] * 3,
+        vector_engine,
+    )
+    insert_chunks([corpus_document("combined")], [[1.0, 0.0]], vector_engine)
+    assert [
+        result["content"] for result in retrieve([1.0, 0.0], engine=vector_engine)
+    ] == ["combined"]
+
+
 def test_retrieval_uses_cosine_ranking_without_rpc(vector_engine: Engine) -> None:
     documents = [corpus_document("near"), corpus_document("far")]
     assert retrieve([1.0, 0.0], engine=vector_engine) == []

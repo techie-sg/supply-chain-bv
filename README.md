@@ -2,8 +2,8 @@
 
 A dispatch copilot for dark-store managers, served as one Gradio application:
 
-- **Scenario controls** select and load synthetic starting states for the whole app. The Scenario data tab shows searchable orders, riders, zones, and hourly metrics without loading them into the database.
-- **Chat** uses the loaded scenario snapshot alongside the dispatch playbook. It uses Jina embeddings, a PostgreSQL/pgvector store and a Groq-hosted LLM.
+- **Assistant** is the default manager workspace: ask about dispatch delays, SLA changes, and safe batching, with the store and snapshot timestamp visible. Answers use the saved data alongside the dispatch playbook, with Jina embeddings, PostgreSQL/pgvector retrieval, and a Groq-hosted LLM.
+- **Demo tools** is a separate view for selecting and loading synthetic situations and inspecting searchable orders, riders, zones, and hourly metrics. These controls support demonstrations without occupying the manager’s workspace.
 
 Background: [requirements](docs/initial/requirements.md), [task plan](docs/initial/tasks.md), [6-pager](docs/6-pager.md), [PR/FAQ](docs/pr-faq.md).
 
@@ -18,14 +18,19 @@ supply-chain-bv/
 │   │   ├── gradio_app.py     #   Scenario controls, data tables, chat
 │   │   └── gradio_app.css    #   Workspace styling
 │   ├── config.py             # Typed settings loaded from the environment / backend/.env
+│   ├── constants.py          # Shared provider and chunking defaults
 │   ├── service/              # Business logic
 │   │   ├── scenarios.py      #   Load a scenario YAML into the database
 │   │   ├── scenario_data/    #   Scenario definitions (normal, backlog, rain)
-│   │   ├── chunker.py        #   Split corpus Markdown into section chunks
-│   │   ├── embedder.py       #   Jina embeddings client
-│   │   ├── llm.py            #   Groq chat model
-│   │   ├── rag.py            #   Retrieve → build context → answer
-│   │   ├── ingestion.py      #   One-off job: chunk, embed and upsert the corpus
+│   │   ├── embedding_service.py      # Abstract embedding contract
+│   │   ├── jina_embedding_service.py # Jina passage/query embeddings
+│   │   ├── llm_service.py    #   Abstract language-model contract
+│   │   ├── groq_service.py   #   Groq response generation
+│   │   ├── chunking.py       #   Markdown-section and fixed-size strategies
+│   │   ├── corpus.py         #   CorpusService: file loading and chunk metadata
+│   │   ├── factory.py        #   Configured provider and strategy selection
+│   │   ├── rag.py            #   RAGService: retrieval and grounded answers
+│   │   ├── ingestion.py      #   IngestionService and corpus-ingestion CLI
 │   │   └── rag_data/
 │   │       ├── corpus/       #   Operational playbook documents (the knowledge base)
 │   │       └── prompts/      #   System prompt for the assistant
@@ -86,12 +91,16 @@ uv run alembic upgrade head
 uv run python -m ui.gradio_app
 ```
 
-Open http://localhost:7860. The current scenario and load controls stay visible
-above the **Chat** and **Scenario data** tabs. Choose a scenario to preview its
-tables; click **Load scenario** to replace the operational rows and give chat
-that exact snapshot. Loading clears the conversation. Previewing another scenario
-leaves the loaded chat context unchanged. Chat uses a snapshot captured when loaded,
-not a continuously live feed.
+Open http://localhost:7860. The **Assistant** view opens first and automatically
+reconnects to the snapshot already saved in the database. Ask a dispatch question
+directly; the store and snapshot timestamp appear above the conversation.
+The interface follows your system's light or dark appearance.
+
+Use **Demo tools** to preview tables or load a different simulated situation.
+**Load scenario** replaces the operational rows and clears the conversation.
+Previewing data or switching between views preserves the loaded chat context and
+conversation. **Back to assistant** returns to the manager workspace.
+Chat uses a snapshot captured when loaded, not a continuously live feed.
 
 See [docs/scenarios.md](docs/scenarios.md) for scenario details.
 
@@ -105,13 +114,40 @@ Load the corpus into PostgreSQL. Rerunning unchanged files upserts their existin
 uv run python -m service.ingestion
 ```
 
-The job expects exactly 37 chunks. If you add or remove `##` sections in the corpus, update `EXPECTED_CHUNKS` in `service/ingestion.py`.
+Ingestion accepts any nonempty corpus. The current Markdown-section strategy produces 37 chunks, but this is not a runtime requirement. Reingesting the same document also removes surplus chunks from its previous ingestion.
 
 Embeddings use `jina-embeddings-v5-text-nano`: `retrieval.passage` for corpus ingestion and `retrieval.query` for questions. The embedding client logs the API-reported token usage. Re-run ingestion when changing the embedding model or retrieval task so stored vectors match the query setup.
 
 For an interactive walkthrough, open [`backend/notebooks/simple_rag.ipynb`](backend/notebooks/simple_rag.ipynb) with a Python kernel using the backend dependencies. It loads the corpus, creates Jina embeddings, upserts documents and chunks through the existing PostgreSQL queries, and retrieves guidance. The notebook's database-write cell runs when you execute it.
 
 The Gradio workspace includes chat alongside the scenario controls.
+
+### Provider services and chunking
+
+`RAGService` depends on the abstract `EmbeddingService` and `LLMService` contracts.
+`IngestionService` accepts an embedding service and a `CorpusService`, whose
+`ChunkingStrategy` is supplied independently. Providers own their API calls;
+database operations remain in `queries/`. The UI and CLI compose services through
+`service/factory.py`, using the Pydantic settings below.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `EMBEDDING_PROVIDER` | `jina` | Embedding implementation; currently Jina is supported |
+| `EMBEDDING_MODEL` | `jina-embeddings-v5-text-nano` | Model used for both documents and queries |
+| `LLM_PROVIDER` | `groq` | Response provider; currently Groq is supported |
+| `LLM_MODEL` | `openai/gpt-oss-20b` | Groq chat model |
+| `CHUNKING_STRATEGY` | `markdown_sections` | `markdown_sections` or `fixed_size` |
+| `CHUNK_SIZE` | `1600` | Fixed-size window length in characters |
+| `CHUNK_OVERLAP` | `200` | Fixed-size overlap in characters; must be smaller than the window |
+
+For example, `CHUNKING_STRATEGY=fixed_size` selects overlapping character windows
+without changing ingestion code. To add an embedding provider, implement
+`embed_documents()` and `embed_query()` in an `EmbeddingService` subclass and add
+its construction to the factory. To add an LLM provider, implement
+`LLMService.generate()`; to add a chunker, implement `ChunkingStrategy.split()`.
+Tests and custom callers can inject implementations directly, bypassing factories.
+Re-run corpus ingestion after changing the embedding model or chunking strategy
+before using retrieval with the new configuration.
 
 ### Railway
 

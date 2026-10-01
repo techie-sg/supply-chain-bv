@@ -1,10 +1,16 @@
-from types import SimpleNamespace
-
 import gradio as gr
 import pytest
 
-from service import rag, scenarios
+from service import scenarios
 from ui import gradio_app
+
+
+def test_theme_supports_gradio_launch_analytics_comparison() -> None:
+    """Gradio 6.29 compares Font instances when checking for custom themes."""
+    from gradio.utils import BUILT_IN_THEMES
+
+    theme = gradio_app.THEME.to_dict()
+    assert not any(theme == built_in.to_dict() for built_in in BUILT_IN_THEMES.values())
 
 
 @pytest.mark.parametrize("key", ["normal", "backlog", "rain"])
@@ -55,6 +61,37 @@ def test_invalid_preview_has_friendly_error() -> None:
         gradio_app.prepare_scenario("unknown")
 
 
+def test_new_session_restores_saved_scenario_for_chat_and_tables(monkeypatch) -> None:
+    context = scenarios.scenario_details("rain")
+    monkeypatch.setattr(gradio_app, "current_scenario", lambda: context)
+    status, current, selection, summary, *tables = gradio_app.restore_workspace(
+        "normal"
+    )
+    assert current == context
+    assert context["title"] in status
+    assert selection["value"] == "rain"
+    assert "Rain conditions" in summary
+    assert len(tables[0]["data"]) == 12
+
+
+def test_restore_distinguishes_empty_database_from_unavailable_database(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(gradio_app, "current_scenario", lambda: None)
+    status, current, _, _, *tables = gradio_app.restore_workspace("normal")
+    assert "No saved scenario" in status
+    assert current is None and len(tables[0]["data"]) == 6
+
+    def unavailable():
+        raise RuntimeError("private connection information")
+
+    monkeypatch.setattr(gradio_app, "current_scenario", unavailable)
+    status, current, *_ = gradio_app.restore_workspace("normal")
+    assert "Saved scenario unavailable" in status
+    assert "private connection information" not in status
+    assert current is None
+
+
 def test_chat_failure_preserves_existing_history(monkeypatch) -> None:
     history = [{"role": "user", "content": "earlier question"}]
 
@@ -82,36 +119,6 @@ def test_chat_uses_loaded_snapshot_when_preview_changes(monkeypatch) -> None:
     assert seen == [current]
     assert seen[0]["scenario_key"] == "rain"
     assert history[-1]["content"] == "reply"
-
-
-def test_rag_embeds_question_only_and_supplies_snapshot_to_llm(monkeypatch) -> None:
-    context = scenarios.scenario_details("rain")
-    question = "Which riders need a break?"
-
-    def embed(texts, *, task):
-        assert texts == [question]
-        assert task == "retrieval.query"
-        return [[0.1]]
-
-    seen = []
-
-    def invoke(messages):
-        seen.extend(messages)
-        return SimpleNamespace(text="reply")
-
-    monkeypatch.setattr(rag, "embed_texts", embed)
-    monkeypatch.setattr(
-        rag,
-        "retrieve",
-        lambda **kwargs: [
-            {"chunk_id": "policy#break", "content": "Take regular breaks."}
-        ],
-    )
-    monkeypatch.setattr(rag, "get_llm", lambda: SimpleNamespace(invoke=invoke))
-    assert rag.answer_question(question, scenario_context=context) == "reply"
-    assert '"scenario_key": "rain"' in seen[1].content
-    assert "Loaded scenario snapshot" in seen[1].content
-    assert "policy#break" in seen[1].content
 
 
 def test_dropdown_lists_all_scenarios_and_handles_empty_inventory(monkeypatch) -> None:

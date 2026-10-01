@@ -12,49 +12,56 @@ import requests
 from sqlalchemy.exc import SQLAlchemyError
 
 from service.rag import answer_question
-from service.scenarios import TIMEZONE, load_scenario, scenario_details, scenario_names
+from service.scenarios import (
+    TIMEZONE,
+    current_scenario,
+    load_scenario,
+    scenario_details,
+    scenario_names,
+)
 
 logger = logging.getLogger(__name__)
 CSS_PATH = Path(__file__).with_name("gradio_app.css")
-CUSTOM_CSS = CSS_PATH.read_text(encoding="utf-8")
 THEME = gr.themes.Base(
-    primary_hue="emerald",
-    secondary_hue="emerald",
-    neutral_hue="stone",
+    primary_hue="indigo",
+    secondary_hue="violet",
+    neutral_hue="slate",
     # Gradio 6.29 compares the first font with built-in Font objects at launch.
-    font=[gr.themes.Font("Inter"), "ui-sans-serif", "system-ui", "sans-serif"],
+    font=[gr.themes.GoogleFont("DM Sans", weights=[400, 500, 600, 700]), "sans-serif"],
 ).set(
-    body_background_fill="#f6f7f4",
-    body_background_fill_dark="#141c19",
-    body_text_color="#20372d",
-    body_text_color_dark="#edf3ee",
-    body_text_color_subdued="#66756b",
-    body_text_color_subdued_dark="#a3b5a9",
-    block_background_fill="#ffffff",
-    block_background_fill_dark="#1b2620",
-    block_border_color="#e3e8e1",
-    block_border_color_dark="#34463a",
+    body_background_fill="#18181a",
+    body_background_fill_dark="#18181a",
+    body_text_color="#eeedf0",
+    body_text_color_dark="#eeedf0",
+    body_text_color_subdued="#c0bec7",
+    body_text_color_subdued_dark="#c0bec7",
+    block_background_fill="#232325",
+    block_background_fill_dark="#232325",
+    block_border_color="#363539",
+    block_border_color_dark="#363539",
     block_radius="12px",
     block_label_background_fill="transparent",
     block_label_background_fill_dark="transparent",
-    block_label_text_color="#66756b",
-    block_label_text_color_dark="#a3b5a9",
-    input_background_fill="#ffffff",
-    input_background_fill_dark="#24332a",
-    input_border_color="#dce3da",
-    input_border_color_dark="#405749",
-    button_primary_background_fill="#216446",
-    button_primary_background_fill_dark="#b9ed8c",
-    button_primary_background_fill_hover="#174e35",
-    button_primary_background_fill_hover_dark="#c9f5a5",
-    button_primary_text_color="#ffffff",
-    button_primary_text_color_dark="#173c29",
-    button_secondary_background_fill="#ffffff",
-    button_secondary_background_fill_dark="#24332a",
-    button_secondary_background_fill_hover="#f1f5ef",
-    button_secondary_background_fill_hover_dark="#304536",
-    button_secondary_text_color="#385443",
-    button_secondary_text_color_dark="#dae9dc",
+    block_label_text_color="#c0bec7",
+    block_label_text_color_dark="#c0bec7",
+    input_background_fill="#232325",
+    input_background_fill_dark="#232325",
+    input_border_color="#3e3c43",
+    input_border_color_dark="#3e3c43",
+    button_primary_background_fill="#b4a3de",
+    button_primary_background_fill_dark="#b4a3de",
+    button_primary_background_fill_hover="#c5b6e9",
+    button_primary_background_fill_hover_dark="#c5b6e9",
+    button_primary_text_color="#211c2c",
+    button_primary_text_color_dark="#211c2c",
+    button_primary_border_color="#b4a3de",
+    button_primary_border_color_dark="#b4a3de",
+    button_secondary_background_fill="#232325",
+    button_secondary_background_fill_dark="#232325",
+    button_secondary_background_fill_hover="#302c38",
+    button_secondary_background_fill_hover_dark="#302c38",
+    button_secondary_text_color="#ded9e7",
+    button_secondary_text_color_dark="#ded9e7",
     button_border_width="1px",
     button_large_radius="10px",
 )
@@ -68,7 +75,6 @@ def _icon(name: str) -> str:
         "clock": '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
         "zones": '<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6ZM9 3v15M15 6v15"/>',
         "spark": '<path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4L12 3Z"/>',
-        "arrow": '<path d="M5 12h14m-6-6 6 6-6 6"/>',
     }
     return (
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
@@ -79,41 +85,15 @@ def _icon(name: str) -> str:
 
 CHAT_PLACEHOLDER = """
 <div class="chat-welcome">
-    <div class="route-illustration" aria-hidden="true">
-        <span class="route-node node-start">A</span>
-        <span class="route-line"></span>
-        <span class="route-hub">D</span>
-        <span class="route-node node-end">B</span>
-        <span class="route-dot"></span>
-    </div>
-    <span class="welcome-kicker">A LITTLE CLARITY. A BETTER DISPATCH.</span>
-    <h3>Good decisions start here.</h3>
-    <p>Turn orders, rider availability, and your playbook into a clear next move.<br>
-    Load a scenario, then ask away.</p>
+    <div class="welcome-orbit" aria-hidden="true"><span class="welcome-emblem"></span></div>
+    <h1>What needs your <span>attention?</span></h1>
+    <p>Make sense of delays. Find a safer, smarter next move.</p>
 </div>
 """
 
 
 def _scenario_summary(context: dict[str, Any]) -> str:
-    counts = context["counts"]
     weather = "Rain conditions" if context["is_raining"] else "Dry conditions"
-    notes = {
-        "orders": f"{counts['packed_waiting']} packed & waiting",
-        "riders": f"{counts['available_riders']} available to dispatch",
-        "hourly_metrics": "Historical performance",
-        "zones": "Delivery coverage",
-    }
-    cards = "".join(
-        f'<div class="stat"><div class="stat-top"><span>{label}</span>'
-        f"{_icon(icon)}</div><strong>{counts[key]:02d}</strong>"
-        f'<span class="stat-detail">{notes[key]}</span></div>'
-        for key, label, icon in (
-            ("orders", "Orders", "box"),
-            ("riders", "Riders", "riders"),
-            ("hourly_metrics", "Hourly records", "clock"),
-            ("zones", "Zones", "zones"),
-        )
-    )
     weather_class = "rain" if context["is_raining"] else "dry"
     return (
         '<section class="scenario-preview" aria-label="Selected scenario preview">'
@@ -121,7 +101,7 @@ def _scenario_summary(context: dict[str, Any]) -> str:
         f"<h2>{escape(context['title'])}</h2></div>"
         f'<span class="weather-pill {weather_class}"><span aria-hidden="true">'
         f"{'☂' if context['is_raining'] else '☀'}</span> {weather}</span></div>"
-        f'<div class="stats-grid">{cards}</div></section>'
+        "</section>"
     )
 
 
@@ -217,14 +197,49 @@ def load_selected_scenario(
         raise gr.Error(
             "Scenario could not be loaded. Check the database connection and migrations."
         ) from exc
+    return (
+        _loaded_status(context),
+        context,
+        [],
+        "",
+        _scenario_summary(context),
+        *_table_views(context),
+    )
+
+
+def _loaded_status(context: dict[str, Any]) -> str:
     loaded_at = datetime.fromisoformat(context["as_of"]).astimezone(TIMEZONE)
-    status = (
+    return (
         '<div class="loaded-status"><span class="status-dot"></span><div>'
         '<span class="current-label">CURRENT SCENARIO</span>'
         f"<strong>{escape(context['title'])}</strong>"
         f"<span>{escape(context['store_id'])} · {loaded_at:%d %b %Y, %H:%M:%S} IST</span></div></div>"
     )
-    return status, context, [], "", _scenario_summary(context), *_table_views(context)
+
+
+def restore_workspace(default_key: str) -> tuple:
+    """Reconnect a new session to saved data; never load or replace rows here."""
+    try:
+        context = current_scenario()
+    except (KeyError, ValueError, SQLAlchemyError, RuntimeError):
+        logger.warning("Could not restore the saved scenario")
+        status = '<div class="empty-status"><strong>Saved scenario unavailable</strong><span>Check the database connection, or choose a scenario to preview.</span></div>'
+        context = None
+    else:
+        status = (
+            _loaded_status(context)
+            if context
+            else '<div class="empty-status"><strong>No saved scenario</strong><span>Choose and load a scenario to get started.</span></div>'
+        )
+    if context:
+        return (
+            status,
+            context,
+            gr.update(value=context["scenario_key"]),
+            _scenario_summary(context),
+            *_table_views(context),
+        )
+    return status, None, gr.skip(), *prepare_scenario(default_key)
 
 
 def chat(
@@ -259,6 +274,21 @@ def chat(
     ], ""
 
 
+def _assistant_context(context: dict[str, Any] | None) -> str:
+    """Show the manager the data source and age, without demo configuration."""
+    if not context:
+        return (
+            '<div class="store-context"><span class="context-label">STORE DATA UNAVAILABLE</span>'
+            "<span>Playbook guidance is available; operational details cannot be verified.</span></div>"
+        )
+    as_of = datetime.fromisoformat(context["as_of"]).astimezone(TIMEZONE)
+    return (
+        '<div class="store-context">'
+        f"<strong>{escape(context['store_id'])}</strong>"
+        f'<span class="snapshot-label">Simulated snapshot · {as_of:%d %b %Y, %H:%M:%S} IST</span></div>'
+    )
+
+
 def build_app() -> gr.Blocks:
     scenarios = scenario_names()
     choices = [(scenario["title"], scenario["key"]) for scenario in scenarios]
@@ -270,148 +300,150 @@ def build_app() -> gr.Blocks:
         gr.HTML(
             '<header class="desk-header"><div class="brand"><span class="brand-mark">'
             f'{_icon("box")}</span><span>Dispatch<span class="brand-light">Desk</span></span>'
-            '<span class="brand-divider"></span><span class="header-label">Operations workspace</span>'
-            '</div><div class="header-meta"><span class="demo-badge">SCENARIO LAB</span>'
-            '<span class="header-avatar" aria-label="Dispatch workspace">DD</span></div></header>',
-            css_template=CUSTOM_CSS,
+            "</div></header>",
+            apply_default_css=False,
         )
         current = gr.State(None)
-        with gr.Row(elem_id="workspace-layout"):
-            with gr.Column(scale=0, min_width=260, elem_id="scenario-sidebar"):
-                gr.HTML(
-                    '<div class="sidebar-heading"><span class="section-kicker">WORKSPACE</span>'
-                    f"<h2>{_icon('zones')} Scenario controls</h2>"
-                    "<p>Set the scene for your next decision.</p></div>",
-                    css_template=CUSTOM_CSS,
+        with gr.Tabs(selected="assistant", elem_id="workspace-tabs") as workspace:
+            with (
+                gr.Tab("Assistant", id="assistant"),
+                gr.Column(elem_id="manager-workspace", min_width=0),
+                gr.Column(elem_id="assistant-panel", min_width=0),
+            ):
+                with gr.Row(elem_id="assistant-heading"):
+                    context_banner = gr.HTML(
+                        '<div class="store-context"><span>Connecting to store data…</span></div>'
+                        if choices
+                        else _assistant_context(None),
+                        apply_default_css=False,
+                        elem_id="assistant-context",
+                        visible=False,
+                    )
+                    clear = gr.Button(
+                        "Clear chat",
+                        size="sm",
+                        scale=0,
+                        min_width=88,
+                        elem_id="clear-chat",
+                    )
+                chatbot = gr.Chatbot(
+                    label="Conversation",
+                    show_label=False,
+                    height="calc(100dvh - 320px)",
+                    layout="bubble",
+                    placeholder=CHAT_PLACEHOLDER,
+                    buttons=["copy"],
+                    elem_id="conversation",
                 )
-                scenario = gr.Dropdown(
-                    choices=choices,
-                    value=default,
-                    label="Choose a scenario",
-                    interactive=bool(choices),
-                    filterable=False,
-                    elem_id="scenario-picker",
-                )
-                load = gr.Button(
-                    "Load scenario  →",
-                    variant="primary",
-                    interactive=bool(choices),
-                    elem_id="load-scenario",
-                )
-                gr.Markdown(
-                    "Loading replaces the demo data and starts a fresh conversation. "
-                    "Changing the selection only updates the preview.",
-                    elem_classes="sidebar-note",
-                )
-                load_status = gr.HTML(
-                    '<div class="empty-status"><span class="current-label">CURRENT SCENARIO</span>'
-                    '<strong><span class="status-dot idle"></span>No scenario loaded</strong>'
-                    "<span>Load a scenario to connect its data to your conversation.</span></div>",
-                    css_template=CUSTOM_CSS,
-                    elem_id="load-status",
-                )
-                gr.HTML(
-                    '<div class="sidebar-guide"><span class="section-kicker">FROM SNAPSHOT TO ACTION</span>'
-                    "<ol><li><span>01</span><div><strong>Choose your scenario</strong><p>Explore a dispatch situation.</p></div></li>"
-                    "<li><span>02</span><div><strong>Take a closer look</strong><p>Inspect orders, riders, and zones.</p></div></li>"
-                    "<li><span>03</span><div><strong>Find your next move</strong><p>Ask for playbook-backed guidance.</p></div></li></ol></div>"
-                    '<div class="sidebar-foot"><span class="mini-mark">D</span>'
-                    "<div><strong>Built for the dispatch desk.</strong><span>Synthetic scenarios · Real decisions</span></div></div>",
-                    css_template=CUSTOM_CSS,
-                )
-            with gr.Column(scale=1, min_width=0, elem_id="workspace-main"):
-                gr.HTML(
-                    '<div class="page-heading"><div><span class="section-kicker">THE DISPATCH DESK</span>'
-                    "<h1>Keep every delivery moving.</h1>"
-                    "<p>Your orders, your riders, your next best move. All in one place.</p></div>"
-                    '<span class="workspace-tag">Dispatch copilot</span></div>',
-                    css_template=CUSTOM_CSS,
-                )
-                preview = gr.HTML(
-                    '<p class="muted">Choose a scenario to inspect its data.</p>',
-                    css_template=CUSTOM_CSS,
-                    elem_id="scenario-overview",
-                )
-                with gr.Tabs(elem_id="workspace-tabs"):
-                    with (
-                        gr.Tab("Dispatch assistant", id="chat"),
-                        gr.Column(elem_id="assistant-panel"),
-                    ):
-                        with gr.Row(elem_id="assistant-heading"):
+                with gr.Row(elem_id="message-composer"):
+                    message = gr.Textbox(
+                        label="Ask your dispatch assistant",
+                        show_label=False,
+                        placeholder="What’s happening at your store?",
+                        lines=1,
+                        max_lines=6,
+                        container=False,
+                        elem_id="message-input",
+                    )
+                    submit = gr.Button(
+                        "Send",
+                        variant="primary",
+                        scale=0,
+                        min_width=88,
+                        elem_id="send-message",
+                    )
+                with gr.Row(elem_id="starter-prompts") as suggestions:
+                    prompts = [
+                        (
+                            "Resolve a backlog\nFind the bottleneck and what to do first.",
+                            "Orders are backing up. What is causing the delay, and what should I do first?",
+                        ),
+                        (
+                            "Understand an SLA drop\nCompare shifts and uncover the cause.",
+                            "Why did our 10-minute SLA compliance fall between 8 and 10pm last night compared with the night before?",
+                        ),
+                        (
+                            "Plan a safe batch\nCheck orders, routes, and rider readiness.",
+                            "Which waiting orders can we batch safely? Explain any exclusions and check rider availability and breaks.",
+                        ),
+                    ]
+                    prompt_buttons = [
+                        gr.Button(label, size="sm", elem_classes="prompt-button")
+                        for label, _ in prompts
+                    ]
+            with (
+                gr.Tab("Demo tools", id="demo"),
+                gr.Column(elem_id="demo-workspace", min_width=0),
+            ):
+                with gr.Row(elem_id="demo-heading"):
+                    gr.HTML(
+                        '<div class="page-heading"><span class="section-kicker">DEMO TOOLS</span>'
+                        "<h1>Set up a situation.</h1><p>Load a simulated dataset and inspect the data behind the assistant.</p></div>",
+                        apply_default_css=False,
+                    )
+                    back = gr.Button(
+                        "Back to assistant",
+                        scale=0,
+                        min_width=160,
+                        elem_id="back-to-assistant",
+                    )
+                with gr.Column(elem_id="demo-layout", min_width=0):
+                    with gr.Column(elem_id="scenario-toolbar", min_width=0):
+                        with gr.Row(elem_id="scenario-controls"):
                             gr.HTML(
-                                '<div class="assistant-title"><span class="assistant-icon">'
-                                f"{_icon('spark')}</span><div><h2>Your dispatch copilot</h2>"
-                                "<p>Clear next steps, grounded in your playbook.</p></div></div>",
-                                css_template=CUSTOM_CSS,
+                                '<div class="loader-heading"><h2>Scenario loader</h2>'
+                                "<p>Choose a situation to inspect or load.</p></div>",
+                                apply_default_css=False,
+                                scale=1,
+                                min_width=230,
                             )
-                            clear = gr.Button(
-                                "Clear chat",
-                                size="sm",
-                                scale=0,
-                                min_width=88,
-                                elem_id="clear-chat",
-                            )
-                        chatbot = gr.Chatbot(
-                            label="Conversation",
-                            show_label=False,
-                            height=300,
-                            layout="bubble",
-                            placeholder=CHAT_PLACEHOLDER,
-                            buttons=["copy"],
-                            elem_id="conversation",
-                        )
-                        with gr.Row(elem_id="starter-prompts"):
-                            prompts = [
-                                (
-                                    "Find the priority  ↗",
-                                    "What is the main dispatch problem in this scenario?",
-                                ),
-                                (
-                                    "Explore safe batches  ↗",
-                                    "Which orders can be batched safely?",
-                                ),
-                                (
-                                    "Check rider breaks  ↗",
-                                    "Which riders need a break?",
-                                ),
-                            ]
-                            prompt_buttons = [
-                                gr.Button(
-                                    label, size="sm", elem_classes="prompt-button"
-                                )
-                                for label, _ in prompts
-                            ]
-                        with gr.Row(elem_id="message-composer"):
-                            message = gr.Textbox(
-                                label="Your question",
+                            scenario = gr.Dropdown(
+                                choices=choices,
+                                value=default,
+                                label="Choose a scenario",
                                 show_label=False,
-                                placeholder="Ask about priorities, batches, or rider availability…",
-                                lines=1,
-                                max_lines=5,
-                                container=False,
-                                elem_id="message-input",
-                            )
-                            submit = gr.Button(
-                                "Send  ↑",
-                                variant="primary",
+                                interactive=bool(choices),
+                                filterable=False,
                                 scale=0,
-                                min_width=88,
-                                elem_id="send-message",
+                                min_width=300,
+                                elem_id="scenario-picker",
                             )
-                        gr.HTML(
-                            '<div class="composer-note"><span>Grounded in your dispatch playbook</span>'
-                            "<span>Enter to send</span></div>",
-                            css_template=CUSTOM_CSS,
-                        )
-                    with (
-                        gr.Tab("Scenario data", id="data"),
-                        gr.Column(elem_id="data-panel"),
-                    ):
-                        gr.Markdown(
-                            "### A closer look at your scenario\n"
-                            "Explore the selected preview. Chat keeps using your loaded scenario until you load another.",
-                            elem_id="data-heading",
-                        )
+                            load = gr.Button(
+                                "Load scenario",
+                                variant="primary",
+                                interactive=bool(choices),
+                                scale=0,
+                                min_width=168,
+                                elem_id="load-scenario",
+                            )
+                        with gr.Row(elem_id="scenario-info"):
+                            load_status = gr.HTML(
+                                '<div class="empty-status"><strong>Checking saved scenario…</strong></div>'
+                                if choices
+                                else '<div class="empty-status"><strong>No scenarios available</strong></div>',
+                                apply_default_css=False,
+                                scale=1,
+                                min_width=260,
+                                elem_id="load-status",
+                            )
+                            gr.Markdown(
+                                "Selecting changes the preview. Loading replaces the demo data and clears the chat.",
+                                elem_classes="loader-note",
+                                scale=1,
+                            )
+                    with gr.Column(scale=1, min_width=0, elem_id="data-panel"):
+                        with gr.Row(elem_id="data-titlebar"):
+                            gr.Markdown(
+                                "### Inspect the data",
+                                elem_id="data-heading",
+                                scale=1,
+                            )
+                            preview = gr.HTML(
+                                '<p class="muted">Choose a scenario to inspect its data.</p>',
+                                apply_default_css=False,
+                                elem_id="scenario-overview",
+                                scale=2,
+                            )
                         tables = []
                         with gr.Tabs(elem_id="data-tabs"):
                             for title in (
@@ -429,10 +461,11 @@ def build_app() -> gr.Blocks:
                                             interactive=False,
                                             type="array",
                                             datatype="auto",
+                                            wrap=True,
                                             show_search="filter",
                                             show_row_numbers=True,
                                             pinned_columns=1,
-                                            max_height=420,
+                                            max_height="calc(100dvh - 390px)",
                                             buttons=["fullscreen", "copy"],
                                             elem_classes="scenario-table",
                                         )
@@ -441,19 +474,23 @@ def build_app() -> gr.Blocks:
                             "Synthetic starting snapshots · Times shown in IST (+05:30) · Not a live feed",
                             elem_classes="panel-note",
                         )
-                gr.HTML(
-                    '<footer class="workspace-footer"><span>DISPATCHDESK<span class="footer-dot"> / </span>SCENARIO WORKSPACE</span>'
-                    "<span>A clearer view. A better next move.</span></footer>",
-                    css_template=CUSTOM_CSS,
-                )
+        back.click(
+            lambda: gr.update(selected="assistant"), outputs=workspace, queue=False
+        )
         for button, (_, question) in zip(prompt_buttons, prompts, strict=True):
             button.click(lambda q=question: q, outputs=message, queue=False).then(
                 fn=None,
                 js="() => document.querySelector('#message-input textarea')?.focus()",
             )
         if choices:
-            app.load(prepare_scenario, inputs=scenario, outputs=[preview, *tables])
-            scenario.change(
+            app.load(
+                restore_workspace,
+                inputs=scenario,
+                outputs=[load_status, current, scenario, preview, *tables],
+                concurrency_id="workspace",
+                concurrency_limit=1,
+            ).then(_assistant_context, inputs=current, outputs=context_banner)
+            scenario.input(
                 prepare_scenario,
                 inputs=scenario,
                 outputs=[preview, *tables],
@@ -465,7 +502,7 @@ def build_app() -> gr.Blocks:
             outputs=[load_status, current, chatbot, message, preview, *tables],
             concurrency_id="workspace",
             concurrency_limit=1,
-        )
+        ).success(_assistant_context, inputs=current, outputs=context_banner)
         for event in (submit.click, message.submit):
             event(
                 chat,
@@ -474,6 +511,12 @@ def build_app() -> gr.Blocks:
                 concurrency_id="workspace",
                 concurrency_limit=1,
             )
+        chatbot.change(
+            lambda history: gr.update(visible=not bool(history)),
+            inputs=chatbot,
+            outputs=suggestions,
+            queue=False,
+        )
         clear.click(lambda: ([], ""), outputs=[chatbot, message], queue=False)
     return app
 
