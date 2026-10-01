@@ -15,8 +15,21 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("DATABASE_URL", "DB_URL"),
     )
+    jina_api_key: SecretStr | None = None
+    groq_api_key: SecretStr | None = None
+    supabase_url: str | None = None
+    supabase_key: SecretStr | None = None
 
 
 def get_settings() -> Settings:
     """Read process variables and the local backend/.env file."""
     return Settings()
+
+
+def require(value: SecretStr | str | None, name: str) -> str:
+    """Return a configured value or raise without leaking it."""
+    if isinstance(value, SecretStr):
+        value = value.get_secret_value()
+    if value is None or not value.strip():
+        raise RuntimeError(f"Set {name} before using this feature")
+    return value

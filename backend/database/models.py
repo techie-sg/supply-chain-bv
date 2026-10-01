@@ -150,7 +150,9 @@ class Document(Base):
         {"schema": "app"},
     )
 
-    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    id: Mapped[UUID] = mapped_column(
+        primary_key=True, default=uuid4, server_default=func.gen_random_uuid()
+    )
     file_name: Mapped[str] = mapped_column(Text)
     file_hash: Mapped[bytes] = mapped_column(LargeBinary)
     document_date: Mapped[date | None] = mapped_column(Date)
