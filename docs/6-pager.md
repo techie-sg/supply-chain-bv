@@ -7,6 +7,8 @@
 
 *Reading note: this memo is meant to be read silently, start to finish, before discussion. The main body ends at Section 9. Appendices hold supporting data and are not required reading.*
 
+**Data note:** The data used in this memo is synthetically generated for demonstration purposes and does not represent real store operations.
+
 ---
 
 ## 1. Introduction
@@ -61,8 +63,6 @@ These are the principles we will use to settle disagreements during the build. T
 
 ### How DispatchDesk works
 
-The following describes the intended experience. Today, chat retrieves policy passages; synthetic operational records can be inspected separately. Connecting those records to chat, persistent preferences, approval, and separate response checks remains planned work.
-
 DispatchDesk is a conversational assistant with three distinct sources of truth, and keeping them separate is the core of the design. **Facts** come only from tools: a live dispatch-status tool returns the current order queue and rider states with an "as of" timestamp, and a delivery-metrics tool returns hourly stage breakdowns for periods available in the dataset. **Rules** come only from retrieval over the store's operating documents: dispatch procedures, the delay root-cause guide, batching and cold-chain rules, the rain and surge playbook, customer-communication guidelines, and the rider safety and working-hours policy. **Preferences** come only from memory: the alert thresholds, batching constraints, and incentive caps each manager has set. The language model's job is to reason across these three sources and write a clear answer. It is never the source of a number or a rule.
 
 Deterministic checks are done in code, not by the model. Whether pending orders per available rider exceeds a threshold, whether a pair of orders meets every batching condition, and whether a rider has reached the nine-hour or four-hour limit are all computed exactly from tool data. The model explains the results. A guardrail layer checks every response before it reaches the manager, confirming that figures trace to tool output, that proposed actions are framed as drafts, and that nothing conflicts with safety policy or stored preferences.
@@ -91,7 +91,7 @@ The interface is a chat window with an expandable agent trace showing which tool
 
 Within four weeks, our goal is a working demonstration that answers all six sample manager queries in our requirements correctly and safely on simulated data. That means diagnosing live backlogs and past-evening slowdowns with figures from the simulated dataset; proposing policy-compliant batches and explaining every excluded order; giving ETAs as data-derived, labelled ranges; refusing unsafe rider pressure and over-hours scheduling with compliant alternatives; remembering store preferences across at least two separate sessions; keeping every action in draft until approved; and exposing tool failures, stale data, and graceful degradation through observability. We also aim to measure improvement with an automated evaluation suite, run before and after a round of error-analysis fixes.
 
-Several things are deliberately out of scope. DispatchDesk will not integrate with a real order-management system, rider app, or maps and routing service; all queue, rider, and metrics data is a static or lightly simulated dataset. It will not optimize routes or compute precise travel times; ride estimates come from historical zone averages. It will not execute any action for real; approval simulates execution in the demo. It will not forecast demand or make predictive claims; any "what-if" estimate, if we reach that stretch goal, will be labelled as educational and non-predictive. It will not replace the manager's judgment or regional operations' authority, and it will not grant exceptions to safety or working-hours policy under any circumstances, including incentive amounts above the store's cap, which require regional sign-off.
+Several things are deliberately out of scope. It will not optimize routes or compute precise travel times; ride estimates come from historical zone averages. It will not execute any action for real; approval simulates execution in the demo. It will not forecast demand or make predictive claims; any "what-if" estimate, if we reach that stretch goal, will be labelled as educational and non-predictive. It will not replace the manager's judgment or regional operations' authority, and it will not grant exceptions to safety or working-hours policy under any circumstances, including incentive amounts above the store's cap, which require regional sign-off.
 
 ## 7. Risks and Mitigations
 
@@ -107,9 +107,7 @@ Several things are deliberately out of scope. DispatchDesk will not integrate wi
 
 **Retrieval misses the right rule.** If the batching or safety section is not retrieved, the answer will be ungrounded. Our corpus is small, so we will chunk by section, test that the right sections appear in the top three results for each sample query, and track retrieval misses in error analysis.
 
-**Our simulated data has gaps.** The rain scenario now includes synthetic route assumptions, but they are not available to chat. A general adjacency map, closing time, and incentive cap remain undefined. We must complete these inputs and staffing, weekend, and break cases before evaluating dependent recommendations.
-
-**Free-tier rate limits slow the team.** Our language model provider's free tier enforces rate limits shared across an organization. Team members will develop on separate accounts, all model calls will go through one thin wrapper with retry and backoff, and rate-limit errors will be logged as tool failures in observability.
+**Third-party cost, latency, and availability.** DispatchDesk depends on external language-model and embedding services. API usage can raise operating costs, while slow responses or outages can delay or prevent answers. We will track cost per answer, provider latency, and failures; reuse stored embeddings and cache stable content; and set timeouts with limited retries. If a provider remains unavailable, the assistant will report the limitation clearly.
 
 ## 8. Success Metrics
 
@@ -122,8 +120,6 @@ Operational metrics round out the picture: retrieval hit rate, meaning the share
 ## 9. Plan
 
 We will build DispatchDesk in four one-week phases, each ending in a demo. In **Week 1**, we lay foundations: this memo and a PR/FAQ, the repository, a system prompt encoding our tenets, the completed synthetic dataset, the retrieval corpus and pipeline, and a Gradio chat interface that answers "why are deliveries slipping?" from the playbook. In **Week 2**, we add the live dispatch-status and delivery-metrics tools exposed through MCP, a memory schema for store preferences, recall across two sessions, and the agent trace panel. In **Week 3**, we codify and implement guardrails, test refusals of unsafe rider pressure and over-hours scheduling alongside benign queries, add caching with a short time-to-live for live data, run all six sample queries end to end, and add freshness, guardrail, and cache badges. In **Week 4**, we add end-to-end tracing and a dashboard, build and run the evaluation suite, perform error analysis and apply the top fixes, handle edge cases such as API timeouts and ambiguous references, and rehearse and record the demo.
-
-The five-person team works in two groups: RAG and six-pager; Setup and integration. Ownership is recorded in the [team plan](team.md). Components meet through agreed interfaces so members can build in parallel against stubs. The current stack is Python, Gradio, PostgreSQL with pgvector, Jina embeddings, and Groq-hosted answer generation. Each weekly demo must show the stated capabilities working, with remaining gaps recorded.
 
 ---
 
