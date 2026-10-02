@@ -19,6 +19,7 @@ dependencies = [
     "requests>=2.34.2",
     "supabase>=2.31.0",
     "transformers>=5.17.0",
+    "torch>=2.2",
 ]
 
 [dependency-groups]

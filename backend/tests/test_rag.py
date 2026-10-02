@@ -167,7 +167,13 @@ def test_answer_question(monkeypatch) -> None:
 
 def test_ingestion_main(monkeypatch) -> None:
     monkeypatch.setattr(ingestion, "validate_chunk_sizes", lambda **kw: {"x": 1})
-    monkeypatch.setattr(ingestion, "embed_texts", lambda texts: [[0.0]] * len(texts))
+    seen_strategies: list[str] = []
+
+    def embed_chunks(documents, strategy="section"):
+        seen_strategies.append(strategy)
+        return [[0.0]] * len(documents)
+
+    monkeypatch.setattr(ingestion, "embed_chunks", embed_chunks)
     monkeypatch.setattr(ingestion, "get_supabase_client", lambda: None)
     stored: list[int] = []
 
@@ -178,8 +184,12 @@ def test_ingestion_main(monkeypatch) -> None:
     monkeypatch.setattr(ingestion, "insert_chunks", insert_chunks)
     ingestion.main()
     assert stored == [ingestion.EXPECTED_CHUNKS]
+    assert seen_strategies == ["section"]
 
-    monkeypatch.setattr(ingestion, "embed_texts", lambda texts: [[0.0]])
+    ingestion.main(chunking_strategy="late")
+    assert seen_strategies[-1] == "late"
+
+    monkeypatch.setattr(ingestion, "embed_chunks", lambda docs, strategy="section": [[0.0]])
     with pytest.raises(ValueError, match="does not match"):
         ingestion.main()
     monkeypatch.setattr(ingestion, "EXPECTED_CHUNKS", 1)

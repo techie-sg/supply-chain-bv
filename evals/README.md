@@ -15,6 +15,24 @@ uv run --project backend python evals/run_evals.py --resume
 uv run --project backend python evals/run_evals.py --with-answer-generation
 ```
 
+To compare contextual (late) chunk embeddings with the regular Jina API
+embeddings, reindex the corpus with the local long-context model, then run the
+same retrieval evaluation. The index is shared, so rerun normal ingestion
+before production use:
+
+```sh
+uv run --project backend python -m service.ingestion --chunking-strategy late
+uv run --project backend python evals/run_evals.py --output evals/results/late-chunking.json --results-csv evals/results/late-chunking.csv
+uv run --project backend python -m service.ingestion
+```
+
+`--chunking-strategy section` is the default and retains the original section
+embedding behavior. Late chunking uses `jinaai/jina-embeddings-v2-base-en` locally (first run
+downloads the model), encodes each complete source document up to 8192 tokens,
+and mean-pools contextual token vectors over the existing section chunks. The
+section IDs and text remain the production format. Documents beyond the model
+context limit fail explicitly instead of silently producing partial chunks.
+
 By default, the runner evaluates retrieval only: it calls the production
 `service.embedder.embed_texts` and `service.vector_store.retrieve` functions,
 and reports Recall@1, Recall@3, Recall@5, and MRR. It does not generate answers

@@ -2,8 +2,14 @@
 
 from pathlib import Path
 
-from service.chunker import load_corpus, validate_chunk_sizes
-from service.embedder import embed_texts
+from service.chunker import (
+    CHUNKING_STRATEGIES,
+    LATE_CHUNKING,
+    SECTION_CHUNKING,
+    embed_chunks,
+    load_corpus,
+    validate_chunk_sizes,
+)
 from service.vector_store import get_supabase_client, insert_chunks
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -13,7 +19,7 @@ MAX_CHUNK_TOKENS = 512
 CHUNK_TOKENIZER_MODEL = "BAAI/bge-small-en-v1.5"
 
 
-def main() -> None:
+def main(chunking_strategy: str = SECTION_CHUNKING) -> None:
     print("=== DispatchDesk Corpus Ingestion ===")
 
     # 1. Load and chunk corpus
@@ -42,9 +48,7 @@ def main() -> None:
     # 3. Generate Jina embeddings
     print("\n[3/4] Generating Jina embeddings...")
 
-    texts = [document.page_content for document in documents]
-
-    embeddings = embed_texts(texts)
+    embeddings = embed_chunks(documents, strategy=chunking_strategy)
 
     print(f"Generated {len(embeddings)} embeddings with dimension {len(embeddings[0])}")
 
@@ -67,4 +71,22 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--chunking-strategy",
+        choices=CHUNKING_STRATEGIES,
+        default=SECTION_CHUNKING,
+        help="Embedding strategy for section chunks (default: section)",
+    )
+    parser.add_argument(
+        "--late-chunking",
+        action="store_true",
+        help="Alias for --chunking-strategy late",
+    )
+    args = parser.parse_args()
+    if args.late_chunking and args.chunking_strategy != SECTION_CHUNKING:
+        parser.error("--late-chunking cannot be combined with --chunking-strategy")
+    strategy = LATE_CHUNKING if args.late_chunking else args.chunking_strategy
+    main(chunking_strategy=strategy)
