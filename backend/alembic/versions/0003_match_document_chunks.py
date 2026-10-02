@@ -30,9 +30,6 @@ def upgrade() -> None:
         $$
         """,
     )
-    op.execute("REVOKE EXECUTE ON FUNCTION app.match_document_chunks FROM PUBLIC, anon")
-    op.execute("GRANT EXECUTE ON FUNCTION app.match_document_chunks TO service_role")
-    op.execute("NOTIFY pgrst, 'reload schema'")
 
 
 def downgrade() -> None:

@@ -56,6 +56,13 @@ def insert_chunks(
                 set_={name: document_insert.excluded[name] for name in values},
             ).returning(Document.id)
             document_id = session.execute(statement).scalar_one()
+            # An edited file gets a new hash, so drop its older rows (chunks cascade).
+            session.execute(
+                delete(Document).where(
+                    Document.file_name == values["file_name"],
+                    Document.id != document_id,
+                ),
+            )
             session.execute(
                 delete(DocumentChunk).where(
                     DocumentChunk.document_id == document_id,
