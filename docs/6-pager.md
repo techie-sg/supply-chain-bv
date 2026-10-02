@@ -17,7 +17,7 @@ A quick-commerce dark store makes one promise to every customer: groceries at th
 
 DispatchDesk is a proposed last-mile dispatch copilot for that manager. It is designed to answer two questions: *why* are deliveries slipping right now, and *what should I do first?* It answers them in plain language, grounded in the store's actual order queue, rider fleet, and delivery-stage history, and in the store's own dispatch rules and rider safety policy. It remembers each store's operating preferences across shifts. Just as importantly, it has firm limits: it never invents a queue count or ETA, never pushes riders toward unsafe or over-hours work to rescue an SLA, and never takes a dispatch action on its own. Every assignment, batch, incentive, or customer message it suggests is a draft that the manager approves or rejects.
 
-This memo seeks agreement on the scope, success criteria, and four-week plan for a demonstration on simulated data. We will evaluate whether DispatchDesk helps users identify the bottleneck and choose a policy-compliant action faster.
+This memo seeks agreement on the scope, success criteria, and four-week plan. We will evaluate whether DispatchDesk helps users identify the bottleneck and choose a policy-compliant action faster.
 
 ## 2. The Problem
 
@@ -27,15 +27,15 @@ Every quick-commerce delivery passes through three stages, and a delay almost al
 
 The SLA percentage that managers are measured on hides this structure. It also behaves in a way that surprises people: it falls off a cliff rather than a slope. Our operations playbook notes that when average delivery time drifts from roughly eight minutes to twelve, the share of orders inside ten minutes can collapse from around ninety percent to under fifty. A manager who only sees the percentage sees a disaster; he does not see which stage caused it, and so he cannot tell whether the fix is more riders, more pickers, a smaller delivery radius, or simply an honest ETA.
 
-### Two simulated evenings, in numbers
+### Two evenings, in numbers
 
-Our simulated dataset for store DS-BLR-014 in Koramangala contains two consecutive evenings that illustrate the problem precisely. On 23 September, a dry evening, the 8 pm hour handled 88 orders with 20 riders online. Pick-pack averaged 2.8 minutes, rider wait 1.1, and ride 4.6, for an average delivery time of 8.5 minutes and an SLA of 87 percent. The following evening, 24 September, it rained. The 8 pm hour saw 96 orders, but only 17 riders were online. Pick-pack rose modestly to 3.3 minutes, ride rose to 6.0, and rider wait jumped to 3.6 minutes. Average delivery time reached 12.9 minutes and the SLA fell to 44 percent. At 9 pm it was worse: 102 orders, 15 riders, rider wait of 4.4 minutes, and an SLA of 31 percent.
+Our dataset for store DS-BLR-014 in Koramangala contains two consecutive evenings that illustrate the problem precisely. On 23 September, a dry evening, the 8 pm hour handled 88 orders with 20 riders online. Pick-pack averaged 2.8 minutes, rider wait 1.1, and ride 4.6, for an average delivery time of 8.5 minutes and an SLA of 87 percent. The following evening, 24 September, it rained. The 8 pm hour saw 96 orders, but only 17 riders were online. Pick-pack rose modestly to 3.3 minutes, ride rose to 6.0, and rider wait jumped to 3.6 minutes. Average delivery time reached 12.9 minutes and the SLA fell to 44 percent. At 9 pm it was worse: 102 orders, 15 riders, rider wait of 4.4 minutes, and an SLA of 31 percent.
 
 Broken down this way, the story is clear. Of the 4.4-minute increase in delivery time at 8 pm, 2.5 minutes came from rider wait, 1.4 from slower rides on wet roads, and only 0.5 from the store floor. More orders arrived while fewer riders were available, which is the classic rain pattern described in our playbook. The right response is to add rider capacity, relieve rider shortage through careful batching, and reset customer expectations, not to push pickers harder and certainly not to push riders faster. Yet a manager looking at a single number, "SLA 44%", has no way to reach that conclusion in the thirty seconds he has.
 
 ### The same pattern, live
 
-The simulated snapshot at 20:14 on 25 September shows how this feels in the moment. Six packed orders are waiting for a rider, and only two riders are free. That is three pending orders per available rider, above the playbook's warning threshold of two, beyond which waits climb quickly. Two more riders are returning within three minutes, one rider is on a break, one has gone offline because of weather, and a standby rider could arrive in twenty minutes. The oldest waiting order is eight minutes old, the point at which the recorded demo policy calls for a draft delay notice. One of the waiting orders contains frozen items and cannot be batched. One of the returning riders has already been on shift for 8.5 hours, half an hour short of the nine-hour maximum. Every one of those facts matters to the next decision, and none of them is visible from the SLA percentage.
+The snapshot at 20:14 on 25 September shows how this feels in the moment. Six packed orders are waiting for a rider, and only two riders are free. That is three pending orders per available rider, above the playbook's warning threshold of two, beyond which waits climb quickly. Two more riders are returning within three minutes, one rider is on a break, one has gone offline because of weather, and a standby rider could arrive in twenty minutes. The oldest waiting order is eight minutes old, the point at which the recorded demo policy calls for a draft delay notice. One of the waiting orders contains frozen items and cannot be batched. One of the returning riders has already been on shift for 8.5 hours, half an hour short of the nine-hour maximum. Every one of those facts matters to the next decision, and none of them is visible from the SLA percentage.
 
 ### The pressure that makes shortcuts tempting
 
@@ -89,7 +89,7 @@ The interface is a chat window with an expandable agent trace showing which tool
 
 ## 6. Goals and Non-Goals
 
-Within four weeks, our goal is a working demonstration that answers all six sample manager queries in our requirements correctly and safely on simulated data. That means diagnosing live backlogs and past-evening slowdowns with figures from the simulated dataset; proposing policy-compliant batches and explaining every excluded order; giving ETAs as data-derived, labelled ranges; refusing unsafe rider pressure and over-hours scheduling with compliant alternatives; remembering store preferences across at least two separate sessions; keeping every action in draft until approved; and exposing tool failures, stale data, and graceful degradation through observability. We also aim to measure improvement with an automated evaluation suite, run before and after a round of error-analysis fixes.
+Within four weeks, our goal is a working demonstration that answers all six sample manager queries in our requirements correctly and safely. That means diagnosing live backlogs and past-evening slowdowns with figures from the dataset; proposing policy-compliant batches and explaining every excluded order; giving ETAs as data-derived, labelled ranges; refusing unsafe rider pressure and over-hours scheduling with compliant alternatives; remembering store preferences across at least two separate sessions; keeping every action in draft until approved; and exposing tool failures, stale data, and graceful degradation through observability. We also aim to measure improvement with an automated evaluation suite, run before and after a round of error-analysis fixes.
 
 Several things are deliberately out of scope. It will not optimize routes or compute precise travel times; ride estimates come from historical zone averages. It will not execute any action for real; approval simulates execution in the demo. It will not forecast demand or make predictive claims; any "what-if" estimate, if we reach that stretch goal, will be labelled as educational and non-predictive. It will not replace the manager's judgment or regional operations' authority, and it will not grant exceptions to safety or working-hours policy under any circumstances, including incentive amounts above the store's cap, which require regional sign-off.
 
@@ -171,11 +171,3 @@ Includes the team's [recorded demo policy decisions](../backend/service/rag_data
 | Proactive delay notice | Draft prepared at 8 min or later |
 | Maximum shift | 9 hours including breaks |
 | Mandatory break | At least 15 min after every 4 hours without a break |
-
-## Appendix E: Open Questions for the Team
-
-1. Which zones are adjacent, and what is the detour between each pair? This is needed to evaluate batching condition (b).
-2. What is the store's closing time and approved per-order surge incentive cap? These are needed for the over-hours and incentive scenarios.
-3. What freshness limit must data meet before an action can be approved? The eight-minute boundary is already resolved: no new batching at 480 seconds or later, and prepare a delay-notice draft.
-4. Does an `hour` value of 20 cover 20:00 to 20:59, and how should "8 to 10 pm" map to hourly buckets?
-5. How should tool queries resolve "last night" from the loaded scenario timestamp?
