@@ -1,11 +1,11 @@
 # DispatchDesk: A Dispatch Copilot That Helps Dark Store Managers Keep the 10-Minute Promise the Right Way
 
 **Document type:** Six-page narrative memo
-**Team:** DispatchDesk (5 members: Prompt/RAG, Tools/MCP, Memory, Guardrails/Caching, Observability/UI)
+**Team:** DispatchDesk (5 members across RAG and six-pager; Setup and integration)
 **Status:** Draft for team review
-**Date:** 27 September 2026
+**Date:** 27 September 2026; revised 2 October 2026
 
-*Reading note: this memo is meant to be read silently, start to finish, before discussion. The six-page body ends at Section 9. Appendices hold supporting data and are not required reading.*
+*Reading note: this memo is meant to be read silently, start to finish, before discussion. The main body ends at Section 9. Appendices hold supporting data and are not required reading.*
 
 ---
 
@@ -13,9 +13,9 @@
 
 A quick-commerce dark store makes one promise to every customer: groceries at the door in about ten minutes. When that promise holds, nobody notices the store manager. When it breaks, usually between seven and ten in the evening or the moment it starts raining, the manager is the one person expected to fix it in real time, with a phone ringing, a dispatch screen full of red, and regional operations watching an hourly SLA number.
 
-DispatchDesk is a last-mile dispatch copilot for that manager. It answers two questions that today's dashboards cannot: *why* are deliveries slipping right now, and *what should I do first?* It answers them in plain language, grounded in the store's actual order queue, rider fleet, and delivery-stage history, and in the store's own dispatch rules and rider safety policy. It remembers each store's operating preferences across shifts. Just as importantly, it has firm limits: it never invents a queue count or ETA, never pushes riders toward unsafe or over-hours work to rescue an SLA, and never takes a dispatch action on its own. Every assignment, batch, incentive, or customer message it suggests is a draft that the manager approves or rejects.
+DispatchDesk is a proposed last-mile dispatch copilot for that manager. It is designed to answer two questions: *why* are deliveries slipping right now, and *what should I do first?* It answers them in plain language, grounded in the store's actual order queue, rider fleet, and delivery-stage history, and in the store's own dispatch rules and rider safety policy. It remembers each store's operating preferences across shifts. Just as importantly, it has firm limits: it never invents a queue count or ETA, never pushes riders toward unsafe or over-hours work to rescue an SLA, and never takes a dispatch action on its own. Every assignment, batch, incentive, or customer message it suggests is a draft that the manager approves or rejects.
 
-This memo describes the problem, the customer, the principles we will not trade away, the solution, what is in and out of scope, the risks we see, how we will measure success, and our four-week plan to build a working demonstration on simulated data.
+This memo seeks agreement on the scope, success criteria, and four-week plan for a demonstration on simulated data. We will evaluate whether DispatchDesk helps users identify the bottleneck and choose a policy-compliant action faster.
 
 ## 2. The Problem
 
@@ -25,7 +25,7 @@ Every quick-commerce delivery passes through three stages, and a delay almost al
 
 The SLA percentage that managers are measured on hides this structure. It also behaves in a way that surprises people: it falls off a cliff rather than a slope. Our operations playbook notes that when average delivery time drifts from roughly eight minutes to twelve, the share of orders inside ten minutes can collapse from around ninety percent to under fifty. A manager who only sees the percentage sees a disaster; he does not see which stage caused it, and so he cannot tell whether the fix is more riders, more pickers, a smaller delivery radius, or simply an honest ETA.
 
-### A real evening, in numbers
+### Two simulated evenings, in numbers
 
 Our simulated dataset for store DS-BLR-014 in Koramangala contains two consecutive evenings that illustrate the problem precisely. On 23 September, a dry evening, the 8 pm hour handled 88 orders with 20 riders online. Pick-pack averaged 2.8 minutes, rider wait 1.1, and ride 4.6, for an average delivery time of 8.5 minutes and an SLA of 87 percent. The following evening, 24 September, it rained. The 8 pm hour saw 96 orders, but only 17 riders were online. Pick-pack rose modestly to 3.3 minutes, ride rose to 6.0, and rider wait jumped to 3.6 minutes. Average delivery time reached 12.9 minutes and the SLA fell to 44 percent. At 9 pm it was worse: 102 orders, 15 riders, rider wait of 4.4 minutes, and an SLA of 31 percent.
 
@@ -33,7 +33,7 @@ Broken down this way, the story is clear. Of the 4.4-minute increase in delivery
 
 ### The same pattern, live
 
-The live snapshot at 20:14 on 25 September shows how this feels in the moment. Six packed orders are waiting for a rider, and only two riders are free. That is three pending orders per available rider, above the playbook's warning threshold of two, beyond which waits climb quickly. Two more riders are returning within three minutes, one rider is on a break, one has gone offline because of weather, and a standby rider could arrive in twenty minutes. The oldest waiting order has been on the shelf for eight minutes, the point at which the playbook says the customer should receive a proactive delay notice. One of the waiting orders contains frozen items and cannot be batched. One of the returning riders has already been on shift for 8.5 hours, half an hour short of the nine-hour maximum. Every one of those facts matters to the next decision, and none of them is visible from the SLA percentage.
+The simulated snapshot at 20:14 on 25 September shows how this feels in the moment. Six packed orders are waiting for a rider, and only two riders are free. That is three pending orders per available rider, above the playbook's warning threshold of two, beyond which waits climb quickly. Two more riders are returning within three minutes, one rider is on a break, one has gone offline because of weather, and a standby rider could arrive in twenty minutes. The oldest waiting order is eight minutes old, the point at which the recorded demo policy calls for a draft delay notice. One of the waiting orders contains frozen items and cannot be batched. One of the returning riders has already been on shift for 8.5 hours, half an hour short of the nine-hour maximum. Every one of those facts matters to the next decision, and none of them is visible from the SLA percentage.
 
 ### The pressure that makes shortcuts tempting
 
@@ -41,7 +41,7 @@ The deeper problem is not information alone; it is what pressure does to decisio
 
 ## 3. The Customer
 
-Our customer is Karthik Reddy, a 29-year-old dark store manager in Koramangala, Bengaluru. His store handles roughly 600 orders a day on a ten-minute promise, stocks about 2,500 SKUs, and runs with 9 pickers and around 20 riders per shift, a mix of employed and gig workers. For most of the day the store runs itself. Between seven and ten in the evening, or the moment it rains, it does not.
+Our customer persona is Karthik Reddy, a 29-year-old dark store manager in Koramangala, Bengaluru. His store handles roughly 600 orders a day on a ten-minute promise, stocks about 2,500 SKUs, and runs with 9 pickers and around 20 riders per shift, a mix of employed and gig workers. For most of the day the store runs itself. Between seven and ten in the evening, or the moment it rains, it does not.
 
 In those windows Karthik makes dozens of split-second calls: which order goes out first, whether two orders can share one bike, when to call in the standby rider, when to shrink the delivery radius. He is competent and he knows his riders, but his dashboards describe *what* is happening rather than *why*, so every call rests on instinct. He wants to ask questions the way he would ask an experienced colleague: "What's going wrong right now?" or "Why did last night fall apart?" He wants answers built from his own queue and rider data, not generic advice.
 
@@ -61,13 +61,15 @@ These are the principles we will use to settle disagreements during the build. T
 
 ### How DispatchDesk works
 
-DispatchDesk is a conversational assistant with three distinct sources of truth, and keeping them separate is the core of the design. **Facts** come only from tools: a live dispatch-status tool returns the current order queue and rider states with an "as of" timestamp, and a delivery-metrics tool returns hourly stage breakdowns for any past period. **Rules** come only from retrieval over the store's operating documents: dispatch procedures, the delay root-cause guide, batching and cold-chain rules, the rain and surge playbook, customer-communication guidelines, and the rider safety and working-hours policy. **Preferences** come only from memory: the alert thresholds, batching constraints, and incentive caps each manager has set. The language model's job is to reason across these three sources and write a clear answer. It is never the source of a number or a rule.
+The following describes the intended experience. Today, chat retrieves policy passages; synthetic operational records can be inspected separately. Connecting those records to chat, persistent preferences, approval, and separate response checks remains planned work.
+
+DispatchDesk is a conversational assistant with three distinct sources of truth, and keeping them separate is the core of the design. **Facts** come only from tools: a live dispatch-status tool returns the current order queue and rider states with an "as of" timestamp, and a delivery-metrics tool returns hourly stage breakdowns for periods available in the dataset. **Rules** come only from retrieval over the store's operating documents: dispatch procedures, the delay root-cause guide, batching and cold-chain rules, the rain and surge playbook, customer-communication guidelines, and the rider safety and working-hours policy. **Preferences** come only from memory: the alert thresholds, batching constraints, and incentive caps each manager has set. The language model's job is to reason across these three sources and write a clear answer. It is never the source of a number or a rule.
 
 Deterministic checks are done in code, not by the model. Whether pending orders per available rider exceeds a threshold, whether a pair of orders meets every batching condition, and whether a rider has reached the nine-hour or four-hour limit are all computed exactly from tool data. The model explains the results. A guardrail layer checks every response before it reaches the manager, confirming that figures trace to tool output, that proposed actions are framed as drafts, and that nothing conflicts with safety policy or stored preferences.
 
 ### A worked example
 
-At 20:14 on 25 September, Karthik types: "Orders are backing up right now, what's going on and what should I do first?" DispatchDesk calls the live dispatch tool and retrieves the delay-diagnosis and batching guidance. It replies that, as of 20:14, six packed orders are waiting on two available riders, three pending orders per available rider, so rider wait is the bottleneck rather than the store floor. It then proposes, in order, the playbook's first actions: dispatch the oldest waiting order first; expect two riders back within three minutes; call in the standby rider, who is about twenty minutes away; and consider batching the two eligible orders in Zone B, which together hold nine items and pass every batching check the current data can confirm, with the detour check pending once route estimates are added to the dataset. It notes that the order containing frozen items must go out as a single drop, that the oldest order sits right at the eight-minute limit beyond which batching is not allowed and should receive a proactive delay notice, and that the returning rider at 8.5 hours on shift can only be dispatched within the 9-hour limit, verified from tool data, and must not be scheduled into the peak. Each proposed action appears as a draft with an approve button. Nothing moves until Karthik approves it.
+At 20:14 on 25 September, Karthik types: "Orders are backing up right now, what's going on and what should I do first?" DispatchDesk calls the live dispatch tool and retrieves the delay-diagnosis and batching guidance. It replies that, as of 20:14, six packed orders are waiting on two available riders, three pending orders per available rider, so rider wait is the bottleneck rather than the store floor. It then proposes, in order, the playbook's first actions: dispatch the oldest waiting order first; expect two riders back within three minutes; call in the standby rider, who is about twenty minutes away; and assess the two Zone B orders containing nine items as batching candidates. They cannot be recommended as a batch until the missing detour data and every other eligibility check are verified. It notes that the order containing frozen items must go out as a single drop, that the oldest order has reached the eight-minute limit, is ineligible for batching, and qualifies for a draft delay notice, and that the returning rider at 8.5 hours on shift can only be dispatched within the 9-hour limit, verified from tool data, and must not be scheduled into the peak. Each proposed action appears as a draft with an approve button. Nothing moves until Karthik approves it and current eligibility is rechecked.
 
 ### Looking back as well as forward
 
@@ -79,15 +81,15 @@ When a request crosses a line, DispatchDesk refuses clearly and stays helpful. I
 
 ### Memory across shifts
 
-A manager can tell DispatchDesk, "On weekends after 7 pm, alert me when pending orders per available rider goes above 2, and never batch frozen items with anything else." DispatchDesk stores the threshold, the window it applies to, and the batching constraint, confirms them, and applies them automatically in later shifts without being reminded. If a later suggestion would break one of them, it flags the conflict for the manager to resolve.
+A manager can tell DispatchDesk, "On weekends after 7 pm, alert me when pending orders per available rider goes above 2, and never batch frozen items with anything else." DispatchDesk stores the threshold, the window it applies to, and the batching constraint, confirms them, and applies them automatically in later shifts without being reminded. If a later suggestion would break one of them, it flags the conflict for the manager to resolve. Preferences cannot relax mandatory policy; alerts are evaluated during interactions.
 
 ### What the manager sees
 
-The interface is a chat window with an expandable agent trace showing which tools were called, when each piece of live data was captured, which documents were retrieved, and which stored preferences were applied. Visible badges show data freshness, guardrail status (for example, when a request was refused or reframed), and cache hits. An observability dashboard tracks tool-call failures, stale-data events, and guardrail triggers. When live data cannot be reached, DispatchDesk says so and falls back to the last snapshot, clearly labelled with its time.
+The interface is a chat window with an expandable agent trace showing which tools were called, when each piece of live data was captured, which documents were retrieved, and which stored preferences were applied. Visible badges show data freshness, guardrail status (for example, when a request was refused or reframed), and cache hits. An observability dashboard tracks tool-call failures, stale-data events, and guardrail triggers. When live data cannot be reached, DispatchDesk shows the last snapshot with its time. Actions requiring current state wait for refreshed data.
 
 ## 6. Goals and Non-Goals
 
-Within four weeks, our goal is a working demonstration that answers all six sample manager queries in our requirements correctly and safely on simulated data. That means diagnosing live backlogs and past-evening slowdowns with real figures; proposing policy-compliant batches and explaining every excluded order; giving ETAs as data-derived, labelled ranges; refusing unsafe rider pressure and over-hours scheduling with compliant alternatives; remembering store preferences across at least two separate sessions; keeping every action in draft until approved; and exposing tool failures, stale data, and graceful degradation through observability. We also aim to measure improvement with an automated evaluation suite, run before and after a round of error-analysis fixes.
+Within four weeks, our goal is a working demonstration that answers all six sample manager queries in our requirements correctly and safely on simulated data. That means diagnosing live backlogs and past-evening slowdowns with figures from the simulated dataset; proposing policy-compliant batches and explaining every excluded order; giving ETAs as data-derived, labelled ranges; refusing unsafe rider pressure and over-hours scheduling with compliant alternatives; remembering store preferences across at least two separate sessions; keeping every action in draft until approved; and exposing tool failures, stale data, and graceful degradation through observability. We also aim to measure improvement with an automated evaluation suite, run before and after a round of error-analysis fixes.
 
 Several things are deliberately out of scope. DispatchDesk will not integrate with a real order-management system, rider app, or maps and routing service; all queue, rider, and metrics data is a static or lightly simulated dataset. It will not optimize routes or compute precise travel times; ride estimates come from historical zone averages. It will not execute any action for real; approval simulates execution in the demo. It will not forecast demand or make predictive claims; any "what-if" estimate, if we reach that stretch goal, will be labelled as educational and non-predictive. It will not replace the manager's judgment or regional operations' authority, and it will not grant exceptions to safety or working-hours policy under any circumstances, including incentive amounts above the store's cap, which require regional sign-off.
 
@@ -105,13 +107,15 @@ Several things are deliberately out of scope. DispatchDesk will not integrate wi
 
 **Retrieval misses the right rule.** If the batching or safety section is not retrieved, the answer will be ungrounded. Our corpus is small, so we will chunk by section, test that the right sections appear in the top three results for each sample query, and track retrieval misses in error analysis.
 
-**Our simulated data has gaps.** The current dataset does not define which zones are adjacent, the detour between zones, a store closing time, an incentive cap, picker staffing, or a weekend snapshot for the weekend preference. We will add these in Week 1 so that the batching, over-hours, pick-pack, and memory scenarios can be tested properly.
+**Our simulated data has gaps.** The rain scenario now includes synthetic route assumptions, but they are not available to chat. A general adjacency map, closing time, and incentive cap remain undefined. We must complete these inputs and staffing, weekend, and break cases before evaluating dependent recommendations.
 
 **Free-tier rate limits slow the team.** Our language model provider's free tier enforces rate limits shared across an organization. Team members will develop on separate accounts, all model calls will go through one thin wrapper with retry and backoff, and rate-limit errors will be logged as tool failures in observability.
 
 ## 8. Success Metrics
 
-We will judge the demonstration by measurable outcomes produced by our own evaluation harness and dashboard, not by impressions. The primary metric is the pass rate on the six sample queries, with a target of six out of six after error-analysis fixes, and a recorded improvement over the baseline run. Alongside it, we will track fabricated figures in responses, with a target of zero; refusal accuracy on unsafe requests, targeting every unsafe test prompt refused with compliant alternatives offered; false refusals on a set of benign dispatch questions, targeting zero; and preference-recall accuracy across sessions, targeting correct unprompted recall of every stored preference in the second session.
+We will judge the demonstration by measurable outcomes produced by our own evaluation harness and dashboard, not by impressions. The minimum acceptance metric is the pass rate on the six sample queries, with a target of six out of six after error-analysis fixes, and a recorded improvement over the baseline run. Alongside it, we will track fabricated figures in responses, with a target of zero; refusal accuracy on unsafe requests, targeting every unsafe test prompt refused with compliant alternatives offered; false refusals on a set of benign dispatch questions, targeting zero; and preference-recall accuracy across sessions, targeting correct unprompted recall of every stored preference in the second session.
+
+We will also test unfamiliar scenario variations and compare decision time and correctness with the same records and policies used without the assistant. Faster decisions count as improvement only when correctness is maintained.
 
 Operational metrics round out the picture: retrieval hit rate, meaning the share of test queries whose correct playbook section appears in the top three results; tool-call failure rate and stale-data occurrences, with every stale or failed call handled by a labelled fallback rather than a crash; cache hit rate and the latency improvement on repeated historical-metrics queries; and median end-to-end response time, with a stretch target of under three seconds. All metrics will be visible on the dashboard during the final demo.
 
@@ -119,13 +123,13 @@ Operational metrics round out the picture: retrieval hit rate, meaning the share
 
 We will build DispatchDesk in four one-week phases, each ending in a demo. In **Week 1**, we lay foundations: this memo and a PR/FAQ, the repository, a system prompt encoding our tenets, the completed synthetic dataset, the retrieval corpus and pipeline, and a Gradio chat interface that answers "why are deliveries slipping?" from the playbook. In **Week 2**, we add the live dispatch-status and delivery-metrics tools exposed through MCP, a memory schema for store preferences, recall across two sessions, and the agent trace panel. In **Week 3**, we codify and implement guardrails, test refusals of unsafe rider pressure and over-hours scheduling alongside benign queries, add caching with a short time-to-live for live data, run all six sample queries end to end, and add freshness, guardrail, and cache badges. In **Week 4**, we add end-to-end tracing and a dashboard, build and run the evaluation suite, perform error analysis and apply the top fixes, handle edge cases such as API timeouts and ambiguous references, and rehearse and record the demo.
 
-The team of five each owns one area across the project: Prompt/RAG, Tools/MCP, Memory, Guardrails/Caching, and Observability/UI. Components meet through agreed interfaces so members can build in parallel against stubs. Our proposed stack is Python, a Groq-hosted production-tier model called through an OpenAI-compatible wrapper, the open-source `bge-small-en-v1.5` embedding model run locally, ChromaDB as the vector store, and Gradio for the interface, to be confirmed in `docs/team.md`.
+The five-person team works in two groups: RAG and six-pager; Setup and integration. Ownership is recorded in the [team plan](team.md). Components meet through agreed interfaces so members can build in parallel against stubs. The current stack is Python, Gradio, PostgreSQL with pgvector, Jina embeddings, and Groq-hosted answer generation. Each weekly demo must show the stated capabilities working, with remaining gaps recorded.
 
 ---
 
 ## Appendix A: Evening Comparison, Store DS-BLR-014
 
-Source: `dispatch_dataset_sample.xlsx`, HourlyMetrics sheet. Times in minutes.
+Source: synthetic [dispatch dataset](initial/sample_data/dispatch_dataset_sample.xlsx), HourlyMetrics sheet. Times in minutes.
 
 | Date | Hour | Orders | Pick-pack | Rider wait | Ride | Avg delivery | SLA % | Riders online | Rain |
 |---|---|---|---|---|---|---|---|---|---|
@@ -140,7 +144,7 @@ Change in average delivery time, rain evening versus dry evening: at 20:00, +4.4
 
 ## Appendix B: Live Snapshot Summary, 25 September 2026, 20:14
 
-Source: LiveOrders and RiderStatus sheets. Riders are referred to by ID.
+Source: original synthetic workbook, LiveOrders and RiderStatus sheets. Riders are referred to by ID; current application scenarios have their own records and dates.
 
 The queue holds 12 orders: 6 packed and waiting for a rider, 4 being picked, and 2 out for delivery. The oldest waiting order, ORD-70411, has waited 480 seconds. ORD-70413 contains frozen items. Of 9 riders, 2 are available (RDR-103, RDR-104), 2 are on delivery, 2 are returning within 3 minutes (RDR-105, RDR-107), 1 is on break, 1 is offline because of weather, and 1 is on standby about 20 minutes away (RDR-109). RDR-105 has been on shift for 8.5 hours. Pending orders per available rider: 6 ÷ 2 = 3.0, above the playbook threshold of 2.
 
@@ -149,7 +153,7 @@ The queue holds 12 orders: 6 packed and waiting for a rider, 4 being picked, and
 | # | Manager query (abridged) | What DispatchDesk must do |
 |---|---|---|
 | 1 | Orders backing up, what do I do first? | Live-status diagnosis plus prioritized actions as drafts |
-| 2 | Why did SLA fall last night vs. the night before? | Stage-by-stage comparison from metrics, rider-wait as dominant cause |
+| 2 | Why did SLA fall last night vs. the night before? | Stage-by-stage comparison from metrics, rider wait as the largest increase |
 | 3 | Raining, can I batch, what ETA should I show? | Eligible batches, excluded orders with reasons, ETA range labelled as estimate |
 | 4 | Make riders hit 10 minutes no matter what, dock pay | Refuse, cite safety policy, offer compliant levers |
 | 5 | Remember my weekend alert threshold and frozen-batching rule | Store, confirm, recall in a later session, flag conflicts |
@@ -157,16 +161,18 @@ The queue holds 12 orders: 6 packed and waiting for a rider, 4 being picked, and
 
 ## Appendix D: Key Policy Thresholds (from the Dispatch Playbook)
 
+Includes the team's [recorded demo policy decisions](../backend/service/rag_data/corpus/README.md).
+
 | Rule | Threshold |
 |---|---|
 | Stage targets | Pick-pack about 3 min; rider wait about 1.5 min; ride about 5 min within 2 km |
 | Rider-wait warning | Above about 2 pending orders per available rider |
 | Batch size | At most 2 orders per rider (3 only with manager approval in a declared surge) |
-| Batch geography | Same or adjacent zones; added detour no more than about 0.8 km or 2 min |
+| Batch geography | Same or adjacent zones; added detour must satisfy both caps: about 0.8 km and 2 min |
 | Batch items | 15 or fewer combined |
 | Cold chain | Frozen or ice-cream items are single-drop only |
-| Batch age limit | Not allowed once the older order has passed 8 min in queue |
-| Proactive delay notice | When an order passes 8 min in the queue |
+| Batch age limit | Not allowed at or beyond 8 min in queue |
+| Proactive delay notice | Draft prepared at 8 min or later |
 | Maximum shift | 9 hours including breaks |
 | Mandatory break | At least 15 min after every 4 hours without a break |
 
@@ -174,6 +180,6 @@ The queue holds 12 orders: 6 packed and waiting for a rider, 4 being picked, and
 
 1. Which zones are adjacent, and what is the detour between each pair? This is needed to evaluate batching condition (b).
 2. What is the store's closing time and approved per-order surge incentive cap? These are needed for the over-hours and incentive scenarios.
-3. Does "passed 8 minutes" mean strictly greater than 480 seconds? ORD-70411 sits exactly on this boundary.
+3. What freshness limit must data meet before an action can be approved? The eight-minute boundary is already resolved: no new batching at 480 seconds or later, and prepare a delay-notice draft.
 4. Does an `hour` value of 20 cover 20:00 to 20:59, and how should "8 to 10 pm" map to hourly buckets?
-5. What simulated "now" should the demo use so that "last night" resolves consistently?
+5. How should tool queries resolve "last night" from the loaded scenario timestamp?
