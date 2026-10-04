@@ -22,6 +22,19 @@ PROMPT_PATH = (
 )
 
 
+def retrieval_query(
+    question: str,
+    history: Sequence[ChatMessage] | None = None,
+) -> str:
+    """Text embedded for retrieval; follow-ups include the latest exchange."""
+    if not history:
+        return question
+    recent_exchange = "\n".join(
+        f"{message['role']}: {message['content']}" for message in history[-2:]
+    )
+    return f"{recent_exchange}\nFollow-up question: {question}"
+
+
 class RAGService:
     def __init__(
         self,
@@ -41,13 +54,9 @@ class RAGService:
         if top_k < 1:
             raise ValueError("top_k must be positive")
         started = perf_counter()
-        retrieval_question = question
-        if history:
-            recent_exchange = "\n".join(
-                f"{message['role']}: {message['content']}" for message in history[-2:]
-            )
-            retrieval_question = f"{recent_exchange}\nFollow-up question: {question}"
-        query_embedding = self.embedding_service.embed_query(retrieval_question)
+        query_embedding = self.embedding_service.embed_query(
+            retrieval_query(question, history),
+        )
         results = retrieve(query_embedding=query_embedding, match_count=top_k)
         if not results:
             logger.warning("No guidance retrieved", top_k=top_k)

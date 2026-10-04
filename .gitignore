@@ -12,3 +12,4 @@ htmlcov/
 !.env.example
 .DS_Store
 .ipynb_checkpoints/
+backend/evals/results*.csv
