@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from langchain_core.documents import Document as CorpusDocument
-from sqlalchemy import Engine, String, Table, delete, select, text
+from sqlalchemy import Engine, String, Table, delete, or_, select, text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import insert
 
@@ -56,10 +56,14 @@ def insert_chunks(
                 set_={name: document_insert.excluded[name] for name in values},
             ).returning(Document.id)
             document_id = session.execute(statement).scalar_one()
-            # An edited file gets a new hash, so drop its older rows (chunks cascade).
+            # An edited or renamed file (such as .md to .pdf) gets a new hash, so
+            # drop its older rows (chunks cascade).
             session.execute(
                 delete(Document).where(
-                    Document.file_name == values["file_name"],
+                    or_(
+                        Document.file_name == values["file_name"],
+                        Document.metadata_["doc_id"].astext == metadata["doc_id"],
+                    ),
                     Document.id != document_id,
                 ),
             )

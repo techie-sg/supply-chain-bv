@@ -1,4 +1,4 @@
-"""Load corpus files and attach metadata using a supplied chunking strategy."""
+"""Parse corpus files and attach metadata using a supplied chunking strategy."""
 
 import hashlib
 import re
@@ -7,6 +7,12 @@ from pathlib import Path
 from langchain_core.documents import Document
 
 from service.chunking import ChunkingStrategy
+from service.document_parser import DocumentParser
+
+# Match header values by their format, not by where the line ends: PDF
+# extraction can join header fields with each other and with stray text.
+DOC_ID = r"[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+"
+VERSION = r"\d+(?:\.\d+)*(?:\s*\(\d{4}-\d{2}-\d{2}\))?"
 
 
 class CorpusService:
@@ -15,30 +21,28 @@ class CorpusService:
         corpus_dir: Path,
         repo_root: Path,
         strategy: ChunkingStrategy,
+        parser: DocumentParser,
     ) -> None:
         self.corpus_dir = corpus_dir
         self.repo_root = repo_root
         self.strategy = strategy
+        self.parser = parser
 
     def load(self) -> tuple[list[Document], list[str]]:
-        """Load Markdown files, excluding the README, with stable chunk IDs."""
-        source_files = sorted(
-            path
-            for path in self.corpus_dir.glob("*.md")
-            if path.name.lower() != "readme.md"
-        )
+        """Parse source documents to Markdown and chunk them with stable IDs."""
+        source_files = sorted(self.corpus_dir.glob(f"*{self.parser.suffix}"))
         if not source_files:
             raise FileNotFoundError(
-                f"No operational Markdown documents found in {self.corpus_dir}",
+                f"No {self.parser.suffix} documents found in {self.corpus_dir}",
             )
 
         documents = []
         ids = []
         for source in source_files:
-            raw = source.read_bytes()
-            markdown = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+            markdown = self.parser.to_markdown(source)
+            markdown = markdown.replace("\r\n", "\n").replace("\r", "\n")
             metadata = self._metadata(markdown, source)
-            metadata["file_hash"] = hashlib.sha256(raw).hexdigest()
+            metadata["file_hash"] = hashlib.sha256(source.read_bytes()).hexdigest()
             for section, body in self.strategy.split(markdown):
                 documents.append(
                     Document(
@@ -56,8 +60,8 @@ class CorpusService:
     def _metadata(self, markdown: str, source: Path) -> dict[str, str]:
         patterns = {
             "title": r"(?m)^#\s+(.+?)\s*$",
-            "doc_id": r"(?im)^\*\*Document ID:\*\*\s*(.+?)\s*$",
-            "version": r"(?im)^\*\*Version:\*\*\s*(.+?)\s*$",
+            "doc_id": rf"\bDocument ID:\**\s*({DOC_ID})\b",
+            "version": rf"\bVersion:\**\s*({VERSION})",
         }
         metadata = {"source": source.relative_to(self.repo_root).as_posix()}
         for name, pattern in patterns.items():

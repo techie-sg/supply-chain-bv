@@ -16,6 +16,9 @@ dependencies = [
     "langchain-groq>=1.1.3",
     "requests>=2.34.2",
     "structlog>=25,<27",
+    "torch>=2.14,<3",
+    "torchvision>=0.29,<1",
+    "docling>=2.133.0",
 ]
 
 [dependency-groups]
@@ -30,6 +33,17 @@ dev = [
 
 [tool.uv]
 package = false
+
+# Docling's layout model runs on CPU. Install CPU-only torch on Linux (CI,
+# Railway) instead of the default CUDA build and its NVIDIA packages.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [tool.ruff.lint]
 extend-select = ["COM812"]

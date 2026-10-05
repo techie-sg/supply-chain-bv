@@ -72,6 +72,24 @@ def test_edited_file_replaces_its_old_document_and_chunks(
         assert connection.execute(select(func.count(Document.id))).scalar_one() == 1
 
 
+def test_renamed_source_replaces_rows_with_the_same_document_id(
+    vector_engine: Engine,
+) -> None:
+    insert_chunks([corpus_document("markdown")], [[1.0, 0.0]], vector_engine)
+    insert_chunks(
+        [corpus_document("pdf", source="policy.pdf", file_hash="cd" * 32)],
+        [[0.0, 1.0]],
+        vector_engine,
+    )
+    with vector_engine.connect() as connection:
+        assert connection.execute(select(DocumentChunk.content)).scalars().all() == [
+            "pdf",
+        ]
+        assert connection.execute(select(Document.file_name)).scalars().all() == [
+            "policy.pdf",
+        ]
+
+
 def test_upsert_is_repeatable_and_preserves_document_id(vector_engine: Engine) -> None:
     documents = [corpus_document("one"), corpus_document("two")]
     embeddings = [[1.0, 0.0], [0.0, 1.0]]
