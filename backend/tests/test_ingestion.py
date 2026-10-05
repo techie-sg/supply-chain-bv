@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -6,8 +7,16 @@ from config import Settings
 from service import ingestion
 from service.chunking import FixedSizeChunkingStrategy, MarkdownSectionChunkingStrategy
 from service.corpus import CorpusService
+from service.document_parser import DocumentParser
 from service.embedding_service import EmbeddingService
 from service.ingestion import IngestionService
+
+
+class TextParser(DocumentParser):
+    suffix = ".txt"
+
+    def to_markdown(self, source: Path) -> str:
+        return source.read_text()
 
 
 class FakeEmbeddingService(EmbeddingService):
@@ -33,8 +42,8 @@ def test_ingestion_accepts_each_strategy_and_preserves_embedding_alignment(
     monkeypatch,
     strategy,
 ) -> None:
-    (tmp_path / "policy.md").write_text("# Policy\n## Rain\nSlow down in rain.")
-    corpus = CorpusService(tmp_path, tmp_path, strategy)
+    (tmp_path / "policy.txt").write_text("# Policy\n## Rain\nSlow down in rain.")
+    corpus = CorpusService(tmp_path, tmp_path, strategy, TextParser())
     embeddings = FakeEmbeddingService()
     stored = []
 
@@ -50,9 +59,14 @@ def test_ingestion_accepts_each_strategy_and_preserves_embedding_alignment(
 
 
 def test_empty_corpus_is_rejected_before_embedding_or_database_work(tmp_path) -> None:
-    (tmp_path / "empty.md").write_text("   ")
+    (tmp_path / "empty.txt").write_text("   ")
     embeddings = FakeEmbeddingService()
-    corpus = CorpusService(tmp_path, tmp_path, MarkdownSectionChunkingStrategy())
+    corpus = CorpusService(
+        tmp_path,
+        tmp_path,
+        MarkdownSectionChunkingStrategy(),
+        TextParser(),
+    )
     with pytest.raises(ValueError, match="no chunks"):
         IngestionService(corpus, embeddings).run()
     assert embeddings.texts == []
@@ -62,18 +76,24 @@ def test_misaligned_embeddings_are_rejected_before_database_write(
     tmp_path,
     monkeypatch,
 ) -> None:
-    (tmp_path / "policy.md").write_text(
+    (tmp_path / "policy.txt").write_text(
         "# Policy\n## Rain\nSlow down.\n## Dry\nNormal.",
     )
     embeddings = FakeEmbeddingService()
     monkeypatch.setattr(embeddings, "embed_documents", lambda texts: [[0.1]])
-    corpus = CorpusService(tmp_path, tmp_path, MarkdownSectionChunkingStrategy())
+    corpus = CorpusService(
+        tmp_path,
+        tmp_path,
+        MarkdownSectionChunkingStrategy(),
+        TextParser(),
+    )
     with pytest.raises(ValueError, match="does not match"):
         IngestionService(corpus, embeddings).run()
 
 
 def test_ingestion_cli_composes_services(tmp_path, monkeypatch) -> None:
-    (tmp_path / "policy.md").write_text("# Policy\n## Rain\nSlow down.")
+    (tmp_path / "policy.txt").write_text("# Policy\n## Rain\nSlow down.")
+    monkeypatch.setattr(ingestion, "DoclingPdfParser", TextParser)
     monkeypatch.setattr(ingestion, "CORPUS_DIR", tmp_path)
     monkeypatch.setattr(ingestion, "BACKEND_DIR", tmp_path)
     monkeypatch.setattr(ingestion, "get_settings", lambda: Settings(_env_file=None))  # type: ignore[call-arg]

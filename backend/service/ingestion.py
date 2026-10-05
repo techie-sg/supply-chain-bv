@@ -1,4 +1,4 @@
-"""Chunk, embed, and upsert the RAG corpus: `uv run python -m service.ingestion`."""
+"""Parse, chunk, embed, and upsert the RAG corpus: `uv run python -m service.ingestion`."""
 
 from pathlib import Path
 from time import perf_counter
@@ -9,6 +9,7 @@ from config import get_settings
 from logging_config import configure_logging
 from queries.vector_store import insert_chunks
 from service.corpus import CorpusService
+from service.document_parser import DoclingPdfParser
 from service.embedding_service import EmbeddingService
 from service.factory import create_chunking_strategy, create_embedding_service
 
@@ -57,6 +58,7 @@ def main() -> None:
             corpus_dir=CORPUS_DIR,
             repo_root=BACKEND_DIR,
             strategy=create_chunking_strategy(settings),
+            parser=DoclingPdfParser(),
         ),
         embedding_service=create_embedding_service(settings),
     )
