@@ -12,22 +12,24 @@ Memory lets the assistant remember a store's operating knowledge across sessions
 | 2 | Store preferences | Preference | Binding rules: alert threshold, batching constraints, incentive cap |
 | 3 | Handover notes | Episodic | Short free-text notes passed between shifts |
 | 4 | Conversation summary | Compressed | Columns on `conversations` that keep long chats within the model's context |
+| 5 | Dreaming (suggestions) | Derived | A background review of past conversations that proposes preferences, alert rules and insights |
 | Parked | Resolution notes | Episodic | Saved diagnoses (root cause, steps, outcome) for reuse |
 
-Also planned but not designed yet: approval log, prospective memory (snoozed alerts, reminders), and trace events linked to messages.
+Also planned but not designed yet: approval log, prospective memory (snoozed alerts, reminders), and trace events linked to messages. How alert rules are evaluated, and any table for fired alerts, is pending a team discussion; this document only stores the rules.
 
 Requirement covered: preferences stated in one session are recalled, unprompted, in a later session with the same manager (requirements.md section 4 and sample query 5).
 
 ## Tables at a glance
 
-Four new tables in the `app` schema for the MVP, plus one parked. The conversation summary is two columns on `conversations`, not a table. Details are in the numbered sections below.
+Five new tables in the `app` schema for the MVP, plus one parked. The conversation summary is two columns on `conversations`, not a table. Details are in the numbered sections below.
 
 | # | Table | Purpose | Fields |
 | --- | --- | --- | --- |
-| 1 | `conversations` | One row per chat. Holds the chat's summary. | `id`, `store_id`, `manager_id`, `summary`, `summary_covers_to_id`, `created_at`, `updated_at`, `ended_at` |
+| 1 | `conversations` | One row per chat. Holds the chat's summary. | `id`, `store_id`, `manager_id`, `summary`, `summary_covers_to_id`, `reviewed_to_id`, `created_at`, `updated_at`, `ended_at` |
 | 2 | `messages` | One row per manager question and its answer. | `id`, `conversation_id`, `question`, `answer`, `status`, `question_at`, `answer_at` |
-| 3 | `store_preferences` | Binding store rules: alert threshold, batching constraint, incentive cap. | `id`, `store_id`, `manager_id`, `kind`, `payload`, `status`, `created_at` |
+| 3 | `store_preferences` | Store and manager rules: alert rules, personalised greeting (briefing), batching constraint, incentive cap. | `id`, `store_id`, `manager_id`, `kind`, `payload`, `status`, `created_at` |
 | 4 | `handover_notes` | Free-text notes passed from one shift to the next. | `id`, `store_id`, `manager_id`, `shift`, `note`, `created_at` |
+| 5 | `suggestions` | Proposals from the background review (dreaming) for the manager to accept or dismiss. | `id`, `store_id`, `manager_id`, `kind`, `payload`, `reason`, `evidence`, `status`, `created_at` |
 | Parked | `resolution_notes` | Saved diagnoses (root cause, steps, outcome) for reuse. | `id`, `store_id`, `title`, `situation`, `root_cause`, `actions_taken`, `outcome`, `embedding`, `created_at` |
 
 ## Principles
@@ -39,6 +41,8 @@ Four new tables in the `app` schema for the MVP, plus one parked. The conversati
 5. Memory text is user-written data. The assistant treats it as reference, never as instructions.
 6. Everything is scoped to a store.
 7. Raw transcripts are not memory. The assistant recalls preferences and the last handover, not old chats.
+8. The background review proposes; it never applies. Only the manager turns a suggestion into a preference.
+9. The assistant never accepts an alert or greeting view it cannot compute from real data.
 
 ## 1. Conversation history
 
@@ -76,6 +80,7 @@ Handled elsewhere:
 | `manager_id` | text | the demo manager (Karthik) |
 | `summary` | text, nullable | see section 5 |
 | `summary_covers_to_id` | bigint, nullable | id of the last message included in the summary |
+| `reviewed_to_id` | bigint, nullable | id of the last message read by the background review (section 6) |
 | `created_at` | timestamptz | when the chat started |
 | `updated_at` | timestamptz | changes on every new message |
 | `ended_at` | timestamptz, nullable | set when a newer conversation starts; null for the current one |
@@ -135,7 +140,7 @@ Table `app.store_preferences`:
 | `id` | uuid | primary key |
 | `store_id` | text | scope |
 | `manager_id` | text | who set it |
-| `kind` | text | `alert_threshold`, `batching_constraint`, `incentive_cap` |
+| `kind` | text | `alert_rule`, `briefing`, `batching_constraint`, `incentive_cap` |
 | `payload` | jsonb | validated per kind (below) |
 | `status` | text | `active` or `superseded` |
 | `created_at` | timestamptz | |
@@ -144,15 +149,56 @@ Payloads:
 
 | Kind | Payload example |
 | --- | --- |
-| `alert_threshold` | `{"metric": "pending_orders_per_available_rider", "operator": ">", "value": 2, "window": {"days": ["sat", "sun"], "start": "19:00", "end": null}}` |
+| `alert_rule` | `{"when": {"metric": "is_raining", "op": "==", "value": true}, "trigger": "becomes_true"}` |
+| `alert_rule` | `{"when": {"metric": "rider_count", "filter": {"status": "offline_weather"}, "op": ">=", "value": 3}, "trigger": "while_true", "cooldown_min": 30}` |
+| `alert_rule` | `{"when": {"metric": "pending_orders_per_available_rider", "op": ">", "value": 2}, "trigger": "while_true", "cooldown_min": 15, "window": {"days": ["sat", "sun"], "start": "19:00", "end": null}}` |
+| `briefing` | `{"views": [{"view": "rider_stats"}, {"view": "order_queue"}, {"view": "oldest_order_age"}, {"view": "last_handover_note"}]}` |
 | `batching_constraint` | `{"rule": "never_batch", "item_class": "frozen", "with": "any"}` |
 | `incentive_cap` | `{"amount": 150, "currency": "INR", "per": "shift"}` |
 
 Times use Asia/Kolkata. A null `end` means until close; the store closing time is still undefined (see corpus README).
 
-Rules:
-- Only one active row per store, kind and logical key (the metric for thresholds, the item class for batching, one for the cap).
-- Saving a new value for the same key marks the old row `superseded`, after the manager confirms.
+### Alert rules
+
+An alert rule is a condition on a named metric, not a fixed threshold. The `trigger` says when it fires:
+- `becomes_true`: once, when the condition changes from false to true ("alert me when it starts raining").
+- `while_true`: whenever it holds, no more often than `cooldown_min` ("alert me when 3 or more riders are out").
+
+Rules are matched by code against live data, never by the LLM. How and when they are evaluated is pending a team discussion and is not designed here.
+
+### Briefing (personalised greeting)
+
+A briefing is the list of views the manager wants to see when they greet the assistant ("hi"). On a greeting, the assistant renders each configured view from live data with its "as of" time. A view whose data is unavailable is reported as unavailable; the assistant never fills in numbers.
+
+### Registries
+
+The model may only choose from registries kept in code. A rule or view outside them is rejected with a plain explanation and the closest supported alternative.
+
+| Metric (alert rules) | Source | Backed by current data |
+| --- | --- | --- |
+| `is_raining` | live status | Not yet. Only the hourly rain flag is stored |
+| `rider_count` (filter: `status`) | riders | Yes |
+| `pending_orders_per_available_rider` | orders, riders | Yes |
+| `oldest_order_age_min` | orders | Yes |
+| `max_hours_on_shift`, `max_minutes_since_last_break` | riders | Yes |
+
+Not supported today: speeding or other driving behavior (no data source), and riders "on leave" (no such status; the nearest are `offline`, `offline_weather` and `standby_off_shift`).
+
+| View (briefing) | Needs live tools |
+| --- | --- |
+| `rider_stats` | Yes |
+| `order_queue` | Yes |
+| `oldest_order_age` | Yes |
+| `last_handover_note` | No |
+
+### Scope and uniqueness
+
+| Kind | Scope | One active row per |
+| --- | --- | --- |
+| `alert_rule` | Store | store and metric (and filter) |
+| `batching_constraint` | Store | store and item class |
+| `incentive_cap` | Store | store |
+| `briefing` | Manager | store and manager |
 
 ### Validation against policy
 
@@ -160,7 +206,8 @@ Policy floors are code constants kept in sync with the corpus.
 
 | Kind | Allowed |
 | --- | --- |
-| `alert_threshold` | Value at or below the policy default (about 2 pending orders per available rider) |
+| `alert_rule` | Metric and filter must be in the registry. For `pending_orders_per_available_rider`, the value must be at or below the policy default (about 2). Other metrics have no policy floor |
+| `briefing` | Every view must be in the registry |
 | `batching_constraint` | Rules that add restrictions only; cannot allow frozen items to be batched |
 | `incentive_cap` | Any positive amount; no policy cap exists yet |
 
@@ -168,8 +215,8 @@ A looser preference is rejected and explained to the manager.
 
 ### Write path
 
-1. The manager writes something like "Remember: weekends after 7pm, alert above 2 orders per rider."
-2. An LLM call extracts it into the payload model using structured output.
+1. The manager writes something like "Remember: weekends after 7pm, alert above 2 orders per rider," "alert me when it starts raining," or "when I say hi, show rider stats and the order queue."
+2. An LLM call extracts it into the payload model using structured output, choosing only from the registries.
 3. Code validates it, including the policy check.
 4. If it replaces an active preference, ask the manager to confirm.
 5. Save it and reply with exactly what was stored. The manager can undo it.
@@ -227,6 +274,43 @@ A handover note drafted from a chat is generated on request and saved by the man
 
 Open question: is the limit a token budget or a message count?
 
+## 6. Dreaming (suggestions)
+
+A background review reads past conversations and proposes things the assistant should "know" about its manager. It proposes only. Nothing it finds is applied until the manager accepts it.
+
+What it looks for:
+- **Personalisation:** repeated requests that suggest a briefing ("you asked for rider stats at the start of most shifts").
+- **Alert rules:** repeated concerns that suggest an alert ("you asked about rain backlog three times").
+- **Insights:** observed patterns, as plain text ("backlogs repeat on Friday evenings"). These have nothing to apply and can only be read or dismissed.
+
+How it works:
+1. A run reads messages after each conversation's `reviewed_to_id` and then advances it, so each run only reads new messages.
+2. An LLM proposes candidates in the same payload shapes as section 2, chosen from the same registries.
+3. Code validates them exactly like manager-stated preferences, including policy floors and the minimum-occurrence rule below.
+4. Valid candidates are saved as `pending` rows in `suggestions`, each with the message ids that support it.
+5. The manager accepts or dismisses each one. Accepting writes a normal `store_preferences` row through the standard validated write path, and marks the suggestion `accepted`.
+
+Rules:
+- A candidate needs a minimum number of supporting occurrences before it is saved (value decided at implementation).
+- Stored text is user-written data. The review must not follow instructions found in it.
+- Suggestions go through the same safety checks as preferences, so it cannot propose anything unsafe.
+- Dismissed suggestions are not proposed again for the same evidence.
+- The MVP run is started manually (a CLI command or a UI button). Scheduling comes later.
+
+Table `app.suggestions`:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | uuid | primary key |
+| `store_id` | text | scope |
+| `manager_id` | text | who it is for |
+| `kind` | text | `alert_rule`, `briefing`, `batching_constraint`, `incentive_cap` or `insight` |
+| `payload` | jsonb | the proposed payload, or `{"text": ...}` for an insight |
+| `reason` | text | plain-language explanation shown to the manager |
+| `evidence` | jsonb | message ids that support it |
+| `status` | text | `pending`, `accepted` or `dismissed` |
+| `created_at` | timestamptz | |
+
 ## Parked: Resolution notes
 
 Not part of the current build. Kept here so the design is not lost.
@@ -258,13 +342,14 @@ Guardrails:
 
 | Path | Contents |
 | --- | --- |
-| `backend/database/models.py` | `Conversation`, `Message`, `StorePreference`, `HandoverNote` |
+| `backend/database/models.py` | `Conversation`, `Message`, `StorePreference`, `HandoverNote`, `Suggestion` |
 | `backend/alembic/versions/` | One migration per phase |
-| `backend/domain/memory.py` | Preference payload models |
+| `backend/domain/memory.py` | Preference payload models, metric and view registries |
 | `backend/queries/conversations.py` | Start conversation, add message, complete message, load latest, update summary, delete |
 | `backend/queries/preferences.py` | Database access for preferences and handover notes |
 | `backend/service/conversations.py` | Orchestration around the answer call |
 | `backend/service/memory.py` | Extraction, validation, conflict logic |
+| `backend/service/dreaming.py` | Background review: read new messages, propose, save suggestions |
 | `backend/ui/gradio_app.py` | Restore on load, save on each question |
 | `backend/tests/` | Tests for each of the above |
 
@@ -281,6 +366,15 @@ Preferences:
 - A preference stored in session 1 is applied in a new session without being repeated.
 - A conflicting request is flagged instead of overridden.
 - Record both transcripts as task 17 evidence.
+- An alert rule on an unknown metric or filter is rejected with an explanation.
+- A briefing with an unknown view is rejected.
+
+Dreaming:
+- A run reads only messages after `reviewed_to_id` and advances it.
+- A candidate with too few occurrences is not saved.
+- Suggestions are saved as `pending` and change no preference until accepted.
+- Accepting a suggestion creates a valid `store_preferences` row.
+- A suggestion that violates a policy floor or safety rule is not saved.
 
 ## Decisions
 
@@ -291,6 +385,9 @@ Preferences:
 5. A conversation has many messages (a message is one question and answer pair) and at most one summary, held as columns on `conversations`. No separate summaries table.
 6. A new conversation starts on first use, Clear chat, or a scenario load. No idle timeout and no status column; the latest by `updated_at` is the current one, and the previous one gets `ended_at`.
 7. MVP columns only. Deferred columns are listed below.
+8. Alerts are generic rules (`alert_rule`) over a metric registry. Alert evaluation and any fired-alert table are pending a team discussion.
+9. Personalised greeting is a `briefing` preference, per manager, built from a view registry.
+10. Dreaming is a suggest-only background review, backed by a `suggestions` table and `conversations.reviewed_to_id`.
 
 ## Deferred
 
@@ -301,9 +398,15 @@ Left out of the MVP on purpose, to add when needed:
 | `conversations` | `scenario_key` | Evals and reporting by scenario |
 | `messages` | `source`, `trace_id`, `meta` | Proactive alerts, trace events, token stats |
 | `store_preferences` | `superseded_by`, `source_text`, `message_id` | Audit trail |
+| `suggestions` | `accepted_at`, `preference_id` | Linking an accepted suggestion to the preference it created |
 
 ## Open decisions
 
 1. Include a UI to browse past conversations, or storage only for now?
 2. Conversation retention: keep forever for now, or set a limit?
 3. Summary limit: token budget or message count?
+4. Briefing trigger: greeting only (assumed), or also automatically on the first message of a new conversation?
+5. Dreaming: suggest-only (assumed, never auto-apply) and in this document (assumed), or a separate one?
+6. Where suggestions appear: a panel in the UI, or raised by the assistant at the start of a session?
+7. Alert evaluation, state for edge detection and any fired-alert table: pending the team discussion.
+8. Signals the data lacks (`is_raining` in the database, an `on_leave` status): add them, or limit the MVP to existing data?
