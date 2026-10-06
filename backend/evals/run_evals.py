@@ -13,6 +13,7 @@ from config import get_settings
 from domain.chat import ChatMessage
 from queries.vector_store import retrieve
 from service.corpus import CorpusService
+from service.document_parser import DoclingPdfParser
 from service.factory import (
     create_chunking_strategy,
     create_embedding_service,
@@ -64,8 +65,9 @@ def chunk_labels() -> dict[str, str]:
     """Map stored `DOC#index` IDs to the `DOC#section-slug` IDs used in the dataset."""
     documents, ids = CorpusService(
         CORPUS_DIR,
-        BACKEND_DIR.parent,
+        BACKEND_DIR,
         create_chunking_strategy(),
+        DoclingPdfParser(),
     ).load()
     labels, counts = {}, defaultdict[str, int](int)
     for document, label in zip(documents, ids, strict=True):
