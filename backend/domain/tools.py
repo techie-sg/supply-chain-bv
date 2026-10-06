@@ -1,6 +1,5 @@
 from pydantic import BaseModel, ConfigDict, Field
 
-
 # --- inputs ---
 
 class LiveStatusInput(BaseModel):

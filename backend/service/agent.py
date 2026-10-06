@@ -126,19 +126,19 @@ def _dispatch(call: dict) -> str:
                 "code": "UNKNOWN_TOOL",
                 "message": f"No tool named '{name}'.",
                 "details": {"available_tools": sorted(TOOL_REGISTRY)},
-            }
+            },
         })
     try:
         args = json.loads(call["function"]["arguments"] or "{}")
     except json.JSONDecodeError:
         return json.dumps({
-            "error": {"code": "INVALID_INPUT", "message": "Arguments were not valid JSON.", "details": {}}
+            "error": {"code": "INVALID_INPUT", "message": "Arguments were not valid JSON.", "details": {}},
         })
     try:
         result = TOOL_REGISTRY[name](**args)
     except TypeError as exc:
         return json.dumps({
-            "error": {"code": "INVALID_INPUT", "message": str(exc), "details": {}}
+            "error": {"code": "INVALID_INPUT", "message": str(exc), "details": {}},
         })
     return json.dumps(result, default=str)
 

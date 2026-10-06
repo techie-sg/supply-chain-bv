@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date as _date
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -128,10 +129,10 @@ def _weighted(rows: list, field: str) -> float | None:
 
 
 def get_delivery_metrics(
-    store_id: str, date: str, start_hour: int, end_hour: int
+    store_id: str, date: str, start_hour: int, end_hour: int,
 ) -> dict:
     try:
-        day = datetime.strptime(date, "%Y-%m-%d").date()
+        day = _date.fromisoformat(date)
     except ValueError:
         return _error(
             "INVALID_PERIOD",
@@ -151,12 +152,12 @@ def get_delivery_metrics(
     with Session(_engine) as session:
         store_rows = list(
             session.scalars(
-                select(HourlyMetric).where(HourlyMetric.store_id == store_id)
-            )
+                select(HourlyMetric).where(HourlyMetric.store_id == store_id),
+            ),
         )
         if not store_rows:
             known = sorted(
-                session.scalars(select(HourlyMetric.store_id).distinct())
+                session.scalars(select(HourlyMetric.store_id).distinct()),
             )
             return _error(
                 "UNKNOWN_STORE",
