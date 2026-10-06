@@ -332,7 +332,11 @@ def answer_question(
     """Route to the agent when a scenario is loaded, otherwise fall back to RAG."""
     scenario = current_scenario()
     if scenario:
-        return answer_with_tools(message, store_id=scenario["store_id"], history=history)
+        return answer_with_tools(
+            message,
+            store_id=scenario["store_id"],
+            history=history,
+        )
     return _answer_rag(message, history=history)
 
 

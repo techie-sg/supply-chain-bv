@@ -83,7 +83,9 @@ def get_live_dispatch_status(store_id: str) -> dict:
     packed_waiting = sum(1 for o in order_rows if o["status"] == "packed_waiting_rider")
     available = sum(1 for r in rider_rows if r["status"] == "available")
     returning = sum(
-        1 for r in rider_rows if r["eta_back_min"] is not None and r["eta_back_min"] <= 10
+        1
+        for r in rider_rows
+        if r["eta_back_min"] is not None and r["eta_back_min"] <= 10
     )
 
     return {
@@ -129,7 +131,10 @@ def _weighted(rows: list, field: str) -> float | None:
 
 
 def get_delivery_metrics(
-    store_id: str, date: str, start_hour: int, end_hour: int,
+    store_id: str,
+    date: str,
+    start_hour: int,
+    end_hour: int,
 ) -> dict:
     try:
         day = _date.fromisoformat(date)
@@ -177,9 +182,7 @@ def get_delivery_metrics(
             f"No hourly metrics for store '{store_id}' on {date} in that range. "
             f"Data exists for: {', '.join(available_dates)}.",
             available_dates=available_dates,
-            available_hours_on_date=sorted(
-                r.hour for r in store_rows if r.date == day
-            ),
+            available_hours_on_date=sorted(r.hour for r in store_rows if r.date == day),
         )
 
     returned = {r.hour for r in rows}
@@ -194,7 +197,9 @@ def get_delivery_metrics(
             "end_hour": end_hour,
             "hours_requested": end_hour - start_hour,
             "hours_returned": len(rows),
-            "hours_missing": [h for h in range(start_hour, end_hour) if h not in returned],
+            "hours_missing": [
+                h for h in range(start_hour, end_hour) if h not in returned
+            ],
         },
         "hourly": [
             {

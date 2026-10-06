@@ -2,6 +2,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # --- inputs ---
 
+
 class LiveStatusInput(BaseModel):
     model_config = ConfigDict(json_schema_extra={"additionalProperties": False})
 

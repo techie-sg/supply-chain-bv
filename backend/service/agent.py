@@ -88,6 +88,7 @@ TOOL_REGISTRY: dict[str, Any] = {
 # Result type
 # ---------------------------------------------------------------------------
 
+
 class AgentResult(dict):
     """Typed dict returned by run_agent."""
 
@@ -99,6 +100,7 @@ def _make_result(answer: str, trace: list[dict], llm_calls: int) -> AgentResult:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _call_llm(messages: list[dict], tools: list[dict]) -> dict:
     """One raw Groq chat/completions call. Returns the full response dict."""
@@ -121,25 +123,35 @@ def _dispatch(call: dict) -> str:
     """
     name = call["function"]["name"]
     if name not in TOOL_REGISTRY:
-        return json.dumps({
-            "error": {
-                "code": "UNKNOWN_TOOL",
-                "message": f"No tool named '{name}'.",
-                "details": {"available_tools": sorted(TOOL_REGISTRY)},
+        return json.dumps(
+            {
+                "error": {
+                    "code": "UNKNOWN_TOOL",
+                    "message": f"No tool named '{name}'.",
+                    "details": {"available_tools": sorted(TOOL_REGISTRY)},
+                },
             },
-        })
+        )
     try:
         args = json.loads(call["function"]["arguments"] or "{}")
     except json.JSONDecodeError:
-        return json.dumps({
-            "error": {"code": "INVALID_INPUT", "message": "Arguments were not valid JSON.", "details": {}},
-        })
+        return json.dumps(
+            {
+                "error": {
+                    "code": "INVALID_INPUT",
+                    "message": "Arguments were not valid JSON.",
+                    "details": {},
+                },
+            },
+        )
     try:
         result = TOOL_REGISTRY[name](**args)
     except TypeError as exc:
-        return json.dumps({
-            "error": {"code": "INVALID_INPUT", "message": str(exc), "details": {}},
-        })
+        return json.dumps(
+            {
+                "error": {"code": "INVALID_INPUT", "message": str(exc), "details": {}},
+            },
+        )
     return json.dumps(result, default=str)
 
 
@@ -155,7 +167,7 @@ def _build_messages(
         f"The current store_id is {store_id}."
     )
     messages: list[dict] = [{"role": "system", "content": system}]
-    for m in (history or []):
+    for m in history or []:
         messages.append({"role": m["role"], "content": m["content"]})
     messages.append({"role": "user", "content": question})
     return messages
@@ -178,7 +190,9 @@ def _trace_entry(step: int, call: dict, output: str) -> dict:
         "step": step,
         "tool": call["function"]["name"],
         "arguments": call["function"]["arguments"],
-        "error": parsed.get("error", {}).get("code") if isinstance(parsed, dict) else None,
+        "error": parsed.get("error", {}).get("code")
+        if isinstance(parsed, dict)
+        else None,
         "as_of": parsed.get("as_of") if isinstance(parsed, dict) else None,
     }
 
@@ -186,6 +200,7 @@ def _trace_entry(step: int, call: dict, output: str) -> dict:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def run_agent(
     question: str,

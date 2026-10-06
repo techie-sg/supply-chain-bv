@@ -22,6 +22,7 @@ TZ = ZoneInfo("Asia/Kolkata")
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_session(scalars_sequence: list) -> MagicMock:
     """Return a mock Session context manager that yields scalars in order."""
     session = MagicMock()
@@ -58,7 +59,11 @@ def _order(
     return obj
 
 
-def _rider(store_id: str = "S-1", rider_id: str = "R-1", status: str = "available") -> MagicMock:
+def _rider(
+    store_id: str = "S-1",
+    rider_id: str = "R-1",
+    status: str = "available",
+) -> MagicMock:
     obj = MagicMock(spec=Rider)
     obj.store_id = store_id
     obj.rider_id = rider_id
@@ -115,6 +120,7 @@ def _metric(
 # _iso helper
 # ---------------------------------------------------------------------------
 
+
 def test_iso_converts_datetime_to_aware_isoformat() -> None:
     dt = datetime(2026, 10, 3, 14, 0, tzinfo=ZoneInfo("UTC"))
     result = _iso(dt)
@@ -130,6 +136,7 @@ def test_iso_returns_none_for_none() -> None:
 # _weighted helper
 # ---------------------------------------------------------------------------
 
+
 def test_weighted_returns_none_when_total_orders_zero() -> None:
     rows = [_metric(orders=0)]
     assert _weighted(rows, "sla_10min_pct") is None
@@ -144,6 +151,7 @@ def test_weighted_computes_order_weighted_average() -> None:
 # ---------------------------------------------------------------------------
 # get_live_dispatch_status
 # ---------------------------------------------------------------------------
+
 
 def test_live_status_no_snapshot_when_empty_db() -> None:
     cm = _make_session([[], [], []])
@@ -200,6 +208,7 @@ def test_live_status_rider_returning_within_10_min() -> None:
 # ---------------------------------------------------------------------------
 # get_delivery_metrics
 # ---------------------------------------------------------------------------
+
 
 def test_delivery_metrics_invalid_date_format() -> None:
     result = get_delivery_metrics("S-1", "not-a-date", 8, 10)

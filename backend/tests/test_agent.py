@@ -19,6 +19,7 @@ from service.agent import (
 # AgentResult
 # ---------------------------------------------------------------------------
 
+
 def test_make_result_returns_agent_result_with_expected_keys() -> None:
     r = _make_result(answer="ok", trace=[], llm_calls=1)
     assert isinstance(r, AgentResult)
@@ -30,6 +31,7 @@ def test_make_result_returns_agent_result_with_expected_keys() -> None:
 # ---------------------------------------------------------------------------
 # _build_messages
 # ---------------------------------------------------------------------------
+
 
 def test_build_messages_structure() -> None:
     msgs = _build_messages("What is the queue?", "S-1", history=None)
@@ -51,6 +53,7 @@ def test_build_messages_includes_history() -> None:
 # ---------------------------------------------------------------------------
 # _dispatch
 # ---------------------------------------------------------------------------
+
 
 def test_dispatch_calls_registered_tool() -> None:
     called = {}
@@ -98,9 +101,12 @@ def test_dispatch_wrong_kwargs_returns_error() -> None:
 # run_agent
 # ---------------------------------------------------------------------------
 
+
 def _llm_answer(content: str) -> dict:
     return {
-        "choices": [{"message": {"role": "assistant", "content": content, "tool_calls": None}}],
+        "choices": [
+            {"message": {"role": "assistant", "content": content, "tool_calls": None}},
+        ],
     }
 
 
@@ -150,11 +156,21 @@ def test_run_agent_one_tool_call_then_answer() -> None:
 
 def test_run_agent_hits_max_steps() -> None:
     # Always returns a tool call — agent never finishes
-    with patch.object(
-        agent_mod,
-        "_call_llm",
-        return_value=_llm_tool_call("get_live_dispatch_status", {"store_id": "S-1"}),
-    ), patch.object(agent_mod, "_dispatch", return_value=json.dumps({"store_id": "S-1"})):
+    with (
+        patch.object(
+            agent_mod,
+            "_call_llm",
+            return_value=_llm_tool_call(
+                "get_live_dispatch_status",
+                {"store_id": "S-1"},
+            ),
+        ),
+        patch.object(
+            agent_mod,
+            "_dispatch",
+            return_value=json.dumps({"store_id": "S-1"}),
+        ),
+    ):
         result = run_agent("Loop forever", store_id="S-1", max_steps=2)
     assert "Stopped" in result["answer"]
     assert result["llm_calls"] == 2
@@ -163,6 +179,7 @@ def test_run_agent_hits_max_steps() -> None:
 # ---------------------------------------------------------------------------
 # answer_with_tools
 # ---------------------------------------------------------------------------
+
 
 def test_answer_with_tools_returns_answer_string() -> None:
     with patch.object(agent_mod, "_call_llm", return_value=_llm_answer("Done.")):
