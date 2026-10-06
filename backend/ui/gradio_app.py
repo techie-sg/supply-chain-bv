@@ -14,6 +14,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from domain.chat import ChatMessage
 from logging_config import configure_logging
+from service.agent import answer_with_tools
 from service.rag import answer_question
 from service.scenarios import (
     current_scenario,
@@ -334,7 +335,15 @@ def chat(
     request_id = uuid4().hex
     try:
         with structlog.contextvars.bound_contextvars(request_id=request_id):
-            answer = answer_question(message, history=_conversation_history(history))
+            scenario = current_scenario()
+            if scenario:
+                answer = answer_with_tools(
+                    message,
+                    store_id=scenario["store_id"],
+                    history=_conversation_history(history),
+                )
+            else:
+                answer = answer_question(message, history=_conversation_history(history))
     except (
         requests.RequestException,
         SQLAlchemyError,
