@@ -66,8 +66,21 @@ body { margin: 0; background: var(--desk-bg); }
 #composer-dock::before { content: ""; position: absolute; inset: -16px 0 -20px; background: linear-gradient(to bottom, transparent, var(--desk-bg) 16px); z-index: -1; pointer-events: none; }
 #message-composer, #chat-processing { width: 100% !important; margin: 0 !important; }
 #assistant-heading { justify-content: flex-end; align-items: center; gap: 16px; padding-bottom: 4px; }
-#clear-chat { font-size: 13px; min-height: 32px; border: none; background: transparent; color: var(--desk-muted); }
-#clear-chat:hover { background: var(--desk-soft); }
+#chat-sidebar { background: var(--desk-bg); border-right: 1px solid var(--desk-line); }
+#new-chat { justify-content: flex-start; min-height: 36px; margin-bottom: 18px; font-size: 13px; font-weight: 600; }
+.sidebar-heading { margin: 0 0 6px 10px; font-size: 11px; font-weight: 550; letter-spacing: .4px; color: var(--desk-muted); }
+#history-list { background: transparent !important; border: none !important; box-shadow: none !important; padding: 0 !important; }
+#history-list .wrap { display: flex; flex-direction: column; gap: 2px; }
+#history-list label { display: block !important; width: 100%; box-sizing: border-box; padding: 8px 10px; border: none !important; border-radius: 8px; background: transparent !important; color: var(--desk-muted) !important; font-size: 13px; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; box-shadow: none; }
+#history-list label:hover { background: var(--desk-soft) !important; color: var(--desk-ink) !important; }
+#history-list label.selected, #history-list label:has(input:checked) { background: var(--desk-tint) !important; color: var(--desk-ink) !important; font-weight: 600; }
+/* Leave room for the sidebar toggle when the sidebar is closed. */
+.column:has(> #chat-sidebar:not(.open)) .desk-header .brand { margin-left: 36px; }
+@media (min-width: 769px) {
+  /* The composer is fixed to the window, so keep it centred beside the open sidebar. */
+  .column:has(> #chat-sidebar.open) #composer-dock { left: calc(50% + 136px); width: calc(80% - 272px) !important; }
+}
+#history-list input[type="radio"] { display: none; }
 #conversation { border-width: 0 !important; background: transparent; padding: 0; box-shadow: none; border-radius: 0; height: auto !important; overflow: visible !important; }
 #conversation .wrapper, #conversation .bubble-wrap { height: auto !important; max-height: none !important; overflow: visible !important; }
 #conversation [data-testid="status-tracker"] { display: none !important; }
@@ -165,7 +178,6 @@ body { margin: 0; background: var(--desk-bg); }
   .page-heading h1 { font-size: 27px; }
   #data-panel { padding: 16px 13px; border-radius: 12px; gap: 13px; }
   #assistant-heading { flex-wrap: nowrap; gap: 8px; }
-  #clear-chat { min-width: 65px !important; font-size: 10px; padding: 5px; }
   #conversation .chat-welcome h1 { font-size: 24px; }
   #starter-prompts { grid-template-columns: 1fr; gap: 8px; }
   #starter-prompts .prompt-button { width: 100%; text-align: left; font-size: 12px; padding: 12px; }

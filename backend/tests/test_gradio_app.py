@@ -46,10 +46,15 @@ def test_loading_uses_service_and_clears_chat_only_on_success(monkeypatch) -> No
         return context
 
     monkeypatch.setattr(gradio_app, "load_scenario", load)
+    monkeypatch.setattr(
+        gradio_app,
+        "start_new_conversation",
+        lambda: called.append("new conversation"),
+    )
     current, history, draft, summary, *tables = gradio_app.load_selected_scenario(
         "backlog",
     )
-    assert called == ["backlog"]
+    assert called == ["backlog", "new conversation"]
     assert current == context and len(tables) == 4
     assert context["title"] in summary
     assert history == [] and draft == ""
@@ -61,6 +66,19 @@ def test_loading_uses_service_and_clears_chat_only_on_success(monkeypatch) -> No
     with pytest.raises(gr.Error, match="Scenario could not be loaded") as error:
         gradio_app.load_selected_scenario("rain")
     assert "internal connection details" not in str(error.value)
+    assert called == ["backlog", "new conversation"]
+
+
+def test_loaded_scenario_survives_a_conversation_start_failure(monkeypatch) -> None:
+    context = scenarios.scenario_details("backlog")
+    monkeypatch.setattr(gradio_app, "load_scenario", lambda key: context)
+
+    def unavailable():
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(gradio_app, "start_new_conversation", unavailable)
+    current, history, *_ = gradio_app.load_selected_scenario("backlog")
+    assert current == context and history == []
 
 
 def test_invalid_preview_has_friendly_error() -> None:
@@ -140,10 +158,10 @@ def test_refresh_updates_current_data_without_touching_chat(monkeypatch) -> None
 def test_chat_failure_preserves_existing_history(monkeypatch) -> None:
     history = [{"role": "user", "content": "earlier question"}]
 
-    def fail(message, *, history):
+    def fail(message):
         raise RuntimeError("internal API details")
 
-    monkeypatch.setattr(gradio_app, "answer_question", fail)
+    monkeypatch.setattr(gradio_app, "ask_question", fail)
     with pytest.raises(gr.Error, match="assistant is unavailable") as error:
         gradio_app.chat("new question", history)
     assert history == [{"role": "user", "content": "earlier question"}]
@@ -155,18 +173,18 @@ def test_reply_uses_pending_message_once_and_keeps_previous_history(
 ) -> None:
     calls = []
 
-    def answer(question, *, history):
-        calls.append((question, history))
+    def answer(question):
+        calls.append(question)
         return "reply"
 
-    monkeypatch.setattr(gradio_app, "answer_question", answer)
+    monkeypatch.setattr(gradio_app, "ask_question", answer)
     previous = [
         {"role": "user", "content": "Earlier question"},
         {"role": "assistant", "content": "Earlier reply"},
     ]
     pending = previous + [{"role": "user", "content": "Follow-up"}]
     finished, draft = next(gradio_app.respond_to_pending("Follow-up", pending))
-    assert calls == [("Follow-up", previous)]
+    assert calls == ["Follow-up"]
     assert finished == pending + [{"role": "assistant", "content": "reply"}]
     assert draft == ""
     assert len(previous) == 2
@@ -175,10 +193,10 @@ def test_reply_uses_pending_message_once_and_keeps_previous_history(
 def test_failed_generation_restores_draft_without_duplicate_user_message(
     monkeypatch,
 ) -> None:
-    def fail(question, *, history):
+    def fail(question):
         raise RuntimeError("provider unavailable")
 
-    monkeypatch.setattr(gradio_app, "answer_question", fail)
+    monkeypatch.setattr(gradio_app, "ask_question", fail)
     previous = [{"role": "assistant", "content": "Earlier reply"}]
     pending = previous + [{"role": "user", "content": "Try this"}]
     stream = gradio_app.respond_to_pending("Try this", pending)
@@ -187,23 +205,30 @@ def test_failed_generation_restores_draft_without_duplicate_user_message(
         next(stream)
 
 
-def test_chat_passes_question_and_history_without_reading_scenario_data(
+def test_chat_passes_only_the_question_without_reading_scenario_data(
     monkeypatch,
 ) -> None:
     seen = []
 
-    def answer(question, *, history):
-        seen.append((question, history))
+    def answer(question):
+        seen.append(question)
         return "reply"
 
     def no_scenario(*args, **kwargs):
         raise AssertionError("Chat must not read scenario data")
 
-    monkeypatch.setattr(gradio_app, "answer_question", answer)
+    monkeypatch.setattr(gradio_app, "ask_question", answer)
     monkeypatch.setattr(gradio_app, "current_scenario", no_scenario)
-    history, _ = gradio_app.chat("What should we do?", [])
-    assert seen == [("What should we do?", [])]
-    assert history[-1]["content"] == "reply"
+    earlier = [
+        {"role": "user", "content": "Earlier"},
+        {"role": "assistant", "content": "Earlier reply"},
+    ]
+    history, _ = gradio_app.chat("What should we do?", earlier)
+    assert seen == ["What should we do?"]
+    assert history == earlier + [
+        {"role": "user", "content": "What should we do?"},
+        {"role": "assistant", "content": "reply"},
+    ]
 
 
 def test_chat_callbacks_receive_no_scenario_state() -> None:
@@ -246,48 +271,115 @@ def test_processing_indicator_clears_after_success_or_failure() -> None:
         assert not callback.trigger_only_on_failure
 
 
-def test_follow_up_uses_gradio_history_and_new_session_starts_empty(
-    monkeypatch,
-) -> None:
-    seen = []
-
-    def answer(question, *, history):
-        seen.append((question, history))
-        return "No. Safety comes first."
-
-    monkeypatch.setattr(gradio_app, "answer_question", answer)
-    first_history, _ = gradio_app.chat("Should riders jump red lights?", [])
-    chatbot = next(
-        item for item in gradio_app.app.blocks.values() if isinstance(item, gr.Chatbot)
+def test_page_load_restores_the_stored_conversation(monkeypatch) -> None:
+    stored = [
+        {"role": "user", "content": "Should riders jump red lights?"},
+        {"role": "assistant", "content": "No. Safety comes first."},
+    ]
+    monkeypatch.setattr(gradio_app, "conversation_history", lambda: stored)
+    assert gradio_app.restore_chat() == stored
+    assert any(
+        callback.fn is gradio_app.restore_chat
+        and any(isinstance(component, gr.Chatbot) for component in callback.outputs)
+        for callback in gradio_app.app.fns.values()
     )
-    payload = chatbot.postprocess(
-        [
-            gr.ChatMessage(role=message["role"], content=message["content"])
-            for message in first_history
+
+
+def test_page_load_starts_empty_when_storage_is_unavailable(monkeypatch) -> None:
+    def unavailable():
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(gradio_app, "conversation_history", unavailable)
+    assert gradio_app.restore_chat() == []
+
+
+def test_sidebar_lists_past_chats_and_marks_the_open_one(monkeypatch) -> None:
+    from uuid import uuid4
+
+    open_id, other_id = uuid4(), uuid4()
+    monkeypatch.setattr(
+        gradio_app,
+        "past_conversations",
+        lambda: [
+            {
+                "id": open_id,
+                "first_question": "  Orders are backing up,\nwhat should I do "
+                "first and who should I call in?",
+            },
+            {"id": other_id, "first_question": "Rain plan?"},
         ],
     )
-    browser_history = [dict(message) for message in chatbot.preprocess(payload)]
-    follow_up_history, _ = gradio_app.chat("Why?", browser_history)
-    assert seen[1] == (
-        "Why?",
-        [
-            {"role": "user", "content": "Should riders jump red lights?"},
-            {"role": "assistant", "content": "No. Safety comes first."},
-        ],
+    monkeypatch.setattr(gradio_app, "current_conversation_id", lambda: str(open_id))
+    update = gradio_app.conversation_choices()
+    (title, value), other = update["choices"]
+    assert value == str(open_id) and update["value"] == str(open_id)
+    assert title == "Orders are backing up, what should I do…"
+    assert other == ("Rain plan?", str(other_id))
+
+    # A new, empty chat is current but not listed, so nothing is marked.
+    monkeypatch.setattr(gradio_app, "current_conversation_id", lambda: "new-chat")
+    assert gradio_app.conversation_choices()["value"] is None
+
+    def unavailable():
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(gradio_app, "past_conversations", unavailable)
+    assert gradio_app.conversation_choices()["choices"] == []
+
+
+def test_opening_a_past_conversation_shows_and_continues_it(monkeypatch) -> None:
+    opened = []
+
+    def resume(conversation_id):
+        opened.append(conversation_id)
+        return [{"role": "user", "content": "Rain plan?"}]
+
+    monkeypatch.setattr(gradio_app, "resume_past_conversation", resume)
+    assert gradio_app.open_conversation("abc") == (
+        [{"role": "user", "content": "Rain plan?"}],
+        "",
     )
-    assert len(follow_up_history) == 4
-    gradio_app.chat("A new conversation", [])
-    assert seen[-1] == ("A new conversation", [])
+    assert opened == ["abc"]
+    skipped = gradio_app.open_conversation(None)
+    assert all(item == gr.skip() for item in skipped)
+
+    def missing(conversation_id):
+        raise LookupError("private detail")
+
+    monkeypatch.setattr(gradio_app, "resume_past_conversation", missing)
+    with pytest.raises(gr.Error, match="Could not open that conversation") as error:
+        gradio_app.open_conversation("abc")
+    assert "private detail" not in str(error.value)
+    picker = next(
+        item
+        for item in gradio_app.app.blocks.values()
+        if isinstance(item, gr.Radio) and item.elem_id == "history-list"
+    )
+    assert any(
+        callback.fn is gradio_app.open_conversation
+        and (picker._id, "input") in callback.targets
+        for callback in gradio_app.app.fns.values()
+    )
+
+
+def test_clear_chat_failure_keeps_the_conversation(monkeypatch) -> None:
+    def unavailable():
+        raise RuntimeError("private connection information")
+
+    monkeypatch.setattr(gradio_app, "start_new_conversation", unavailable)
+    with pytest.raises(gr.Error, match="Could not start a new chat") as error:
+        gradio_app.clear_chat()
+    assert "private connection information" not in str(error.value)
 
 
 def test_chat_preserves_nonblank_message_whitespace(monkeypatch) -> None:
     seen = []
 
-    def answer(question, *, history):
+    def answer(question):
         seen.append(question)
         return "reply"
 
-    monkeypatch.setattr(gradio_app, "answer_question", answer)
+    monkeypatch.setattr(gradio_app, "ask_question", answer)
     message = "  Should riders speed?\n"
     history, draft = gradio_app.chat(message, [])
     assert seen == [message]
@@ -297,11 +389,17 @@ def test_chat_preserves_nonblank_message_whitespace(monkeypatch) -> None:
     assert seen == [message]
 
 
-def test_clear_chat_waits_for_outstanding_workspace_callbacks() -> None:
+def test_new_chat_waits_for_outstanding_workspace_callbacks(monkeypatch) -> None:
+    started = []
+    monkeypatch.setattr(
+        gradio_app,
+        "start_new_conversation",
+        lambda: started.append(True),
+    )
     clear = next(
         item
         for item in gradio_app.app.blocks.values()
-        if isinstance(item, gr.Button) and item.elem_id == "clear-chat"
+        if isinstance(item, gr.Button) and item.elem_id == "new-chat"
     )
     callback = next(
         callback
@@ -312,7 +410,9 @@ def test_clear_chat_waits_for_outstanding_workspace_callbacks() -> None:
     assert callback.concurrency_id == "workspace"
     assert callback.concurrency_limit == 1
     assert callback.fn is not None
+    assert callback.fn is gradio_app.clear_chat
     assert callback.fn() == ([], "")
+    assert started == [True]
     assert all(
         chat_callback.queue
         and chat_callback.concurrency_id == callback.concurrency_id
@@ -333,7 +433,9 @@ def test_unavailable_scenarios_do_not_prevent_assistant_startup(
     monkeypatch.setattr(gradio_app, "scenario_names", unavailable)
     app = gradio_app.build_app()
     dropdown = next(
-        item for item in app.blocks.values() if isinstance(item, gr.Dropdown)
+        item
+        for item in app.blocks.values()
+        if isinstance(item, gr.Dropdown) and item.elem_id == "scenario-picker"
     )
     load = next(
         item
@@ -360,7 +462,9 @@ def test_unavailable_scenarios_do_not_prevent_assistant_startup(
 
 def test_dropdown_lists_all_scenarios_and_handles_empty_inventory(monkeypatch) -> None:
     dropdown = next(
-        item for item in gradio_app.app.blocks.values() if isinstance(item, gr.Dropdown)
+        item
+        for item in gradio_app.app.blocks.values()
+        if isinstance(item, gr.Dropdown) and item.elem_id == "scenario-picker"
     )
     assert {key for _, key in dropdown.choices} == {
         item["key"] for item in scenarios.scenario_names()
@@ -369,7 +473,9 @@ def test_dropdown_lists_all_scenarios_and_handles_empty_inventory(monkeypatch) -
     monkeypatch.setattr(gradio_app, "scenario_names", list)
     empty_app = gradio_app.build_app()
     empty_dropdown = next(
-        item for item in empty_app.blocks.values() if isinstance(item, gr.Dropdown)
+        item
+        for item in empty_app.blocks.values()
+        if isinstance(item, gr.Dropdown) and item.elem_id == "scenario-picker"
     )
     assert empty_dropdown.value is None and not empty_dropdown.interactive
 
