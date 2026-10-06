@@ -92,3 +92,16 @@ def test_sweep_maps_fixed_chunks_to_overlapped_sections():
         {"D#beta"},  # only 50 chars of Alpha One: below MIN_OVERLAP
         {"D#beta"},
     ]
+
+
+def test_sweep_budget_scores_only_count_chunks_that_fit():
+    from evals.sweep import budget_scores
+
+    ranked = [{"x"}, {"a"}, {"b"}]
+    scores = budget_scores(["a", "b"], ["b"], ranked, [300, 300, 300], budget=600)
+    assert scores == {"hit@budget": 0.0, "recall@budget": 0.5, "budget_chunks": 2}
+    # An oversized first chunk still counts, alone.
+    assert (
+        budget_scores(["a"], ["a"], [{"a"}, {"b"}], [900, 10], 600)["budget_chunks"]
+        == 1
+    )

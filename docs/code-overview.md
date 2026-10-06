@@ -92,10 +92,10 @@ Dependency direction is `ui -> service -> queries -> database`, with `domain` an
 
 ### 5.5 Embedding sweep (`uv run python -m evals.sweep`, new)
 1. Retrieval only. It never calls Groq, and it searches **in memory** (numpy cosine), so the database is untouched. It matches pgvector within one question (hit@1 0.413 vs 0.397, MRR 0.547 vs 0.542).
-2. Grid (192 rows): chunking (`sections`, `fixed-{400,800,1600,3200}` characters with 0 or 1/8 overlap) × v5-nano with and without task adapters, plus models v5-text-small, v4 and v3 on sections, with and without adapters. Each one is also scored at Matryoshka dims 512/256/128 and as sign-only binary, computed locally from the float vectors.
+2. Grid (192 rows): chunking (`sections`, `fixed-{400,800,1600,3200}` characters with 0 or 1/8 overlap) × v5-nano with and without task adapters, plus models v5-text-small, v4 and v3 on sections, with and without adapters. Each one is also scored at Matryoshka dims 512/256/128 and as sign-only binary, computed locally from the float vectors. Every row reports per-k metrics plus **equal-context** metrics (`hit@budget`, `recall@budget`): the top-ranked chunks that fit in 4,000 characters (`BUDGET`, `budget_scores()`), so chunk sizes are compared on what actually reaches the LLM.
 3. Jina embeddings are cached in `evals/.embed_cache.json`, keyed by model, task and text, so re-runs and crashes don't re-bill.
 4. It writes `evals/sweep-results.csv`. Results, commands and all eval queries are in [evals-embedding-chunking.md](../backend/evals/evals-embedding-chunking.md).
-5. Key results: task adapters lift every setup (v5-nano + sections: hit@3 0.683 → 0.825, MRR 0.547 → 0.664). Bigger models are within noise of v5-nano once adapters are on. Truncating or binarizing vectors loses quality. fixed-1600-0 + adapters is best on retrieval (MRR 0.734), at about twice the context of sections.
+5. Key results: task adapters lift every setup (v5-nano + sections: hit@3 0.683 → 0.825, MRR 0.547 → 0.664). Bigger models are within noise of v5-nano once adapters are on. Truncating or binarizing vectors loses quality. fixed-1600-0 + adapters leads per 3 chunks (MRR 0.734), but only because each chunk covers about 2.3 sections and twice the text. At equal context, sections + adapters wins (recall@budget 0.771 vs 0.651), so section chunking stays.
 
 ## 6. What is good
 
@@ -145,7 +145,7 @@ Dependency direction is `ui -> service -> queries -> database`, with `domain` an
 | N9 | **Groq's free tier can't finish one full judged run per day.** The 200k tokens/day limit on `gpt-oss-20b` ran out after one full run plus 28 questions; bigger chunks use more tokens per answer. | Judged comparisons take days, or are skipped. | Resume with `--answers` across days, judge a subset of categories, or use a paid tier. Retrieval-only evals don't need Groq. |
 | N10 | **Empty answers recur.** EVAL-033 and EVAL-036 came back empty in the PDF baseline judged run and count as fails. | Inflates the failure rate, and hides real behavior. | Log the raw Groq response (finish reason, reasoning tokens) for empty outputs; retry once, or raise the token limit. |
 | N11 | **The judged pass rate fell from 0.80 to 0.677**, with safety the weakest (0.42). Two changes landed together, the PDF corpus and the Scope prompt, so the cause isn't known. | It may be a regression in safety answers. | Re-run the judge with the old prompt on the PDF corpus to separate the two causes. |
-| N12 | **Fixed-size scoring favours large chunks.** A 3200-character chunk gets credit for every section it overlaps, and the top 3 covers about a quarter of the corpus. | Retrieval metrics alone would pick oversized chunks. | Judge answers on the top candidates (sections + task, fixed-1600 + task) before changing chunking; report `top3_chars` alongside the scores. |
+| N12 | **Addressed. Per-k metrics favoured large chunks.** A fixed-1600 chunk covers 2.3 sections on average, so its top 3 was credited with ~6.5 sections vs 3, and even random hit@3 is 0.213 vs 0.089. This made fixed-1600 look better than sections. | It would have led to the wrong chunking choice. | Done: the sweep now reports equal-context `hit@budget`/`recall@budget` (4,000 chars), which shows sections + adapters ahead. Compare chunk sizes on these, not on per-k metrics. |
 
 ## 8. Gap versus requirements (what is still to build)
 
@@ -161,7 +161,7 @@ Mapped to [tasks.md](initial/tasks.md):
 ## 9. Recommended next steps
 
 1. **Switch on task adapters (N7):** set `EMBEDDING_TASK_ADAPTERS=true` and re-ingest; record the ingest settings (N8) at the same time.
-2. **Finish the judged comparison:** sections + task vs fixed-1600-0 + task, resuming with `--answers` around the Groq limit (N9). Fix empty answers first (N10), and separate the cause of the pass-rate drop (N11).
+2. **Finish the judged comparison:** sections + task at the app's `top_k=3` vs `top_k=6` (more context without bigger chunks), resuming with `--answers` around the Groq limit (N9). Fix empty answers first (N10), and separate the cause of the pass-rate drop (N11).
 3. **Decide F2** now that the live demo is linked publicly.
 4. **Trim the deploy (N2, F5):** move Docling/torch to an ingest-only group and drop or regenerate `requirements.txt`.
 5. **Speed up tests (N3):** parse the PDF corpus once per test session and cache the model in CI.

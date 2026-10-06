@@ -29,6 +29,9 @@ Run date: 2026-10-06, PDF corpus (7 documents).
 - **recall@k:** share of a question's expected sections found in the top k,
   averaged over questions.
 - **MRR:** mean of 1 / rank of the first must-find section (0 if not in top 5).
+- **hit@budget / recall@budget:** hit and recall over the top-ranked chunks
+  that fit in 4,000 characters (at least one chunk). Use these to compare
+  chunk sizes fairly; per-k metrics give big chunks more text per slot.
 
 One question moves a metric by 0.016, so treat gaps under ~0.05 as noise.
 
@@ -101,41 +104,47 @@ The in-memory sweep scores this setup within one question of pgvector
 
 ## 2. Chunk size (v5-nano, full float vectors)
 
-`top3_chars` = average characters in the top-3 context, a proxy for prompt cost.
+Two views. **Per k chunks** (hit@k, recall@k, MRR) favours big chunks: a
+fixed-1600 chunk covers 2.3 sections on average, so its top 3 is credited
+with ~6.5 sections versus 3 for section chunks. **Equal context**
+(`hit@budget`, `recall@budget`) scores the top-ranked chunks that fit in
+4,000 characters, which is what actually reaches the LLM. `budget_chunks` is
+how many fit, on average. `top3_chars` is the average size of the top-3
+context.
 
-| chunking | task_adapters | chunks | avg_chunk_chars | hit@1 | hit@3 | hit@5 | recall@1 | recall@3 | recall@5 | MRR | top3_chars |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| fixed-400-0 | no | 67 | 436 | 0.397 | 0.667 | 0.730 | 0.294 | 0.501 | 0.582 | 0.530 | 1365 |
-| fixed-400-50 | no | 73 | 451 | 0.444 | 0.714 | 0.762 | 0.328 | 0.560 | 0.616 | 0.580 | 1378 |
-| fixed-800-0 | no | 35 | 776 | 0.524 | 0.730 | 0.825 | 0.398 | 0.595 | 0.704 | 0.636 | 2333 |
-| fixed-800-100 | no | 39 | 784 | 0.492 | 0.730 | 0.762 | 0.378 | 0.577 | 0.643 | 0.605 | 2407 |
-| sections | no | 37 | 648 | 0.413 | 0.683 | 0.746 | 0.325 | 0.579 | 0.631 | 0.547 | 1630 |
-| fixed-1600-0 | no | 20 | 1309 | 0.508 | 0.762 | 0.841 | 0.360 | 0.601 | 0.733 | 0.632 | 3750 |
-| fixed-1600-200 | no | 20 | 1438 | 0.444 | 0.762 | 0.857 | 0.352 | 0.587 | 0.757 | 0.620 | 4277 |
-| fixed-3200-0 | no | 12 | 2137 | 0.349 | 0.794 | 0.873 | 0.286 | 0.664 | 0.824 | 0.573 | 5559 |
-| fixed-3200-400 | no | 12 | 2304 | 0.397 | 0.794 | 0.873 | 0.317 | 0.667 | 0.827 | 0.600 | 6524 |
-| fixed-400-0 | yes | 67 | 436 | 0.492 | 0.730 | 0.825 | 0.381 | 0.599 | 0.684 | 0.625 | 1359 |
-| fixed-400-50 | yes | 73 | 451 | 0.444 | 0.778 | 0.841 | 0.336 | 0.594 | 0.684 | 0.610 | 1365 |
-| fixed-800-0 | yes | 35 | 776 | 0.603 | 0.762 | 0.841 | 0.434 | 0.610 | 0.733 | 0.688 | 2446 |
-| fixed-800-100 | yes | 39 | 784 | 0.556 | 0.778 | 0.841 | 0.415 | 0.623 | 0.709 | 0.671 | 2502 |
-| sections | yes | 37 | 648 | 0.508 | 0.825 | 0.873 | 0.370 | 0.676 | 0.765 | 0.664 | 2111 |
-| fixed-1600-0 | yes | 20 | 1309 | 0.619 | 0.857 | 0.873 | 0.459 | 0.712 | 0.813 | 0.734 | 4221 |
-| fixed-1600-200 | yes | 20 | 1438 | 0.587 | 0.857 | 0.889 | 0.459 | 0.728 | 0.837 | 0.723 | 4375 |
-| fixed-3200-0 | yes | 12 | 2137 | 0.683 | 0.889 | 0.905 | 0.508 | 0.802 | 0.890 | 0.771 | 7205 |
-| fixed-3200-400 | yes | 12 | 2304 | 0.619 | 0.873 | 0.905 | 0.484 | 0.807 | 0.874 | 0.735 | 7154 |
+| chunking | task_adapters | chunks | hit@1 | hit@3 | hit@5 | recall@1 | recall@3 | recall@5 | MRR | hit@budget | recall@budget | budget_chunks | top3_chars |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| fixed-400-0 | no | 67 | 0.397 | 0.667 | 0.730 | 0.294 | 0.501 | 0.582 | 0.530 | 0.810 | 0.696 | 8.2 | 1365 |
+| fixed-400-50 | no | 73 | 0.444 | 0.714 | 0.762 | 0.328 | 0.560 | 0.616 | 0.580 | 0.857 | 0.725 | 8.1 | 1378 |
+| fixed-800-0 | no | 35 | 0.524 | 0.730 | 0.825 | 0.398 | 0.595 | 0.704 | 0.636 | 0.810 | 0.688 | 4.6 | 2333 |
+| fixed-800-100 | no | 39 | 0.492 | 0.730 | 0.762 | 0.378 | 0.577 | 0.643 | 0.605 | 0.762 | 0.635 | 4.5 | 2407 |
+| sections | no | 37 | 0.413 | 0.683 | 0.746 | 0.325 | 0.579 | 0.631 | 0.547 | 0.794 | 0.708 | 6.8 | 1630 |
+| fixed-1600-0 | no | 20 | 0.508 | 0.762 | 0.841 | 0.360 | 0.601 | 0.733 | 0.632 | 0.778 | 0.601 | 2.8 | 3750 |
+| fixed-1600-200 | no | 20 | 0.444 | 0.762 | 0.857 | 0.352 | 0.587 | 0.757 | 0.620 | 0.730 | 0.556 | 2.2 | 4277 |
+| fixed-3200-0 | no | 12 | 0.349 | 0.794 | 0.873 | 0.286 | 0.664 | 0.824 | 0.573 | 0.667 | 0.519 | 2.0 | 5559 |
+| fixed-3200-400 | no | 12 | 0.397 | 0.794 | 0.873 | 0.317 | 0.667 | 0.827 | 0.600 | 0.476 | 0.381 | 1.4 | 6524 |
+| fixed-400-0 | yes | 67 | 0.492 | 0.730 | 0.825 | 0.381 | 0.599 | 0.684 | 0.625 | 0.841 | 0.749 | 8.2 | 1359 |
+| fixed-400-50 | yes | 73 | 0.444 | 0.778 | 0.841 | 0.336 | 0.594 | 0.684 | 0.610 | 0.873 | 0.771 | 8.1 | 1365 |
+| fixed-800-0 | yes | 35 | 0.603 | 0.762 | 0.841 | 0.434 | 0.610 | 0.733 | 0.688 | 0.841 | 0.684 | 4.4 | 2446 |
+| fixed-800-100 | yes | 39 | 0.556 | 0.778 | 0.841 | 0.415 | 0.623 | 0.709 | 0.671 | 0.825 | 0.656 | 4.2 | 2502 |
+| sections | yes | 37 | 0.508 | 0.825 | 0.873 | 0.370 | 0.676 | 0.765 | 0.664 | 0.873 | 0.771 | 5.5 | 2111 |
+| fixed-1600-0 | yes | 20 | 0.619 | 0.857 | 0.873 | 0.459 | 0.712 | 0.813 | 0.734 | 0.857 | 0.651 | 2.4 | 4221 |
+| fixed-1600-200 | yes | 20 | 0.587 | 0.857 | 0.889 | 0.459 | 0.728 | 0.837 | 0.723 | 0.841 | 0.651 | 2.1 | 4375 |
+| fixed-3200-0 | yes | 12 | 0.683 | 0.889 | 0.905 | 0.508 | 0.802 | 0.890 | 0.771 | 0.683 | 0.532 | 1.5 | 7205 |
+| fixed-3200-400 | yes | 12 | 0.619 | 0.873 | 0.905 | 0.484 | 0.807 | 0.874 | 0.735 | 0.635 | 0.500 | 1.2 | 7154 |
 
 ## 3. Embedding model (sections chunking, full float vectors)
 
-| model | task_adapters | dims | hit@1 | hit@3 | hit@5 | recall@1 | recall@3 | recall@5 | MRR |
-|---|---|---|---|---|---|---|---|---|---|
-| v5-text-nano | no | 768 | 0.413 | 0.683 | 0.746 | 0.325 | 0.579 | 0.631 | 0.547 |
-| v5-text-nano | yes | 768 | 0.508 | 0.825 | 0.873 | 0.370 | 0.676 | 0.765 | 0.664 |
-| v5-text-small | no | 1024 | 0.413 | 0.762 | 0.841 | 0.352 | 0.643 | 0.729 | 0.585 |
-| v5-text-small | yes | 1024 | 0.476 | 0.810 | 0.857 | 0.357 | 0.644 | 0.755 | 0.643 |
-| v4 | no | 2048 | 0.508 | 0.810 | 0.873 | 0.384 | 0.683 | 0.782 | 0.664 |
-| v4 | yes | 2048 | 0.556 | 0.794 | 0.857 | 0.390 | 0.663 | 0.775 | 0.678 |
-| v3 | no | 1024 | 0.413 | 0.667 | 0.794 | 0.339 | 0.557 | 0.712 | 0.559 |
-| v3 | yes | 1024 | 0.508 | 0.683 | 0.746 | 0.372 | 0.595 | 0.701 | 0.596 |
+| model | task_adapters | dims | hit@1 | hit@3 | hit@5 | recall@1 | recall@3 | recall@5 | MRR | hit@budget | recall@budget | budget_chunks |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| v5-text-nano | no | 768 | 0.413 | 0.683 | 0.746 | 0.325 | 0.579 | 0.631 | 0.547 | 0.794 | 0.708 | 6.8 |
+| v5-text-nano | yes | 768 | 0.508 | 0.825 | 0.873 | 0.370 | 0.676 | 0.765 | 0.664 | 0.873 | 0.771 | 5.5 |
+| v5-text-small | no | 1024 | 0.413 | 0.762 | 0.841 | 0.352 | 0.643 | 0.729 | 0.585 | 0.857 | 0.753 | 5.7 |
+| v5-text-small | yes | 1024 | 0.476 | 0.810 | 0.857 | 0.357 | 0.644 | 0.755 | 0.643 | 0.857 | 0.762 | 5.5 |
+| v4 | no | 2048 | 0.508 | 0.810 | 0.873 | 0.384 | 0.683 | 0.782 | 0.664 | 0.873 | 0.779 | 5.7 |
+| v4 | yes | 2048 | 0.556 | 0.794 | 0.857 | 0.390 | 0.663 | 0.775 | 0.678 | 0.857 | 0.799 | 5.5 |
+| v3 | no | 1024 | 0.413 | 0.667 | 0.794 | 0.339 | 0.557 | 0.712 | 0.559 | 0.810 | 0.728 | 5.6 |
+| v3 | yes | 1024 | 0.508 | 0.683 | 0.746 | 0.372 | 0.595 | 0.701 | 0.596 | 0.762 | 0.717 | 5.3 |
 
 ## 4. Embedding type (sections chunking, task adapters on)
 
@@ -182,12 +191,17 @@ The in-memory sweep scores this setup within one question of pgvector
    them needs `EMBEDDING_TASK_ADAPTERS=true` and a re-ingest.
 2. **A bigger model doesn't pay off.** With adapters on, v5-small and v4 are
    within noise of v5-nano; v4 is 3.8B params and 2048 dims. v3 is worst.
-3. **Bigger chunks score higher, partly by returning more of the corpus.**
-   At 3200 characters the top 3 is ~7.2k characters, about a quarter of the
-   corpus, and a fixed chunk gets credit for every section it overlaps.
-   400-character chunks are worse everywhere. Overlap doesn't help
-   consistently. fixed-1600-0 + adapters is the best balance on retrieval,
-   at about twice the context of sections.
+3. **Fixed-size chunks only look better per chunk; at equal context,
+   section chunks win.** Per 3 chunks, fixed-1600-0 + adapters leads (hit@3
+   0.857 vs 0.825, MRR 0.734 vs 0.664). But each of its chunks covers about
+   2.3 sections, its top 3 sends twice the text, and even random guessing
+   hits more often (random hit@3 0.213 vs 0.089). Within the same 4,000
+   characters, sections + adapters scores recall 0.771 and fixed-1600-0 only
+   0.651. One topic per chunk gives cleaner vectors and citable sections.
+   fixed-400-50 ties sections, but only by using ~8 smaller chunks.
+   Overlap doesn't help. **Keep section chunking**; if answers need more
+   context, raise `top_k` (the app sends 3 sections, ~2.1k characters)
+   rather than enlarging chunks.
 4. **Keep full-size float vectors.** Shorter vectors and binary vectors lose
    retrieval quality, steeply below 512 dims; with 37–73 chunks storage
    savings don't matter.

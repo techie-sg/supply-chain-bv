@@ -51,6 +51,34 @@ CONFIGS = [(name, NANO, tasks) for name in CHUNKINGS for tasks in (False, True)]
     ("sections", model, tasks) for model in MODELS[1:] for tasks in (False, True)
 ]
 DIMS = (None, 512, 256, 128)
+# Equal-context comparison: score the chunks that fit in this many characters,
+# about what fixed-1600's top 3 sends. Per-k metrics favour big chunks, which
+# cover several sections each.
+BUDGET = 4000
+
+
+def budget_scores(
+    expected: list[str],
+    relevant: list[str],
+    ranked: list[set[str]],
+    lengths: list[int],
+    budget: int = BUDGET,
+) -> dict[str, float]:
+    """Hit and recall over the top-ranked chunks that fit in `budget` characters
+    (at least one chunk, so an oversized first chunk still counts)."""
+    top: set[str] = set()
+    used = count = 0
+    for group, length in zip(ranked, lengths, strict=True):
+        if count and used + length > budget:
+            break
+        top |= group
+        used += length
+        count += 1
+    return {
+        "hit@budget": float(bool(top & set(relevant))),
+        "recall@budget": len(top & set(expected)) / len(expected),
+        "budget_chunks": count,
+    }
 
 
 def embed(
@@ -124,6 +152,12 @@ def main() -> None:  # pragma: no cover
                         r["relevant_chunk_ids"],
                         [groups[i] for i in order[: max(KS)]],
                     )
+                    | budget_scores(
+                        r["expected_chunk_ids"],
+                        r["relevant_chunk_ids"],
+                        [groups[i] for i in order],
+                        [len(texts[i]) for i in order],
+                    )
                     | {"top3_chars": sum(len(texts[i]) for i in order[:3])}
                     for r, order in zip(rows, ranked, strict=True)
                 ]
@@ -135,7 +169,16 @@ def main() -> None:  # pragma: no cover
                     "binary": binary,
                     "chunks": len(texts),
                     "avg_chunk_chars": round(sum(map(len, texts)) / len(texts)),
-                    **summarize(per_q, [*keys, "top3_chars"]),
+                    **summarize(
+                        per_q,
+                        [
+                            *keys,
+                            "hit@budget",
+                            "recall@budget",
+                            "budget_chunks",
+                            "top3_chars",
+                        ],
+                    ),
                 }
                 results.append(result)
                 print(
