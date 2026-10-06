@@ -72,3 +72,24 @@ def test_retrieval_query_includes_latest_exchange():
     assert retrieval_query("q2", history) == (
         "user: q1\nassistant: a1\nFollow-up question: q2"
     )
+
+
+def test_retrieval_scores_accepts_chunks_spanning_sections():
+    scores = retrieval_scores(["a", "b"], ["b"], [{"x"}, {"a", "b"}])
+    assert scores["hit@1"] == 0.0
+    assert scores["recall@3"] == 1.0
+    assert scores["mrr"] == 0.5
+
+
+def test_sweep_maps_fixed_chunks_to_overlapped_sections():
+    from evals.sweep import chunk_sections
+
+    a, b = "x" * 300, "y" * 300
+    markdown = f"# T\n\n## Alpha One\n\n{a}\n\n## Beta\n\n{b}\n"
+    start = markdown.index(a)
+    bodies = [a, markdown[start + 250 : start + 450], b[:50]]
+    assert chunk_sections(markdown, bodies, "D") == [
+        {"D#alpha-one"},
+        {"D#beta"},  # only 50 chars of Alpha One: below MIN_OVERLAP
+        {"D#beta"},
+    ]

@@ -80,15 +80,17 @@ def chunk_labels() -> dict[str, str]:
 def retrieval_scores(
     expected: list[str],
     relevant: list[str],
-    ranked: list[str],
+    ranked: list[str] | list[set[str]],
 ) -> dict[str, float]:
-    """Hit@k and MRR use the must-find chunks; recall@k uses every useful chunk."""
+    """Hit@k and MRR use the must-find chunks; recall@k uses every useful chunk.
+    A ranked item may be a set of section IDs when one chunk spans sections."""
+    groups = [g if isinstance(g, set) else {g} for g in ranked]
     scores = {}
     for k in KS:
-        top = set(ranked[:k])
+        top = set().union(*groups[:k])
         scores[f"hit@{k}"] = float(bool(top & set(relevant)))
         scores[f"recall@{k}"] = len(top & set(expected)) / len(expected)
-    rank = next((i for i, cid in enumerate(ranked, 1) if cid in relevant), None)
+    rank = next((i for i, g in enumerate(groups, 1) if g & set(relevant)), None)
     scores["mrr"] = 1 / rank if rank else 0.0
     return scores
 

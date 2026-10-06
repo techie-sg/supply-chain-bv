@@ -13,3 +13,4 @@ htmlcov/
 .DS_Store
 .ipynb_checkpoints/
 backend/evals/results*.csv
+backend/evals/.embed_cache.json
