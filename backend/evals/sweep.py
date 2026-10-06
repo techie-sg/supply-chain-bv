@@ -4,32 +4,31 @@
 import csv
 import hashlib
 import json
-import re
-from functools import cache
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
 from config import get_settings
-from evals.run_evals import KS, load_dataset, retrieval_scores, summarize
+from evals.run_evals import (
+    KS,
+    CachedParser,
+    load_chunks,
+    load_dataset,
+    retrieval_scores,
+    summarize,
+)
 from service.chunking import (
     ChunkingStrategy,
     FixedSizeChunkingStrategy,
     MarkdownSectionChunkingStrategy,
 )
-from service.corpus import CorpusService
-from service.document_parser import DoclingPdfParser
-from service.ingestion import BACKEND_DIR, CORPUS_DIR
 from service.jina_embedding_service import JinaEmbeddingService
 from service.rag import retrieval_query
 
 CACHE = Path(__file__).with_name(".embed_cache.json")
 OUT = Path(__file__).with_name("sweep-results.csv")
 BATCH = 64
-# A chunk counts as covering a section only past this much shared text, so a
-# window that merely clips the next heading gets no credit for it.
-MIN_OVERLAP = 100
 NANO = "jina-embeddings-v5-text-nano"
 MODELS = (
     NANO,
@@ -52,71 +51,6 @@ CONFIGS = [(name, NANO, tasks) for name in CHUNKINGS for tasks in (False, True)]
     ("sections", model, tasks) for model in MODELS[1:] for tasks in (False, True)
 ]
 DIMS = (None, 512, 256, 128)
-
-
-class CachedParser(DoclingPdfParser):
-    """Docling is slow; parse each PDF once per run."""
-
-    @cache  # noqa: B019 - one parser lives for the whole run
-    def to_markdown(self, source: Path) -> str:
-        return super().to_markdown(source)
-
-
-def slug(section: str) -> str:
-    """Same section slug CorpusService uses for chunk IDs."""
-    return re.sub(r"[^a-z0-9]+", "-", section.lower()).strip("-")
-
-
-def chunk_sections(markdown: str, bodies: list[str], doc_id: str) -> list[set[str]]:
-    """Map each chunk body to the `DOC#section` IDs whose text it overlaps."""
-    heads = list(re.finditer(r"(?m)^##\s+(.+?)\s*$", markdown))
-    spans = [
-        (
-            h.start(),
-            heads[i + 1].start() if i + 1 < len(heads) else len(markdown),
-            f"{doc_id}#{slug(h.group(1))}",
-        )
-        for i, h in enumerate(heads)
-    ]
-    groups, cursor = [], 0
-    for body in bodies:
-        start = markdown.find(body, cursor)
-        if start < 0:
-            raise ValueError(f"chunk not found in {doc_id} markdown")
-        cursor, end = start + 1, start + len(body)
-        groups.append(
-            {
-                label
-                for s, e, label in spans
-                if min(end, e) - max(start, s) >= min(MIN_OVERLAP, e - s, end - start)
-            },
-        )
-    return groups
-
-
-def load_chunks(
-    parser: CachedParser,
-    strategy: ChunkingStrategy,
-) -> tuple[list[str], list[set[str]]]:
-    documents, ids = CorpusService(CORPUS_DIR, BACKEND_DIR, strategy, parser).load()
-    if isinstance(strategy, MarkdownSectionChunkingStrategy):
-        return [d.page_content for d in documents], [{i} for i in ids]
-    groups: list[set[str]] = []
-    by_source: dict[str, list[str]] = {}
-    for d in documents:
-        by_source.setdefault(d.metadata["source"], []).append(
-            d.page_content.split("\n\n", 1)[1],
-        )
-    for source, bodies in by_source.items():
-        doc_id = next(
-            d.metadata["doc_id"] for d in documents if d.metadata["source"] == source
-        )
-        groups += chunk_sections(
-            parser.to_markdown(BACKEND_DIR / source),
-            bodies,
-            doc_id,
-        )
-    return [d.page_content for d in documents], groups
 
 
 def embed(
@@ -170,7 +104,8 @@ def main() -> None:  # pragma: no cover
             settings.jina_api_key,
             task_adapters=tasks,
         )
-        texts, groups = chunks[chunking]
+        documents, groups = chunks[chunking]
+        texts = [d.page_content for d in documents]
         docs, qs = (
             embed(service, texts, False, store),
             embed(service, queries, True, store),

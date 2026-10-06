@@ -18,6 +18,7 @@ def create_embedding_service(settings: Settings | None = None) -> EmbeddingServi
         return JinaEmbeddingService(
             model=settings.embedding_model,
             api_key=settings.jina_api_key,
+            task_adapters=settings.embedding_task_adapters,
         )
     raise ValueError(f"Unsupported embedding provider: {settings.embedding_provider}")
 

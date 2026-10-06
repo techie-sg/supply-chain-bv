@@ -6,12 +6,16 @@ import json
 import re
 import time
 from collections import defaultdict
+from functools import cache
 from pathlib import Path
 from typing import Any
+
+from langchain_core.documents import Document
 
 from config import get_settings
 from domain.chat import ChatMessage
 from queries.vector_store import retrieve
+from service.chunking import ChunkingStrategy, MarkdownSectionChunkingStrategy
 from service.corpus import CorpusService
 from service.document_parser import DoclingPdfParser
 from service.factory import (
@@ -25,6 +29,9 @@ from service.rag import RAGService, retrieval_query
 
 DATASET = Path(__file__).with_name("dataset.csv")
 KS = (1, 3, 5)
+# A chunk counts as covering a section only past this much shared text, so a
+# window that merely clips the next heading gets no credit for it.
+MIN_OVERLAP = 100
 JUDGE_CHECKS = (
     "behavior",
     "no_invented_facts",
@@ -61,18 +68,79 @@ def load_dataset(path: Path = DATASET) -> list[dict[str, Any]]:
     return rows
 
 
-def chunk_labels() -> dict[str, str]:
+class CachedParser(DoclingPdfParser):
+    """Docling is slow; parse each PDF once per run."""
+
+    @cache  # noqa: B019 - one parser lives for the whole run
+    def to_markdown(self, source: Path) -> str:
+        return super().to_markdown(source)
+
+
+def slug(section: str) -> str:
+    """Same section slug CorpusService uses for chunk IDs."""
+    return re.sub(r"[^a-z0-9]+", "-", section.lower()).strip("-")
+
+
+def chunk_sections(markdown: str, bodies: list[str], doc_id: str) -> list[set[str]]:
+    """Map each chunk body to the `DOC#section` IDs whose text it overlaps."""
+    heads = list(re.finditer(r"(?m)^##\s+(.+?)\s*$", markdown))
+    spans = [
+        (
+            h.start(),
+            heads[i + 1].start() if i + 1 < len(heads) else len(markdown),
+            f"{doc_id}#{slug(h.group(1))}",
+        )
+        for i, h in enumerate(heads)
+    ]
+    groups, cursor = [], 0
+    for body in bodies:
+        start = markdown.find(body, cursor)
+        if start < 0:
+            raise ValueError(f"chunk not found in {doc_id} markdown")
+        cursor, end = start + 1, start + len(body)
+        groups.append(
+            {
+                label
+                for s, e, label in spans
+                if min(end, e) - max(start, s) >= min(MIN_OVERLAP, e - s, end - start)
+            },
+        )
+    return groups
+
+
+def load_chunks(
+    parser: CachedParser,
+    strategy: ChunkingStrategy,
+) -> tuple[list[Document], list[set[str]]]:
+    """Chunk the corpus and map each chunk to the dataset section IDs it covers."""
+    documents, ids = CorpusService(CORPUS_DIR, BACKEND_DIR, strategy, parser).load()
+    if isinstance(strategy, MarkdownSectionChunkingStrategy):
+        return documents, [{i} for i in ids]
+    groups: list[set[str]] = []
+    by_source: dict[str, list[str]] = {}
+    for d in documents:
+        by_source.setdefault(d.metadata["source"], []).append(
+            d.page_content.split("\n\n", 1)[1],
+        )
+    for source, bodies in by_source.items():
+        doc_id = next(
+            d.metadata["doc_id"] for d in documents if d.metadata["source"] == source
+        )
+        groups += chunk_sections(
+            parser.to_markdown(BACKEND_DIR / source),
+            bodies,
+            doc_id,
+        )
+    return documents, groups
+
+
+def chunk_labels() -> dict[str, set[str]]:
     """Map stored `DOC#index` IDs to the `DOC#section-slug` IDs used in the dataset."""
-    documents, ids = CorpusService(
-        CORPUS_DIR,
-        BACKEND_DIR,
-        create_chunking_strategy(),
-        DoclingPdfParser(),
-    ).load()
+    documents, groups = load_chunks(CachedParser(), create_chunking_strategy())
     labels, counts = {}, defaultdict[str, int](int)
-    for document, label in zip(documents, ids, strict=True):
+    for document, group in zip(documents, groups, strict=True):
         doc_id = document.metadata["doc_id"]
-        labels[f"{doc_id}#{counts[doc_id]}"] = label
+        labels[f"{doc_id}#{counts[doc_id]}"] = group
         counts[doc_id] += 1
     return labels
 
@@ -223,7 +291,7 @@ def _run(  # pragma: no cover
     args: argparse.Namespace,
     saved: dict[str, dict[str, str]],
     embedder: Any,
-    labels: dict[str, str],
+    labels: dict[str, set[str]],
     rag: RAGService,
     judge_llm: GroqService,
     results: list[dict[str, Any]],
@@ -234,10 +302,10 @@ def _run(  # pragma: no cover
         if row["expected_chunk_ids"]:
             embedding = embedder.embed_query(retrieval_query(row["question"], history))
             ranked = [
-                labels.get(hit["chunk_id"], hit["chunk_id"])
+                labels.get(hit["chunk_id"], {hit["chunk_id"]})
                 for hit in retrieve(embedding, match_count=max(KS))
             ]
-            result["retrieved"] = json.dumps(ranked)
+            result["retrieved"] = json.dumps([sorted(group) for group in ranked])
             result |= retrieval_scores(
                 row["expected_chunk_ids"],
                 row["relevant_chunk_ids"],

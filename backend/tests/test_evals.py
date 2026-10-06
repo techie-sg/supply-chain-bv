@@ -2,6 +2,7 @@ import pytest
 
 from evals.run_evals import (
     chunk_labels,
+    chunk_sections,
     load_dataset,
     parse_verdict,
     retrieval_scores,
@@ -12,7 +13,7 @@ from service.rag import retrieval_query
 
 def test_dataset_ids_unique_and_chunk_ids_exist():
     rows = load_dataset()
-    known = set(chunk_labels().values())
+    known = set().union(*chunk_labels().values())
     assert len({row["id"] for row in rows}) == len(rows)
     for row in rows:
         assert set(row["relevant_chunk_ids"]) <= set(row["expected_chunk_ids"])
@@ -22,7 +23,7 @@ def test_dataset_ids_unique_and_chunk_ids_exist():
 
 def test_chunk_labels_map_stored_index_to_section_slug():
     labels = chunk_labels()
-    assert labels["DD-SOP-001#0"] == "DD-SOP-001#purpose-and-source-boundaries"
+    assert labels["DD-SOP-001#0"] == {"DD-SOP-001#purpose-and-source-boundaries"}
 
 
 def test_retrieval_scores():
@@ -82,8 +83,6 @@ def test_retrieval_scores_accepts_chunks_spanning_sections():
 
 
 def test_sweep_maps_fixed_chunks_to_overlapped_sections():
-    from evals.sweep import chunk_sections
-
     a, b = "x" * 300, "y" * 300
     markdown = f"# T\n\n## Alpha One\n\n{a}\n\n## Beta\n\n{b}\n"
     start = markdown.index(a)
