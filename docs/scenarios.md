@@ -37,7 +37,7 @@ The scenario dropdown lists each YAML file by its title. **Current situation**
 shows the loaded scenario's name and description. Selecting another scenario
 previews its data without changing the current situation. Click **Load scenario** to replace the operational
 data. The workspace shows the loaded scenario and store. A successful
-load clears the conversation; a failed load keeps it intact.
+load starts a new conversation; a failed load keeps the current one.
 
 The **Demo tools** view shows searchable, read-only tables for orders,
 riders, hourly metrics, and zones. The current scenario's rows come from PostgreSQL;
@@ -54,9 +54,9 @@ There is no Excel export or separate HTTP API.
 
 The **Current scenario** indicator identifies the saved operational dataset.
 On a successful load, the exact snapshot is shown in Demo tools. Chat uses the
-question, previous user and assistant messages in the same session, and retrieved
+question, the stored messages of the latest conversation, and retrieved
 playbook passages; scenario rows are not supplied to it. Clear chat or loading
-a scenario resets conversation history.
+a scenario starts a new conversation; earlier ones stay stored.
 The snapshot's `as_of` timestamp records
 when it was loaded. Refresh reads saved changes on demand; it does not advance
 the simulation. Reload the scenario to establish a fresh starting point.

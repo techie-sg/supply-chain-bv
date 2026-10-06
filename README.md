@@ -2,11 +2,11 @@
 
 [Live demo: Open DispatchDesk](https://supply-chain-bv-production.up.railway.app/)
 
-A dispatch assistant that answers questions using a simulated operating playbook. The current application provides Gradio chat with session history, Jina embeddings, PostgreSQL/pgvector retrieval, and Groq answer generation.
+A dispatch assistant that answers questions using a simulated operating playbook. The current application provides Gradio chat with stored conversation history, Jina embeddings, PostgreSQL/pgvector retrieval, and Groq answer generation.
 
 Demo tools load **normal**, **backlog**, and **rain** starting snapshots and inspect orders, riders, hourly metrics, and zones. Current data comes from PostgreSQL; Refresh reads saved changes. Other scenarios preview their YAML definitions. Loading a scenario replaces operational rows and clears chat.
 
-Chat uses the question, conversation history, and retrieved policy passages. Operational scenario rows are not sent to the chat model. Operational tools, persistent preference memory, and action execution are planned work.
+Chat uses the question, the stored conversation history, and retrieved policy passages. Conversations are saved in PostgreSQL, so a page refresh or restart resumes the latest chat. Operational scenario rows are not sent to the chat model. Operational tools, persistent preference memory, and action execution are planned work.
 
 ## Setup
 

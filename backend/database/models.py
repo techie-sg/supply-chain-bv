@@ -1,4 +1,4 @@
-"""The four workbook sheets plus the two RAG document tables."""
+"""The four workbook sheets, the two RAG document tables, and chat conversations."""
 
 from datetime import date, datetime
 from uuid import UUID, uuid4
@@ -193,3 +193,45 @@ class DocumentChunk(Base):
     chunk_id: Mapped[int] = mapped_column(Integer)
     content: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float]] = mapped_column(Vector())
+
+
+class Conversation(Base):
+    """One chat; `messages` is an append-only list of who, what and when."""
+
+    __tablename__ = "conversations"
+    __table_args__ = (
+        CheckConstraint(
+            "jsonb_typeof(messages) = 'array'",
+            name="ck_conversations_messages_array",
+        ),
+        Index(
+            "ix_conversations_store_manager_updated",
+            "store_id",
+            "manager_id",
+            "updated_at",
+        ),
+        {"schema": "app"},
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        primary_key=True,
+        default=uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    store_id: Mapped[str] = mapped_column(String(32))
+    manager_id: Mapped[str] = mapped_column(String(32))
+    messages: Mapped[list[dict[str, str]]] = mapped_column(
+        JSONB,
+        default=list,
+        server_default="[]",
+    )
+    summary: Mapped[str | None] = mapped_column(Text)
+    summary_covers_to: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
