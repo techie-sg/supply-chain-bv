@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     embedding_provider: str = "jina"
     embedding_model: str = JINA_MODEL
+    # Changing this changes stored vectors: re-run ingestion after toggling it.
+    embedding_task_adapters: bool = False
     llm_provider: str = "groq"
     llm_model: str = GROQ_MODEL
     chunking_strategy: str = "markdown_sections"

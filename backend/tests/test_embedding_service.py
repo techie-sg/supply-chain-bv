@@ -36,6 +36,25 @@ def test_jina_preserves_input_order_and_main_request_payload(
         assert service.embed_documents(texts) == [[1.0], [2.0]]
 
 
+@pytest.mark.parametrize(
+    ("is_query", "task"),
+    [(True, "retrieval.query"), (False, "retrieval.passage")],
+)
+def test_jina_task_adapters_send_task(monkeypatch, is_query, task) -> None:
+    service = JinaEmbeddingService(api_key=SecretStr("k"), task_adapters=True)
+
+    def post(url, headers, json, timeout):
+        assert json["task"] == task
+        data = [{"index": 0, "embedding": [1.0]}]
+        return SimpleNamespace(ok=True, json=lambda: {"data": data})
+
+    monkeypatch.setattr(jina.requests, "post", post)
+    if is_query:
+        service.embed_query("q")
+    else:
+        service.embed_documents(["d"])
+
+
 def test_empty_documents_skip_settings_and_network(monkeypatch) -> None:
     def forbidden(*args, **kwargs):
         raise AssertionError("empty input must not load settings or call the API")

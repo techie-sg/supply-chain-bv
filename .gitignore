@@ -12,3 +12,21 @@ htmlcov/
 !.env.example
 .DS_Store
 .ipynb_checkpoints/
+backend/evals/results*.csv
+backend/evals/.embed_cache.json
+
+# IDE / tooling
+.idea/
+.vscode/
+.remember/
+
+# Python build artifacts
+*.egg-info/
+build/
+dist/
+.tox/
+.ruff_cache/
+.hypothesis/
+
+# Logs
+*.log

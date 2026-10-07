@@ -8,13 +8,19 @@ from service.jina_embedding_service import JinaEmbeddingService
 
 
 def test_factories_use_settings_without_calling_external_providers(monkeypatch) -> None:
-    settings = Settings(_env_file=None, embedding_model="embedding", llm_model="chat")  # type: ignore[call-arg]
+    settings = Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        embedding_model="embedding",
+        embedding_task_adapters=True,
+        llm_model="chat",
+    )
     monkeypatch.setattr(factory, "get_settings", lambda: settings)
     embedding = factory.create_embedding_service()
     llm = factory.create_llm_service()
     assert (
         isinstance(embedding, JinaEmbeddingService) and embedding.model == "embedding"
     )
+    assert embedding.task_adapters
     assert isinstance(llm, GroqService) and llm.model == "chat"
     assert isinstance(
         factory.create_chunking_strategy(),
