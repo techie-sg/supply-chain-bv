@@ -241,12 +241,18 @@ body { margin: 0; background: var(--desk-bg); }
 }
 
 /* Compact workspace switcher: one shared outline, a quiet selected surface. */
-#workspace-tabs > .tab-wrapper { top: 15px; height: 46px; width: 270px; padding: 4px; border: 1px solid var(--desk-line); border-radius: 12px; background: #202022; box-sizing: border-box; }
+#workspace-tabs > .tab-wrapper { top: 15px; height: 46px; width: 390px; padding: 4px; border: 1px solid var(--desk-line); border-radius: 12px; background: #202022; box-sizing: border-box; }
 #workspace-tabs > .tab-wrapper [role="tablist"] { height: 36px; gap: 4px; }
 #workspace-tabs > .tab-wrapper [role="tab"] { flex: 1; height: 36px; padding: 0 12px; border-radius: 8px; font-size: 13px; }
 #workspace-tabs > .tab-wrapper [role="tab"].selected { background: #36313f; color: #e2d9f6; box-shadow: inset 0 1px #ffffff08, 0 1px 3px #00000020; }
 #workspace-tabs > .tab-wrapper [role="tab"]:hover { background: #2c2a30; }
 #workspace-tabs > .tab-wrapper [role="tab"].selected:hover { background: #3c3647; }
+#workspace-tabs > .tab-wrapper [data-tab-id="settings"]::before { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='3'/%3E%3Cpath d='M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z'/%3E%3C/svg%3E"); }
+@media (max-width: 550px) {
+  #workspace-tabs > .tab-wrapper { width: 282px; }
+  /* Three tabs leave room for the logo mark only. */
+  .brand > span:last-child { display: none; }
+}
 @media (max-width: 850px) {
   #scenario-controls { gap: 16px; }
 }
@@ -329,3 +335,51 @@ body { margin: 0; background: var(--desk-bg); }
 #conversation .icon-button-wrapper:not(.top-panel) .icon-button { min-width: 80px; }
 #conversation .icon-button-wrapper:not(.top-panel) .icon-button[aria-label="Copied message"] { color: #d7c5ed !important; }
 #manager-workspace { padding-bottom: 240px; }
+
+/* Settings tab: a category list on the left, one panel on the right. */
+#settings-workspace { width: 100%; max-width: 1100px; margin: 0 auto; padding: 22px 36px 80px; gap: 18px; }
+.settings-heading h2 { margin: 0 0 6px; font-size: 20px; font-weight: 600; color: var(--desk-ink); }
+.settings-heading p { margin: 0; font-size: 13px; line-height: 1.7; color: var(--desk-muted); }
+#settings-layout { align-items: flex-start; gap: 28px; flex-wrap: nowrap; }
+#settings-nav { position: sticky; top: 16px; background: transparent !important; border: none !important; box-shadow: none !important; padding: 0 !important; }
+#settings-nav .wrap { display: flex; flex-direction: column; gap: 2px; }
+#settings-nav label { display: block !important; width: 100%; box-sizing: border-box; padding: 9px 12px; border: none !important; border-radius: 8px; background: transparent !important; color: var(--desk-muted) !important; font-size: 14px; cursor: pointer; box-shadow: none; }
+#settings-nav label:hover { background: var(--desk-soft) !important; color: var(--desk-ink) !important; }
+#settings-nav label.selected, #settings-nav label:has(input:checked) { background: var(--desk-tint) !important; color: var(--desk-ink) !important; font-weight: 600; }
+#settings-nav input[type="radio"] { display: none; }
+#settings-panels { gap: 14px; }
+.settings-panel { gap: 14px; }
+.settings-panel-heading h3 { margin: 0 0 4px; font-size: 17px; font-weight: 600; color: var(--desk-ink); }
+.settings-panel-heading p { margin: 0 0 4px; font-size: 13px; color: var(--desk-muted); }
+.setting-card { gap: 10px; padding: 14px 16px; border: 1px solid var(--desk-line); border-radius: 12px; background: var(--desk-surface); }
+.setting-card > .row { align-items: center; }
+.setting-info, .setting-info-block p { margin: 0; font-size: 12px; line-height: 1.6; color: var(--desk-muted); }
+.reset-setting { flex: 0 0 auto !important; white-space: nowrap; font-size: 12px; border: none; background: transparent; color: var(--desk-muted); }
+.reset-setting:hover { background: var(--desk-soft); color: var(--desk-ink); }
+#settings-actions { position: sticky; bottom: 0; align-items: center; gap: 16px; padding: 14px 0; background: var(--desk-bg); }
+.settings-status { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.7; color: var(--desk-ink); }
+p.settings-status { padding-left: 0; color: var(--desk-muted); }
+@media (max-width: 768px) {
+  #settings-workspace { padding: 16px; }
+  #settings-layout { flex-direction: column; gap: 12px; }
+  #settings-nav { position: static; width: 100%; }
+  #settings-nav .wrap { flex-direction: row; flex-wrap: wrap; }
+  #settings-nav label { width: auto; }
+}
+
+/* Sidebar quick view of active settings, pinned under the chat list. */
+#chat-sidebar .sidebar-content { display: flex; flex-direction: column; height: 100%; box-sizing: border-box; }
+#chat-sidebar .sidebar-content > .column { flex: 1 1 auto; min-height: 0; }
+#chat-sidebar #history-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
+#settings-summary-block { flex: 0 0 auto !important; margin-top: auto; gap: 6px; padding-top: 12px; border-top: 1px solid var(--desk-line); background: transparent; }
+#settings-summary-heading { align-items: center; justify-content: space-between; flex-wrap: nowrap; }
+#settings-summary-heading .sidebar-heading { margin: 0 0 0 10px; }
+#edit-settings { min-height: 26px; padding: 2px 10px; font-size: 12px; border: none; background: transparent; color: var(--desk-accent); }
+#edit-settings:hover { background: var(--desk-soft); }
+.settings-summary { list-style: none; margin: 0; padding: 0 10px; display: flex; flex-direction: column; gap: 7px; }
+.settings-summary li { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.45; color: var(--desk-ink); }
+.settings-summary svg { width: 14px; height: 14px; flex: 0 0 14px; margin-top: 2px; color: var(--desk-muted); }
+.summary-text { flex: 1; min-width: 0; }
+.summary-detail { display: block; color: var(--desk-muted); }
+.summary-yours { flex: none; padding: 1px 6px; border-radius: 6px; font-size: 11px; background: var(--desk-tint); color: var(--desk-accent); }
+.summary-off { margin: 4px 10px 0; font-size: 11px; color: var(--desk-muted); }

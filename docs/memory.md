@@ -1,6 +1,6 @@
 # DispatchDesk memory design
 
-Status: section 1 (conversation history, with the chat sidebar) is implemented. The other sections are a draft for review and are not implemented yet.
+Status: section 1 (conversation history, with the chat sidebar) and section 2 (preferences, except evaluating alerts and rendering the briefing) are implemented. The other sections are a draft for review and are not implemented yet.
 
 Scope: MVP only. Tables keep the fewest columns that make the behavior work. Columns deferred on purpose are listed under "Deferred".
 
@@ -258,17 +258,17 @@ Code checks every value against its definition before saving:
 | `choice` | one of `allowed_values` |
 | `view_list` | a non-empty list drawn from `allowed_values`, no repeats |
 
-A value outside the limits is rejected with a plain explanation of the limit. A request for something not in the catalogue (for example "alert me when riders speed") is declined, and the assistant lists what can be configured.
+A value outside the limits is rejected with a plain explanation of the limit. Only catalogue items appear in the Settings tab, so nothing outside the catalogue can be configured.
 
-### Write path
+### Write path: the Settings tab
 
-1. The manager writes something like "Remember: on weekends after 7pm, alert me above 1.5 orders per rider," "only batch when we're short of riders," or "when I say hi, show rider stats and the order queue."
-2. An LLM call maps it to a catalogue code and a value using structured output, choosing only from the catalogue.
-3. Code validates it against the definition.
-4. If it replaces an active setting, ask the manager to confirm.
-5. Save it and reply with exactly what was stored. The manager can undo it or reset it to the default.
+Settings are changed only in the **Settings** tab, never through chat, so every change is deterministic.
 
-If the mapping fails or the request is ambiguous, ask a clarifying question and save nothing.
+- The tab shows every catalogue item as a form control: an on/off switch, a threshold with its allowed range, days, start and end time, and a cooldown for each alert; switches for the batching rules (cold-chain shown as locked); an amount for the incentive cap; and view checkboxes for the greeting.
+- **Save settings** checks each item against its definition and saves only items whose value changed. Each saved or rejected item is reported next to the button; a rejected item does not block the others.
+- **Reset to default** on an item marks its active row `removed`.
+- An **Active settings** block, pinned at the bottom of the chat sidebar, lists what is on with its value, tags values the manager changed as "yours", and collapses everything off into one line. **Edit** opens the Settings tab. It refreshes on page load and after every save or reset.
+- The assistant reads the settings (the `<preferences>` block) and applies them, but cannot change them. Its prompt tells it to point the manager to the Settings tab and never to claim a setting was changed.
 
 ### Conflicts
 
@@ -391,11 +391,13 @@ Guardrails:
 | --- | --- |
 | `backend/database/models.py` | `Conversation`, `PreferenceDefinition`, `StorePreference`, `HandoverNote`, `Suggestion` |
 | `backend/alembic/versions/` | One migration per phase |
-| `backend/domain/memory.py` | Enums, value and alert-option models |
+| `backend/domain/memory.py` | Enums and the alert-option model |
 | `backend/queries/conversations.py` | Start conversation, append message, load latest, list recent, resume |
-| `backend/queries/preferences.py` | Database access for preferences and handover notes |
+| `backend/queries/handover_notes.py` | Database access for handover notes |
 | `backend/service/conversations.py` | Orchestration around the answer call |
-| `backend/service/memory.py` | Mapping requests to catalogue items, validation, effective settings, conflict logic |
+| `backend/service/preferences.py` | Validation, effective settings, save and reset, the `<preferences>` prompt block |
+| `backend/ui/settings.py` | The Settings tab |
+| `backend/queries/preferences.py` | Catalogue, active values, save with supersede, remove |
 | `backend/service/dreaming.py` | Background review: read new messages, propose, save suggestions |
 | `backend/ui/gradio_app.py` | Restore on load, save on each question, chat sidebar |
 | `backend/tests/` | Tests for each of the above |
@@ -418,7 +420,7 @@ Preferences:
 - With no stored row, the effective setting equals the catalogue default.
 - A value outside `min_value` and `max_value` is rejected with an explanation.
 - A locked item cannot be changed.
-- A request for something not in the catalogue is declined.
+- The Settings form saves only changed items and reports rejected ones.
 - Changing a setting supersedes the old row; reset marks it `removed`.
 - A briefing with an unknown view is rejected.
 

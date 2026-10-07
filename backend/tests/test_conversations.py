@@ -148,16 +148,21 @@ def test_messages_record_who_what_and_an_ist_timestamp() -> None:
 
 
 def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> None:
-    monkeypatch.setattr(
-        conversations,
-        "answer_question",
-        lambda question, *, history: "reply",
-    )
+    seen = []
+
+    def answer(question, *, history, preferences):
+        seen.append(preferences)
+        return "reply"
+
+    monkeypatch.setattr(conversations, "answer_question", answer)
     assert conversations.ask_question("Hello") == "reply"
     assert conversations.conversation_history()[0]["content"] == "Hello"
     conversations.start_new_conversation()
     assert conversations.conversation_history() == []
     assert {(row.store_id, row.manager_id) for row in store.rows} == {
+        (conversations.DEMO_STORE_ID, conversations.DEMO_MANAGER_ID),
+    }
+    assert {(item.store_id, item.manager_id) for item in seen} == {
         (conversations.DEMO_STORE_ID, conversations.DEMO_MANAGER_ID),
     }
 
@@ -198,7 +203,7 @@ def test_ui_browse_entry_points(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history: "reply",
+        lambda question, *, history, preferences: "reply",
     )
     conversations.ask_question("Earlier")
     earlier_id = conversations.current_conversation_id()
