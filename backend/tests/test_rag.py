@@ -139,3 +139,65 @@ def test_provider_failure_propagates_to_ui_error_handler(monkeypatch) -> None:
     )
     with pytest.raises(RuntimeError, match="provider unavailable"):
         RAGService(FakeEmbeddingService(), llm).answer_question("q")
+
+
+class FakePreferences:
+    def prompt_block(self) -> str:
+        return "<preferences>\n- sla_dip_alert (default): SLA dip: off\n</preferences>"
+
+
+def test_preferences_are_shown_to_the_model(monkeypatch) -> None:
+    llm = FakeLLMService()
+    monkeypatch.setattr(
+        rag,
+        "retrieve",
+        lambda **kwargs: [{"chunk_id": "doc#1", "content": "Policy."}],
+    )
+    answer = RAGService(FakeEmbeddingService(), llm).answer_question(
+        "What alerts do I have?",
+        preferences=FakePreferences(),
+    )
+    assert answer == "answer"
+    _, user = llm.messages[0]
+    assert user.startswith("<preferences>\n- sla_dip_alert")
+    assert user.endswith("Question: What alerts do I have?")
+
+
+def test_ui_entry_point_passes_preferences_through(monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    class Service:
+        def __init__(self, **kwargs) -> None:
+            pass
+
+        def answer_question(self, question, top_k, *, history, preferences, summary):
+            seen.update(question=question, preferences=preferences)
+            return "answer"
+
+    monkeypatch.setattr(rag, "RAGService", Service)
+    monkeypatch.setattr(rag, "create_embedding_service", lambda settings: None)
+    monkeypatch.setattr(rag, "create_llm_service", lambda settings: None)
+    settings = FakePreferences()
+    assert rag.answer_question("q", preferences=settings) == "answer"
+    assert seen == {"question": "q", "preferences": settings}
+
+
+def test_summary_is_placed_before_the_retrieved_context(monkeypatch) -> None:
+    llm = FakeLLMService()
+    monkeypatch.setattr(
+        rag,
+        "retrieve",
+        lambda **kwargs: [{"chunk_id": "doc#1", "content": "Policy."}],
+    )
+    RAGService(FakeEmbeddingService(), llm).answer_question(
+        "And now?",
+        preferences=FakePreferences(),
+        summary="- Standby rider approved.",
+    )
+    _, user = llm.messages[0]
+    assert user.startswith("<preferences>")
+    assert (
+        "<conversation_summary>\nEarlier in this chat (a summary; it may omit "
+        "details):\n- Standby rider approved.\n</conversation_summary>\n\n"
+        "Retrieved context:"
+    ) in user

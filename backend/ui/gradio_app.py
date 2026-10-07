@@ -1,7 +1,8 @@
 """Local DispatchDesk workspace for scenario data and dispatch guidance."""
 
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -12,16 +13,27 @@ import requests
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
-from domain.chat import ChatMessage
 from logging_config import configure_logging
+from service.conversations import (
+    ask_question,
+    conversation_history,
+    current_conversation_id,
+    past_conversations,
+    resume_past_conversation,
+    start_new_conversation,
+    title_latest_conversation,
+)
 from service.agent import answer_with_tools
 from service.rag import answer_question as _answer_rag
 from service.scenarios import (
+    TIMEZONE,
     current_scenario,
     load_scenario,
     scenario_details,
     scenario_names,
 )
+from service.summaries import idle_summary_job, summarize_latest_conversation
+from ui import settings
 
 logger = structlog.stdlib.get_logger(__name__)
 CSS_PATH = Path(__file__).with_name("gradio_app.css")
@@ -114,6 +126,16 @@ SEND_MESSAGE_JS = """
         update({interactive: !busy}),
         update({visible: busy})
     ];
+}
+"""
+
+# On phones the sidebar covers the chat, so close it on load and after a choice.
+CLOSE_SIDEBAR_ON_PHONE_JS = """
+() => {
+    if (!matchMedia('(max-width: 768px)').matches) return;
+    if (document.querySelector('#chat-sidebar.open')) {
+        document.querySelector('#chat-sidebar .toggle-button')?.click();
+    }
 }
 """
 
@@ -263,7 +285,7 @@ def prepare_scenario(
 def load_selected_scenario(
     key: str,
 ) -> tuple[dict[str, Any], list[dict], str, str, dict, dict, dict, dict]:
-    """Load through the existing service, clearing stale conversation on success."""
+    """Load through the existing service, starting a new conversation on success."""
     try:
         context = load_scenario(key)
     except (KeyError, ValueError, SQLAlchemyError, RuntimeError) as exc:
@@ -271,6 +293,11 @@ def load_selected_scenario(
         raise gr.Error(
             "Scenario could not be loaded. Check the database connection and migrations.",
         ) from exc
+    try:
+        start_new_conversation()
+    except (SQLAlchemyError, RuntimeError):
+        # The scenario is loaded; the next question continues the previous chat.
+        logger.exception("Could not start a conversation after loading %s", key)
     return (
         context,
         [],
@@ -305,23 +332,102 @@ def restore_workspace() -> tuple:
     )
 
 
-def _conversation_history(history: list[dict]) -> list[ChatMessage]:
-    """Convert Gradio's text blocks to provider-independent chat messages."""
-    messages: list[ChatMessage] = []
-    for message in history:
-        role = message.get("role")
-        if role not in ("user", "assistant"):
-            continue
-        content = message.get("content", "")
-        if isinstance(content, list):
-            content = "\n".join(
-                block["text"]
-                for block in content
-                if isinstance(block, dict) and block.get("type") == "text"
-            )
-        if isinstance(content, str) and content:
-            messages.append({"role": role, "content": content})
-    return messages
+def _time_label(when: datetime, now: datetime) -> str:
+    """Time for today's messages; day and time for older ones, in IST."""
+    when = when.astimezone(TIMEZONE)
+    if when.date() == now.astimezone(TIMEZONE).date():
+        return when.strftime("%H:%M")
+    return f"{when.day} {when.strftime('%b, %H:%M')}"
+
+
+def _with_time(text: str, when: datetime, now: datetime) -> str:
+    """Message text with its time below it; shown only, never sent to the model."""
+    return f'{text}\n\n<span class="message-time">{_time_label(when, now)}</span>'
+
+
+def to_display(messages: Sequence[dict[str, str]]) -> list[dict]:
+    """Stored {who, what, when} messages as chat bubbles with their times."""
+    now = datetime.now(TIMEZONE)
+    return [
+        {
+            "role": "user" if message["who"] == "manager" else "assistant",
+            "content": _with_time(
+                message["what"],
+                datetime.fromisoformat(message["when"]),
+                now,
+            ),
+        }
+        for message in messages
+    ]
+
+
+def restore_chat() -> list[dict]:
+    """Show the latest stored conversation when the page loads."""
+    try:
+        return to_display(conversation_history())
+    except (SQLAlchemyError, RuntimeError):
+        logger.warning("Could not restore the conversation", exc_info=True)
+        return []
+
+
+def _conversation_title(item: dict[str, Any]) -> str:
+    """The chat's title, or its first question until titled; one short line."""
+    label = " ".join((item.get("title") or item["first_question"] or "").split())
+    return label if len(label) <= 40 else label[:39] + "…"
+
+
+def conversation_choices() -> dict:
+    """Sidebar list of past chats, highlighting the open one; empty if unavailable."""
+    try:
+        items = past_conversations()
+        current = current_conversation_id()
+    except (SQLAlchemyError, RuntimeError):
+        logger.warning("Could not list past conversations", exc_info=True)
+        items, current = [], None
+    choices = [(_conversation_title(item), str(item["id"])) for item in items]
+    return gr.update(
+        choices=choices,
+        value=current if current in {value for _, value in choices} else None,
+    )
+
+
+def open_conversation(conversation_id: str | None) -> tuple[list[dict], str]:
+    """Show a past conversation and make it the one new questions continue."""
+    if not conversation_id:
+        return gr.skip(), gr.skip()
+    try:
+        messages = resume_past_conversation(conversation_id)
+    except (SQLAlchemyError, RuntimeError, LookupError, ValueError) as exc:
+        logger.exception("Could not open conversation %s", conversation_id)
+        raise gr.Error("Could not open that conversation. Please try again.") from exc
+    return to_display(messages), ""
+
+
+def title_conversation() -> dict:
+    """Title the open chat after its first answer, then refresh the sidebar."""
+    try:
+        title_latest_conversation()
+    except (SQLAlchemyError, RuntimeError):
+        logger.warning("Could not title the conversation", exc_info=True)
+    return conversation_choices()
+
+
+def summarize_conversation() -> None:
+    """After an answer, fold older messages into the summary if over a limit."""
+    try:
+        summarize_latest_conversation()
+    except (SQLAlchemyError, RuntimeError, ValueError, requests.RequestException):
+        logger.warning("Could not summarize the conversation", exc_info=True)
+
+
+def clear_chat() -> tuple[list[dict], str]:
+    """Start a new stored conversation; the previous one is kept."""
+    try:
+        start_new_conversation()
+    except (SQLAlchemyError, RuntimeError) as exc:
+        logger.exception("Could not start a new conversation")
+        raise gr.Error("Could not start a new chat. Please try again.") from exc
+    return [], ""
 
 
 def answer_question(
@@ -344,17 +450,18 @@ def chat(
     message: str,
     history: list[dict] | None,
 ) -> tuple[list[dict], str]:
-    """Keep the user's draft and history intact if a backend request fails."""
+    """Answer from stored history; keep the draft and display intact on failure."""
     history = history or []
     if not message.strip():
         return history, ""
     request_id = uuid4().hex
     try:
         with structlog.contextvars.bound_contextvars(request_id=request_id):
-            answer = answer_question(message, history=_conversation_history(history))
+            answer = ask_question(message)
     except (
         requests.RequestException,
         SQLAlchemyError,
+        LookupError,
         RuntimeError,
         ValueError,
     ) as exc:
@@ -362,9 +469,10 @@ def chat(
         raise gr.Error(
             "The assistant is unavailable right now. Please try again.",
         ) from exc
+    now = datetime.now(TIMEZONE)
     return history + [
-        {"role": "user", "content": message},
-        {"role": "assistant", "content": answer},
+        {"role": "user", "content": _with_time(message, now, now)},
+        {"role": "assistant", "content": _with_time(answer, now, now)},
     ], ""
 
 
@@ -397,9 +505,13 @@ def _assistant_context(context: dict[str, Any] | None) -> str:
     )
 
 
+def open_settings() -> dict:
+    return gr.update(selected="settings")
+
+
 def _restore_tab(request: gr.Request) -> dict:
     view = request.query_params.get("view", "assistant")
-    return gr.update(selected="demo" if view == "demo" else "assistant")
+    return gr.update(selected=view if view in ("demo", "settings") else "assistant")
 
 
 TAB_URL_JS = """
@@ -409,7 +521,7 @@ async () => {
         '#workspace-tabs > .tab-wrapper [role="tab"][aria-selected="true"]'
     );
     const view = tab?.dataset.tabId;
-    if (view !== 'assistant' && view !== 'demo') return;
+    if (!['assistant', 'settings', 'demo'].includes(view)) return;
     const url = new URL(window.location.href);
     url.searchParams.set('view', view);
     window.history.replaceState(null, '', url);
@@ -461,6 +573,42 @@ def build_app() -> gr.Blocks:
             elem_id="brand-home",
         )
         current = gr.State(None)
+        with gr.Sidebar(label="Chats", width=272, elem_id="chat-sidebar"):
+            new_chat = gr.Button(
+                "New chat",
+                size="sm",
+                variant="secondary",
+                elem_id="new-chat",
+            )
+            gr.HTML(
+                '<p class="sidebar-heading">Recent</p>',
+                apply_default_css=False,
+            )
+            history_list = gr.Radio(
+                choices=[],
+                value=None,
+                label="Past conversations",
+                show_label=False,
+                container=False,
+                elem_id="history-list",
+            )
+            with gr.Column(elem_id="settings-summary-block"):
+                with gr.Row(elem_id="settings-summary-heading"):
+                    gr.HTML(
+                        '<p class="sidebar-heading">Active settings</p>',
+                        apply_default_css=False,
+                    )
+                    edit_settings = gr.Button(
+                        "Edit",
+                        size="sm",
+                        scale=0,
+                        min_width=0,
+                        elem_id="edit-settings",
+                    )
+                settings_summary = gr.HTML(
+                    apply_default_css=False,
+                    elem_id="settings-summary",
+                )
         with gr.Tabs(selected="assistant", elem_id="workspace-tabs") as workspace:
             with (
                 gr.Tab("Assistant", id="assistant"),
@@ -476,14 +624,6 @@ def build_app() -> gr.Blocks:
                         elem_id="assistant-context",
                         scale=0,
                         min_width=0,
-                    )
-                    clear = gr.Button(
-                        "Clear chat",
-                        visible=False,
-                        size="sm",
-                        scale=0,
-                        min_width=88,
-                        elem_id="clear-chat",
                     )
                 chatbot = gr.Chatbot(
                     label="Conversation",
@@ -530,6 +670,11 @@ def build_app() -> gr.Blocks:
                         gr.Button(question, size="sm", elem_classes="prompt-button")
                         for question in prompts
                     ]
+            with (
+                gr.Tab("Settings", id="settings"),
+                gr.Column(elem_id="settings-workspace", min_width=0),
+            ):
+                settings_form = settings.build(summary=settings_summary)
             with (
                 gr.Tab("Demo tools", id="demo"),
                 gr.Column(elem_id="demo-workspace", min_width=0),
@@ -624,6 +769,39 @@ def build_app() -> gr.Blocks:
                             elem_classes="panel-note",
                         )
         app.load(_restore_tab, outputs=workspace, queue=False)
+        app.load(
+            settings.load_settings,
+            outputs=settings_form.outputs(),
+            concurrency_id="settings",
+            concurrency_limit=1,
+        )
+        app.load(settings.load_summary, outputs=settings_summary)
+        # Selecting the tab from the server works even when narrow screens fold
+        # the tab into the "More tabs" menu.
+        edit_settings.click(
+            open_settings,
+            outputs=workspace,
+            js=CLOSE_SIDEBAR_ON_PHONE_JS,
+            queue=False,
+            show_progress="hidden",
+        )
+        app.load(
+            restore_chat,
+            outputs=chatbot,
+            concurrency_id="workspace",
+            concurrency_limit=1,
+        ).then(conversation_choices, outputs=history_list)
+        app.load(fn=None, js=CLOSE_SIDEBAR_ON_PHONE_JS)
+        history_list.input(
+            open_conversation,
+            inputs=history_list,
+            outputs=[chatbot, message],
+            concurrency_id="workspace",
+            concurrency_limit=1,
+        ).then(conversation_choices, outputs=history_list).then(
+            fn=None,
+            js=CLOSE_SIDEBAR_ON_PHONE_JS,
+        )
         workspace.change(fn=None, js=TAB_URL_JS)
         for button, question in zip(prompt_buttons, prompts, strict=True):
             button.click(lambda q=question: q, outputs=message, queue=False).then(
@@ -661,7 +839,10 @@ def build_app() -> gr.Blocks:
             outputs=[current, chatbot, message, preview, *tables],
             concurrency_id="workspace",
             concurrency_limit=1,
-        ).success(_assistant_context, inputs=current, outputs=context_banner)
+        ).success(_assistant_context, inputs=current, outputs=context_banner).then(
+            conversation_choices,
+            outputs=history_list,
+        )
         for event in (submit.click, message.submit):
             event(
                 fn=None,
@@ -683,17 +864,27 @@ def build_app() -> gr.Blocks:
                 outputs=[processing, submit, message],
                 queue=False,
                 show_progress="hidden",
+            ).then(conversation_choices, outputs=history_list).then(
+                title_conversation,
+                outputs=history_list,
+                concurrency_id="titles",
+                concurrency_limit=1,
+                show_progress="hidden",
+            ).then(
+                summarize_conversation,
+                concurrency_id="summaries",
+                concurrency_limit=1,
+                show_progress="hidden",
             )
         chatbot.change(
             fn=None,
             js="""(history) => [
                 {__type__: 'update', visible: !(history && history.length)},
-                {__type__: 'update', visible: Boolean(history && history.length)},
                 {__type__: 'update', placeholder: history && history.length
                     ? 'Ask a follow-up…' : "What's on your mind?"}
             ]""",
             inputs=chatbot,
-            outputs=[suggestions, clear, message],
+            outputs=[suggestions, message],
             queue=False,
             show_progress="hidden",
         ).then(
@@ -707,19 +898,25 @@ def build_app() -> gr.Blocks:
                 const bounds = latest.getBoundingClientRect();
                 const dock = document.querySelector('#composer-dock').getBoundingClientRect();
                 const bottom = dock.top - 24;
-                const target = bounds.height > bottom - 24
-                    ? scrollY + bounds.top - 24
+                // Leave room for the pinned header above the message.
+                const header = document.querySelector('#brand-home')?.getBoundingClientRect().height || 0;
+                const top = header + 24;
+                const target = bounds.height > bottom - top
+                    ? scrollY + bounds.top - top
                     : scrollY + bounds.bottom - bottom;
                 window.scrollTo({top: Math.max(0, target), behavior:
                     matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
             }""",
         )
-        clear.click(
-            lambda: ([], ""),
+        new_chat.click(
+            clear_chat,
             outputs=[chatbot, message],
             queue=True,
             concurrency_id="workspace",
             concurrency_limit=1,
+        ).then(conversation_choices, outputs=history_list).then(
+            fn=None,
+            js=CLOSE_SIDEBAR_ON_PHONE_JS,
         )
     return app
 
@@ -732,6 +929,7 @@ app = build_app()
 
 def main() -> None:
     configure_logging()
+    idle_summary_job().start()
     port = int(os.environ.get("PORT", "7860"))
     logger.info("DispatchDesk starting", host="0.0.0.0", port=port)
     app.launch(

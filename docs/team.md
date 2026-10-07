@@ -23,6 +23,6 @@ Each group shares its listed tasks and coordinates integration and review with t
 
 ## Current scope
 
-The assistant retrieves playbook passages and answers policy questions with conversation history in the current session. Demo tools load synthetic scenarios into PostgreSQL and inspect the latest saved rows. Operational rows are not part of the chat pipeline.
+The assistant retrieves playbook passages and answers policy questions with conversation history stored in PostgreSQL. Demo tools load synthetic scenarios into PostgreSQL and inspect the latest saved rows. Operational rows are not part of the chat pipeline.
 
 Operational tools, persistent store preferences, simulated action approval, a separate guardrail layer, caching, and observability dashboards remain planned work. The [requirements](initial/requirements.md) define the intended behavior; the [source task plan](initial/tasks.md) records the project milestones. Setup instructions are in the [README](../README.md).

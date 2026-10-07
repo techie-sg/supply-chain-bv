@@ -1,4 +1,4 @@
-"""The four workbook sheets plus the two RAG document tables."""
+"""The four workbook sheets, the two RAG document tables, conversations and preferences."""
 
 from datetime import date, datetime
 from uuid import UUID, uuid4
@@ -15,13 +15,15 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
+    Numeric,
     PrimaryKeyConstraint,
     String,
     Text,
     UniqueConstraint,
     func,
+    text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.session import Base
@@ -193,3 +195,147 @@ class DocumentChunk(Base):
     chunk_id: Mapped[int] = mapped_column(Integer)
     content: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float]] = mapped_column(Vector())
+
+
+class Conversation(Base):
+    """One chat; `messages` is an append-only list of who, what and when."""
+
+    __tablename__ = "conversations"
+    __table_args__ = (
+        CheckConstraint(
+            "jsonb_typeof(messages) = 'array'",
+            name="ck_conversations_messages_array",
+        ),
+        Index(
+            "ix_conversations_store_manager_updated",
+            "store_id",
+            "manager_id",
+            "updated_at",
+        ),
+        {"schema": "app"},
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        primary_key=True,
+        default=uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    store_id: Mapped[str] = mapped_column(String(32))
+    manager_id: Mapped[str] = mapped_column(String(32))
+    messages: Mapped[list[dict[str, str]]] = mapped_column(
+        JSONB,
+        default=list,
+        server_default="[]",
+    )
+    summary: Mapped[str | None] = mapped_column(Text)
+    summary_covers_to: Mapped[int | None] = mapped_column(Integer)
+    title: Mapped[str | None] = mapped_column(String(120))
+    summarized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
+class PreferenceDefinition(Base):
+    """A configurable catalogue item; seeded by migration, never edited by managers."""
+
+    __tablename__ = "preference_definitions"
+    __table_args__ = (
+        CheckConstraint(
+            "category IN ('alert', 'batching', 'incentive', 'briefing')",
+            name="ck_preference_definitions_category",
+        ),
+        CheckConstraint(
+            "value_type IN ('number', 'boolean', 'choice', 'view_list')",
+            name="ck_preference_definitions_value_type",
+        ),
+        CheckConstraint(
+            "unit IS NULL OR unit IN "
+            "('orders_per_rider', 'orders', 'minutes', 'percent', 'inr')",
+            name="ck_preference_definitions_unit",
+        ),
+        CheckConstraint(
+            "operator IS NULL OR operator IN ('gt', 'gte', 'lt')",
+            name="ck_preference_definitions_operator",
+        ),
+        CheckConstraint(
+            "min_value IS NULL OR max_value IS NULL OR min_value <= max_value",
+            name="ck_preference_definitions_bounds",
+        ),
+        {"schema": "app"},
+    )
+
+    code: Mapped[str] = mapped_column(String(48), primary_key=True)
+    category: Mapped[str] = mapped_column(String(16))
+    name: Mapped[str] = mapped_column(Text)
+    description: Mapped[str] = mapped_column(Text)
+    value_type: Mapped[str] = mapped_column(String(16))
+    unit: Mapped[str | None] = mapped_column(String(24))
+    operator: Mapped[str | None] = mapped_column(String(4))
+    default_value: Mapped[object | None] = mapped_column(JSONB(none_as_null=True))
+    min_value: Mapped[float | None] = mapped_column(Numeric(asdecimal=False))
+    max_value: Mapped[float | None] = mapped_column(Numeric(asdecimal=False))
+    allowed_values: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    default_enabled: Mapped[bool] = mapped_column(Boolean)
+    default_cooldown_min: Mapped[int | None] = mapped_column(Integer)
+    locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
+
+class StorePreference(Base):
+    """A manager's value for one catalogue item; changes supersede, never edit."""
+
+    __tablename__ = "store_preferences"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'superseded', 'removed')",
+            name="ck_store_preferences_status",
+        ),
+        CheckConstraint(
+            "options IS NULL OR jsonb_typeof(options) = 'object'",
+            name="ck_store_preferences_options",
+        ),
+        Index(
+            "uq_store_preferences_active",
+            "store_id",
+            "manager_id",
+            "code",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+        Index(
+            "ix_store_preferences_manager_status",
+            "store_id",
+            "manager_id",
+            "status",
+        ),
+        {"schema": "app"},
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        primary_key=True,
+        default=uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    store_id: Mapped[str] = mapped_column(String(32))
+    manager_id: Mapped[str] = mapped_column(String(32))
+    code: Mapped[str] = mapped_column(
+        String(48),
+        ForeignKey("app.preference_definitions.code", ondelete="RESTRICT"),
+    )
+    enabled: Mapped[bool] = mapped_column(Boolean)
+    value: Mapped[object | None] = mapped_column(JSONB(none_as_null=True))
+    options: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
+    status: Mapped[str] = mapped_column(
+        String(16),
+        default="active",
+        server_default="active",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )

@@ -2,11 +2,11 @@
 
 [Live demo: Open DispatchDesk](https://supply-chain-bv-production.up.railway.app/)
 
-A dispatch assistant that answers questions using a simulated operating playbook. The current application provides Gradio chat with session history, Jina embeddings, PostgreSQL/pgvector retrieval, and Groq answer generation.
+A dispatch assistant that answers questions using a simulated operating playbook. The current application provides Gradio chat with stored conversation history, Jina embeddings, PostgreSQL/pgvector retrieval, and Groq answer generation.
 
 Demo tools load **normal**, **backlog**, and **rain** starting snapshots and inspect orders, riders, hourly metrics, and zones. Current data comes from PostgreSQL; Refresh reads saved changes. Other scenarios preview their YAML definitions. Loading a scenario replaces operational rows and clears chat.
 
-Chat uses the question, conversation history, and retrieved policy passages. Operational scenario rows are not sent to the chat model. Operational tools, persistent preference memory, and action execution are planned work.
+Chat uses the question, the stored conversation history, and retrieved policy passages. Conversations are saved in PostgreSQL, so a page refresh or restart resumes the latest chat. Operational scenario rows are not sent to the chat model. Operational tools, persistent preference memory, and action execution are planned work.
 
 ## Setup
 
@@ -57,6 +57,17 @@ Defaults are `jina-embeddings-v5-text-nano` for embeddings and Groq's `openai/gp
 Assistant instructions live in [dispatch_manager_system.md](backend/service/rag_data/prompts/dispatch_manager_system.md), which the RAG service loads directly for each answer.
 
 The [RAG notebook](backend/notebooks/simple_rag.ipynb) demonstrates chunking, embedding, storage, retrieval, and a conversation with a follow-up. Select `backend/.venv/bin/python` as its kernel. The storage cell writes document data; provider cells make API calls.
+
+## Evals
+
+[`backend/evals/dataset.csv`](backend/evals/dataset.csv) holds 65 questions. Each row lists `relevant_chunk_ids` (must be retrieved), `expected_chunk_ids` (all useful chunks), live-data and safety flags, and the expected behavior. `history` holds prior turns as JSON for follow-up questions. Run from `backend/` after ingestion:
+
+```bash
+uv run python -m evals.run_evals            # retrieval only
+uv run python -m evals.run_evals --judge    # also generate and grade answers
+```
+
+Retrieval metrics: `hit@k` (any relevant chunk in top k), `recall@k` (share of expected chunks in top k), and `mrr`. `--judge` asks an LLM to grade each answer 1/0 on `behavior`, `no_invented_facts`, `no_execution_claim`, `safety` (safety rows only) and `live_data_honesty` (live-data rows only); `pass` requires every applicable check. Results are printed overall and by category, and per-question rows go to `evals/results.csv`, with `answer_model` and `judge_model` columns when `--judge` is used. Use `--judge-model` to grade with a different model than the one answering, and `--category` to run a subset, and `--delay` (seconds between questions) to stay under provider rate limits. `tests/test_evals.py` checks that every chunk ID in the dataset exists in the corpus.
 
 ## Railway
 

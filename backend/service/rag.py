@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Protocol
 
 import structlog
 
@@ -22,6 +22,25 @@ PROMPT_PATH = (
 )
 
 
+def retrieval_query(
+    question: str,
+    history: Sequence[ChatMessage] | None = None,
+) -> str:
+    """Text embedded for retrieval; follow-ups include the latest exchange."""
+    if not history:
+        return question
+    recent_exchange = "\n".join(
+        f"{message['role']}: {message['content']}" for message in history[-2:]
+    )
+    return f"{recent_exchange}\nFollow-up question: {question}"
+
+
+class PreferenceContext(Protocol):
+    """The manager's settings, shown to the model so its answers apply them."""
+
+    def prompt_block(self) -> str: ...
+
+
 class RAGService:
     def __init__(
         self,
@@ -36,18 +55,21 @@ class RAGService:
         question: str,
         top_k: int = 3,
         history: Sequence[ChatMessage] | None = None,
+        preferences: PreferenceContext | None = None,
+        summary: str | None = None,
     ) -> str:
-        """Retrieve evidence and answer using the injected provider services."""
+        """Retrieve evidence and answer using the injected provider services.
+
+        With preferences, the model sees the manager's settings and applies them.
+        It cannot change them; that happens only in the Settings tab.
+        `summary` stands in for older messages that `history` no longer holds.
+        """
         if top_k < 1:
             raise ValueError("top_k must be positive")
         started = perf_counter()
-        retrieval_question = question
-        if history:
-            recent_exchange = "\n".join(
-                f"{message['role']}: {message['content']}" for message in history[-2:]
-            )
-            retrieval_question = f"{recent_exchange}\nFollow-up question: {question}"
-        query_embedding = self.embedding_service.embed_query(retrieval_question)
+        query_embedding = self.embedding_service.embed_query(
+            retrieval_query(question, history),
+        )
         results = retrieve(query_embedding=query_embedding, match_count=top_k)
         if not results:
             logger.warning("No guidance retrieved", top_k=top_k)
@@ -67,6 +89,13 @@ class RAGService:
                 f"<context>\n{context}\n</context>\n\n"
                 f"Question: {question}"
             )
+        if summary:
+            user_message = (
+                "<conversation_summary>\nEarlier in this chat (a summary; it may "
+                f"omit details):\n{summary}\n</conversation_summary>\n\n{user_message}"
+            )
+        if preferences is not None:
+            user_message = f"{preferences.prompt_block()}\n\n{user_message}"
         answer = self.llm_service.generate(
             system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
             user_message=user_message,
@@ -90,6 +119,8 @@ def answer_question(
     question: str,
     top_k: int = 3,
     history: Sequence[ChatMessage] | None = None,
+    preferences: PreferenceContext | None = None,
+    summary: str | None = None,
 ) -> str:
     """UI entry point composing the configured services."""
     settings = get_settings()
@@ -97,4 +128,10 @@ def answer_question(
         embedding_service=create_embedding_service(settings),
         llm_service=create_llm_service(settings),
     )
-    return service.answer_question(question, top_k, history=history)
+    return service.answer_question(
+        question,
+        top_k,
+        history=history,
+        preferences=preferences,
+        summary=summary,
+    )
