@@ -180,7 +180,7 @@ def test_chat_failure_preserves_existing_history(monkeypatch) -> None:
     def fail(message):
         raise RuntimeError("internal API details")
 
-    monkeypatch.setattr(gradio_app, "ask_question", fail)
+    monkeypatch.setattr(gradio_app, "ask_question_traced", fail)
     with pytest.raises(gr.Error, match="assistant is unavailable") as error:
         gradio_app.chat("new question", history)
     assert history == [{"role": "user", "content": "earlier question"}]
@@ -195,9 +195,9 @@ def test_reply_uses_pending_message_once_and_keeps_previous_history(
 
     def answer(question):
         calls.append(question)
-        return "reply"
+        return "reply", None
 
-    monkeypatch.setattr(gradio_app, "ask_question", answer)
+    monkeypatch.setattr(gradio_app, "ask_question_traced", answer)
     previous = [
         {"role": "user", "content": "Earlier question"},
         {"role": "assistant", "content": "Earlier reply"},
@@ -219,7 +219,7 @@ def test_failed_generation_restores_draft_without_duplicate_user_message(
     def fail(question):
         raise RuntimeError("provider unavailable")
 
-    monkeypatch.setattr(gradio_app, "ask_question", fail)
+    monkeypatch.setattr(gradio_app, "ask_question_traced", fail)
     previous = [{"role": "assistant", "content": "Earlier reply"}]
     pending = previous + [{"role": "user", "content": "Try this"}]
     stream = gradio_app.respond_to_pending("Try this", pending)
@@ -236,12 +236,12 @@ def test_chat_passes_only_the_question_without_reading_scenario_data(
 
     def answer(question):
         seen.append(question)
-        return "reply"
+        return "reply", None
 
     def no_scenario(*args, **kwargs):
         raise AssertionError("Chat must not read scenario data")
 
-    monkeypatch.setattr(gradio_app, "ask_question", answer)
+    monkeypatch.setattr(gradio_app, "ask_question_traced", answer)
     monkeypatch.setattr(gradio_app, "current_scenario", no_scenario)
     earlier = [
         {"role": "user", "content": "Earlier"},
@@ -424,9 +424,9 @@ def test_chat_preserves_nonblank_message_whitespace(monkeypatch) -> None:
 
     def answer(question):
         seen.append(question)
-        return "reply"
+        return "reply", None
 
-    monkeypatch.setattr(gradio_app, "ask_question", answer)
+    monkeypatch.setattr(gradio_app, "ask_question_traced", answer)
     message = "  Should riders speed?\n"
     history, draft = gradio_app.chat(message, [])
     assert seen == [message]
@@ -632,3 +632,45 @@ def test_launch_starts_the_idle_summary_job(monkeypatch) -> None:
     monkeypatch.setattr(gradio_app.app, "launch", lambda **kwargs: None)
     gradio_app.main()
     assert started == [True]
+
+
+def test_an_answer_shows_its_tool_calls_and_settings_in_a_collapsed_panel() -> None:
+    trace = {
+        "tools": [
+            {
+                "tool": "get_live_dispatch_status",
+                "arguments": '{"store_id": "S-1"}',
+                "as_of": "2026-10-07T15:11:42+05:30",
+                "stale": True,
+                "error": None,
+            },
+            {"tool": "get_delivery_metrics", "arguments": "{}", "error": "BAD"},
+        ],
+        "preferences": ["Rider shortage alert: on, above 2 <script>"],
+    }
+    html = gradio_app._trace_html(trace)
+    assert "<details" in html and "2 tool calls" in html
+    assert (
+        "get_live_dispatch_status(store_id=S-1) — data as of 15:11 IST (stale)" in html
+    )
+    assert "error BAD" in html
+    assert "Rider shortage alert" in html
+    assert "<script>" not in html  # escaped
+
+
+def test_an_answer_with_nothing_to_show_has_no_panel() -> None:
+    assert gradio_app._trace_html(None) == ""
+    assert gradio_app._trace_html({"tools": [], "preferences": []}) == ""
+
+
+def test_stored_traces_are_shown_again_when_a_chat_is_reopened() -> None:
+    when = "2026-10-07T16:08:34+05:30"
+    trace = {"tools": [], "preferences": ["Incentive cap: ₹300"]}
+    shown = gradio_app.to_display(
+        [
+            {"who": "manager", "what": "Hi", "when": when},
+            {"who": "assistant", "what": "Hello", "when": when, "trace": trace},
+        ],
+    )
+    assert "agent-trace" not in shown[0]["content"]
+    assert "Incentive cap: ₹300" in shown[1]["content"]

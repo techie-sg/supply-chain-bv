@@ -50,15 +50,15 @@ class RAGService:
         self.embedding_service = embedding_service
         self.llm_service = llm_service
 
-    def answer_question(
+    def prepare_message(
         self,
         question: str,
         top_k: int = 3,
         history: Sequence[ChatMessage] | None = None,
         preferences: PreferenceContext | None = None,
         summary: str | None = None,
-    ) -> str:
-        """Retrieve evidence and answer using the injected provider services.
+    ) -> str | None:
+        """Retrieve evidence and build the model's user message; None if none found.
 
         With preferences, the model sees the manager's settings and applies them.
         It cannot change them; that happens only in the Settings tab.
@@ -66,16 +66,13 @@ class RAGService:
         """
         if top_k < 1:
             raise ValueError("top_k must be positive")
-        started = perf_counter()
         query_embedding = self.embedding_service.embed_query(
             retrieval_query(question, history),
         )
         results = retrieve(query_embedding=query_embedding, match_count=top_k)
         if not results:
             logger.warning("No guidance retrieved", top_k=top_k)
-            return (
-                "I could not find relevant guidance in the DispatchDesk knowledge base."
-            )
+            return None
 
         context = self._build_context(results)
         user_message = f"Retrieved context:\n\n{context}\n\nQuestion: {question}"
@@ -96,6 +93,30 @@ class RAGService:
             )
         if preferences is not None:
             user_message = f"{preferences.prompt_block()}\n\n{user_message}"
+        logger.info("Guidance retrieved", retrieved_chunks=len(results))
+        return user_message
+
+    def answer_question(
+        self,
+        question: str,
+        top_k: int = 3,
+        history: Sequence[ChatMessage] | None = None,
+        preferences: PreferenceContext | None = None,
+        summary: str | None = None,
+    ) -> str:
+        """Retrieve evidence and answer using the injected provider services."""
+        started = perf_counter()
+        user_message = self.prepare_message(
+            question,
+            top_k,
+            history,
+            preferences,
+            summary,
+        )
+        if user_message is None:
+            return (
+                "I could not find relevant guidance in the DispatchDesk knowledge base."
+            )
         answer = self.llm_service.generate(
             system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
             user_message=user_message,
@@ -103,7 +124,6 @@ class RAGService:
         )
         logger.info(
             "RAG answer completed",
-            retrieved_chunks=len(results),
             duration_ms=round((perf_counter() - started) * 1000, 2),
         )
         return answer
@@ -135,3 +155,19 @@ def answer_question(
         preferences=preferences,
         summary=summary,
     )
+
+
+def prepare_message(
+    question: str,
+    top_k: int = 3,
+    history: Sequence[ChatMessage] | None = None,
+    preferences: PreferenceContext | None = None,
+    summary: str | None = None,
+) -> str | None:
+    """Retrieval and prompt assembly for callers that run their own model loop."""
+    settings = get_settings()
+    service = RAGService(
+        embedding_service=create_embedding_service(settings),
+        llm_service=create_llm_service(settings),
+    )
+    return service.prepare_message(question, top_k, history, preferences, summary)

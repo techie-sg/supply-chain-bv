@@ -22,15 +22,17 @@ from queries.conversations import (
     set_title,
     start_conversation,
 )
+from service.agent import run_agent
 from service.factory import create_llm_service
-from service.preferences import demo_preferences
-from service.rag import answer_question
-from service.scenarios import TIMEZONE
+from service.preferences import PreferenceService, demo_preferences, describe
+from service.rag import answer_question, prepare_message
+from service.scenarios import TIMEZONE, current_scenario
 from service.summaries import history_start
 
 logger = structlog.stdlib.get_logger(__name__)
 
-Answer = Callable[..., str]
+# An answer is the reply text, or the reply with its trace (tools used, settings).
+Answer = Callable[..., str | tuple[str, dict[str, Any]]]
 Titler = Callable[[str, str], str]
 TITLE_PROMPT_PATH = (
     Path(__file__).resolve().parent / "rag_data" / "prompts" / "conversation_title.md"
@@ -38,8 +40,19 @@ TITLE_PROMPT_PATH = (
 TITLE_MAX_LENGTH = 60
 
 
-def new_message(who: Literal["manager", "assistant"], what: str) -> dict[str, str]:
-    return {"who": who, "what": what, "when": datetime.now(TIMEZONE).isoformat()}
+def new_message(
+    who: Literal["manager", "assistant"],
+    what: str,
+    trace: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    message: dict[str, Any] = {
+        "who": who,
+        "what": what,
+        "when": datetime.now(TIMEZONE).isoformat(),
+    }
+    if trace:
+        message["trace"] = trace  # display only; never sent to the model
+    return message
 
 
 def clean_title(text: str) -> str | None:
@@ -118,6 +131,9 @@ class ConversationService:
         return list(conversation.messages)
 
     def ask(self, question: str) -> str:
+        return self.ask_traced(question)[0]
+
+    def ask_traced(self, question: str) -> tuple[str, dict[str, Any] | None]:
         """Store the question first, so a failed answer never loses it."""
         conversation = (
             latest_conversation(
@@ -131,9 +147,14 @@ class ConversationService:
         history = to_chat_messages(conversation.messages[history_start(conversation) :])
         extra = {"summary": conversation.summary} if conversation.summary else {}
         append_message(conversation.id, new_message("manager", question), self.engine)
-        reply = self.answer(question, history=history, **extra)
-        append_message(conversation.id, new_message("assistant", reply), self.engine)
-        return reply
+        result = self.answer(question, history=history, **extra)
+        reply, trace = result if isinstance(result, tuple) else (result, None)
+        append_message(
+            conversation.id,
+            new_message("assistant", reply, trace),
+            self.engine,
+        )
+        return reply, trace
 
     def title_latest(self) -> str | None:
         """Give the latest conversation a title once it has its first answer.
@@ -177,19 +198,58 @@ class ConversationService:
         return title
 
 
+def _trace(
+    settings: PreferenceService,
+    tools: Sequence[dict[str, Any]] = (),
+) -> dict[str, Any]:
+    """What the answer was built from: tool calls and the manager's own settings."""
+    return {
+        "tools": list(tools),
+        "preferences": [
+            describe(item) for item in settings.effective() if item.customized
+        ],
+    }
+
+
 def _answer(
     question: str,
     *,
     history: Sequence[ChatMessage],
     summary: str | None = None,
-) -> str:
-    """Answer with the manager's settings and the chat's summary in view."""
-    return answer_question(
+) -> tuple[str, dict[str, Any]]:
+    """Answer with the manager's settings and the chat's summary in view.
+
+    With a scenario loaded, the model also gets the live tools; without one the
+    answer comes from the playbook alone. Returns the reply and its trace.
+    """
+    settings = demo_preferences()
+    scenario = current_scenario()
+    if scenario is None:
+        reply = answer_question(
+            question,
+            history=history,
+            preferences=settings,
+            summary=summary,
+        )
+        return reply, _trace(settings)
+    user_message = prepare_message(
         question,
         history=history,
-        preferences=demo_preferences(),
+        preferences=settings,
         summary=summary,
     )
+    if user_message is None:
+        return (
+            "I could not find relevant guidance in the DispatchDesk knowledge base.",
+            _trace(settings),
+        )
+    result = run_agent(
+        question,
+        store_id=scenario["store_id"],
+        history=history,
+        user_message=user_message,
+    )
+    return result["answer"], _trace(settings, result["trace"])
 
 
 def _title(question: str, answer: str) -> str:
@@ -212,6 +272,11 @@ def _service() -> ConversationService:
 def ask_question(question: str) -> str:
     """UI entry point: answer using the stored history of the latest chat."""
     return _service().ask(question)
+
+
+def ask_question_traced(question: str) -> tuple[str, dict[str, Any] | None]:
+    """UI entry point: the answer with the trace to show under it."""
+    return _service().ask_traced(question)
 
 
 def conversation_history() -> list[dict[str, str]]:

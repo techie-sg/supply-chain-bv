@@ -2,13 +2,15 @@
 
 import logging
 import sys
+from typing import TextIO
 
 import structlog
 
 from config import get_settings
 
 
-def configure_logging() -> None:
+def configure_logging(stream: TextIO = sys.stdout) -> None:
+    """Log JSON lines to `stream`; stdio MCP servers must pass sys.stderr."""
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_logger_name,
@@ -26,7 +28,7 @@ def configure_logging() -> None:
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,
     )
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(stream)
     handler.setFormatter(
         structlog.stdlib.ProcessorFormatter(
             foreign_pre_chain=shared_processors,

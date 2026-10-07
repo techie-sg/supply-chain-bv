@@ -1,26 +1,32 @@
 """Tool-calling agent loop for DispatchDesk.
 
-This module is the MCP boundary: TOOL_REGISTRY and _dispatch() implement
-tool execution locally today. When MCP is added, replace _dispatch() with
-session.call_tool(name, args) and TOOL_DEFINITIONS with session.list_tools().
+Tools are served by the dispatchdesk-ops MCP server (mcp_server/server.py),
+started over stdio once per request and shared by every tool call in the loop.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+import sys
+import threading
+import time
+from collections.abc import Sequence
+from concurrent.futures import Future
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from zoneinfo import ZoneInfo
 
 import requests
 import structlog
+from mcp.client import Client
+from mcp.client.stdio import StdioServerParameters
 
 from config import get_settings, require
 from constants import GROQ_MODEL
 from domain.chat import ChatMessage
-from domain.tools import LiveStatusInput, MetricsInput
-from service.tools import get_delivery_metrics, get_live_dispatch_status
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -36,52 +42,133 @@ _SYSTEM_PROMPT = (
 ).read_text(encoding="utf-8")
 
 # ---------------------------------------------------------------------------
-# Tool definitions — sent to the model on every call.
-# Descriptions are taken verbatim from docs/tools.md.
-# Schemas are generated from the Pydantic input models in domain/tools.py.
+# MCP client
 # ---------------------------------------------------------------------------
 
-TOOL_DEFINITIONS: list[dict] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "get_live_dispatch_status",
-            "description": (
-                "Get the live order queue, rider statuses, and zone ride times for one "
-                "dark store. Use this for any question about what is happening right now: "
-                "backlog, which orders are waiting, which riders are free or returning, "
-                "batching candidates, ETAs, or a specific rider's hours on shift and time "
-                "since last break. Returns figures as of the snapshot time in `as_of`; "
-                "always quote that time when stating live numbers. Do not use this for "
-                "past performance; use `get_delivery_metrics` instead."
-            ),
-            "parameters": LiveStatusInput.model_json_schema(),
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_delivery_metrics",
-            "description": (
-                "Get historical hourly delivery metrics for one dark store on one date "
-                "and hour range: orders, 10-minute SLA %, average pick-pack, rider-wait "
-                "and ride minutes, riders online, and rain flag, plus a pre-computed "
-                "period summary. Use this to explain past performance or compare periods; "
-                "call it once per period. The hour range is start-inclusive, end-exclusive: "
-                "8 to 10pm is start_hour=20, end_hour=22. Quote the summary figures rather "
-                "than recalculating them. Do not use this for the current queue; use "
-                "`get_live_dispatch_status` instead."
-            ),
-            "parameters": MetricsInput.model_json_schema(),
-        },
-    },
-]
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+STARTUP_TIMEOUT_SEC = 30  # starting the server imports the app's modules
+TOOL_TIMEOUT_SEC = 5  # per call, as set in docs/tools.md
+RATE_LIMIT_ATTEMPTS = 4  # Groq's free tier allows 8,000 tokens a minute
+MAX_WAIT_SEC = 20
 
-# Maps tool name → callable. Replace with session.call_tool() when moving to MCP.
-TOOL_REGISTRY: dict[str, Any] = {
-    "get_live_dispatch_status": get_live_dispatch_status,
-    "get_delivery_metrics": get_delivery_metrics,
-}
+
+def _error_text(code: str, message: str, **details: Any) -> str:
+    return json.dumps(
+        {"error": {"code": code, "message": message, "details": details}},
+    )
+
+
+class ToolClient:
+    """Sync handle on the MCP server: one subprocess for the whole agent run.
+
+    The MCP client is async, so it lives on its own event loop in a thread. One
+    task opens it, waits to be told to stop, then closes it, because the stdio
+    transport must be entered and exited from the same task.
+    """
+
+    def __init__(self) -> None:
+        self._loop = asyncio.new_event_loop()
+        self._thread = threading.Thread(target=self._loop.run_forever, daemon=True)
+        self._ready = threading.Event()
+        self._stop: asyncio.Event | None = None
+        self._serving: Future[None] | None = None
+        self._client: Client | None = None
+
+    def _run(self, coroutine: Any, timeout: float) -> Any:
+        future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+        try:
+            return future.result(timeout)
+        except BaseException:
+            future.cancel()
+            raise
+
+    async def _serve(self) -> None:
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "mcp_server.server"],
+            cwd=str(BACKEND_DIR),
+            env=dict(os.environ),  # the server needs DATABASE_URL
+        )
+        self._stop = asyncio.Event()
+        try:
+            async with Client(params) as client:
+                self._client = client
+                self._ready.set()
+                await self._stop.wait()
+        finally:
+            self._ready.set()  # unblock __enter__ if startup failed
+
+    def __enter__(self) -> Self:
+        self._thread.start()
+        self._serving = asyncio.run_coroutine_threadsafe(self._serve(), self._loop)
+        if not self._ready.wait(STARTUP_TIMEOUT_SEC) or self._client is None:
+            error = (
+                self._serving.exception()
+                if self._serving.done() and not self._serving.cancelled()
+                else None
+            )
+            self.close()
+            logger.error("Could not start the MCP server", error=repr(error))
+            raise RuntimeError("Dispatch tools are unavailable.") from error
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._serving is not None and self._stop is not None:
+            self._loop.call_soon_threadsafe(self._stop.set)
+            try:
+                self._serving.result(TOOL_TIMEOUT_SEC)
+            except Exception:
+                logger.warning("MCP server did not shut down cleanly", exc_info=True)
+        elif self._serving is not None:
+            self._serving.cancel()
+        self._loop.call_soon_threadsafe(self._loop.stop)
+        self._thread.join(timeout=TOOL_TIMEOUT_SEC)
+
+    def tool_definitions(self) -> list[dict]:
+        """The server's tools in the function format the model expects."""
+        assert self._client is not None
+        tools = self._run(self._client.list_tools(), TOOL_TIMEOUT_SEC).tools
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.input_schema,
+                },
+            }
+            for tool in tools
+        ]
+
+    def call(self, name: str, arguments: dict[str, Any]) -> str:
+        """Run one tool; always returns a JSON string, errors included."""
+        assert self._client is not None
+        try:
+            result = self._run(
+                self._client.call_tool(
+                    name,
+                    arguments,
+                    read_timeout_seconds=TOOL_TIMEOUT_SEC,
+                ),
+                TOOL_TIMEOUT_SEC + 1,
+            )
+        except TimeoutError:
+            return _error_text(
+                "DATA_UNAVAILABLE",
+                "The dispatch tool timed out. Retry once; if it fails again, tell "
+                "the manager live data cannot be reached.",
+                retryable=True,
+            )
+        text = "".join(block.text for block in result.content if block.type == "text")
+        if result.is_error:
+            try:
+                json.loads(text)
+            except json.JSONDecodeError:  # rejected by the MCP layer, not the tool
+                return _error_text("INVALID_INPUT", text)
+        return text
 
 
 # ---------------------------------------------------------------------------
@@ -103,62 +190,45 @@ def _make_result(answer: str, trace: list[dict], llm_calls: int) -> AgentResult:
 
 
 def _call_llm(messages: list[dict], tools: list[dict]) -> dict:
-    """One raw Groq chat/completions call. Returns the full response dict."""
+    """One raw Groq chat/completions call. Returns the full response dict.
+
+    A tokens-per-minute 429 is retried after the wait Groq asks for.
+    """
     api_key = require(get_settings().groq_api_key, "GROQ_API_KEY")
-    response = requests.post(
-        GROQ_URL,
-        headers={"Authorization": f"Bearer {api_key}"},
-        json={"model": MODEL, "messages": messages, "tools": tools, "temperature": 0},
-        timeout=60,
-    )
+    for attempt in range(1, RATE_LIMIT_ATTEMPTS + 1):
+        response = requests.post(
+            GROQ_URL,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": MODEL,
+                "messages": messages,
+                "tools": tools,
+                "temperature": 0,
+            },
+            timeout=60,
+        )
+        if response.status_code != 429 or attempt == RATE_LIMIT_ATTEMPTS:
+            break
+        wait = min(float(response.headers.get("retry-after", 1)) + 0.5, MAX_WAIT_SEC)
+        logger.warning("Groq rate limit; retrying", wait_sec=wait, attempt=attempt)
+        time.sleep(wait)
     response.raise_for_status()
     return response.json()
 
 
-def _dispatch(call: dict) -> str:
-    """Execute one tool call and return a JSON string result.
-
-    This is the MCP boundary: swap the body for session.call_tool(name, args)
-    when moving to MCP. The signature and return type stay the same.
-    """
-    name = call["function"]["name"]
-    if name not in TOOL_REGISTRY:
-        return json.dumps(
-            {
-                "error": {
-                    "code": "UNKNOWN_TOOL",
-                    "message": f"No tool named '{name}'.",
-                    "details": {"available_tools": sorted(TOOL_REGISTRY)},
-                },
-            },
-        )
+def _dispatch(call: dict, client: ToolClient) -> str:
+    """Run one tool call through the MCP server and return its JSON result."""
     try:
-        args = json.loads(call["function"]["arguments"] or "{}")
+        arguments = json.loads(call["function"]["arguments"] or "{}")
     except json.JSONDecodeError:
-        return json.dumps(
-            {
-                "error": {
-                    "code": "INVALID_INPUT",
-                    "message": "Arguments were not valid JSON.",
-                    "details": {},
-                },
-            },
-        )
-    try:
-        result = TOOL_REGISTRY[name](**args)
-    except TypeError as exc:
-        return json.dumps(
-            {
-                "error": {"code": "INVALID_INPUT", "message": str(exc), "details": {}},
-            },
-        )
-    return json.dumps(result, default=str)
+        return _error_text("INVALID_INPUT", "Arguments were not valid JSON.")
+    return client.call(call["function"]["name"], arguments)
 
 
 def _build_messages(
     question: str,
     store_id: str,
-    history: list[ChatMessage] | None,
+    history: Sequence[ChatMessage] | None,
 ) -> list[dict]:
     today = datetime.now(TZ).date().isoformat()
     system = (
@@ -185,7 +255,10 @@ def _tool_turn(call: dict, output: str) -> dict:
 
 
 def _trace_entry(step: int, call: dict, output: str) -> dict:
-    parsed = json.loads(output)
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError:
+        parsed = None
     return {
         "step": step,
         "tool": call["function"]["name"],
@@ -194,6 +267,7 @@ def _trace_entry(step: int, call: dict, output: str) -> dict:
         if isinstance(parsed, dict)
         else None,
         "as_of": parsed.get("as_of") if isinstance(parsed, dict) else None,
+        "stale": parsed.get("stale") if isinstance(parsed, dict) else None,
     }
 
 
@@ -206,37 +280,51 @@ def run_agent(
     question: str,
     *,
     store_id: str,
-    history: list[ChatMessage] | None = None,
+    history: Sequence[ChatMessage] | None = None,
     max_steps: int = 5,
+    client: ToolClient | None = None,
+    user_message: str | None = None,
 ) -> AgentResult:
-    """Run the tool-calling loop and return the final answer with a trace."""
-    messages = _build_messages(question, store_id, history)
-    trace: list[dict] = []
+    """Run the tool-calling loop and return the final answer with a trace.
 
-    for step in range(1, max_steps + 1):
-        response = _call_llm(messages, TOOL_DEFINITIONS)
-        message = response["choices"][0]["message"]
-        messages.append(_assistant_turn(message))
+    `user_message` replaces the bare question, so the caller can include
+    retrieved guidance, the manager's settings and a conversation summary.
+    """
+    with client or ToolClient() as tools:
+        definitions = tools.tool_definitions()
+        messages = _build_messages(user_message or question, store_id, history)
+        trace: list[dict] = []
 
-        tool_calls = message.get("tool_calls") or []
-        if not tool_calls:
-            logger.info(
-                "Agent finished",
-                llm_calls=step,
-                tool_calls=len(trace),
-                store_id=store_id,
-            )
-            return _make_result(
-                answer=message.get("content") or "",
-                trace=trace,
-                llm_calls=step,
-            )
+        for step in range(1, max_steps + 1):
+            response = _call_llm(messages, definitions)
+            message = response["choices"][0]["message"]
+            messages.append(_assistant_turn(message))
 
-        for call in tool_calls:
-            logger.info("Tool call", tool=call["function"]["name"], step=step)
-            output = _dispatch(call)
-            trace.append(_trace_entry(step, call, output))
-            messages.append(_tool_turn(call, output))
+            tool_calls = message.get("tool_calls") or []
+            if not tool_calls:
+                if not (message.get("content") or "").strip():
+                    logger.error(
+                        "Model returned no answer",
+                        finish_reason=response["choices"][0].get("finish_reason"),
+                    )
+                    raise RuntimeError("The model returned an empty answer.")
+                logger.info(
+                    "Agent finished",
+                    llm_calls=step,
+                    tool_calls=len(trace),
+                    store_id=store_id,
+                )
+                return _make_result(
+                    answer=message.get("content") or "",
+                    trace=trace,
+                    llm_calls=step,
+                )
+
+            for call in tool_calls:
+                logger.info("Tool call", tool=call["function"]["name"], step=step)
+                output = _dispatch(call, tools)
+                trace.append(_trace_entry(step, call, output))
+                messages.append(_tool_turn(call, output))
 
     logger.warning("Agent hit max_steps", max_steps=max_steps, store_id=store_id)
     return _make_result(

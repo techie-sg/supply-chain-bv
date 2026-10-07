@@ -19,6 +19,7 @@ dependencies = [
     "torch>=2.14,<3",
     "torchvision>=0.29,<1",
     "docling>=2.133.0",
+    "mcp>=2.3.0",
 ]
 
 [dependency-groups]

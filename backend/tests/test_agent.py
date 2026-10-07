@@ -8,9 +8,11 @@ from unittest.mock import MagicMock, patch
 import service.agent as agent_mod
 from service.agent import (
     AgentResult,
+    ToolClient,
     _build_messages,
     _dispatch,
     _make_result,
+    _trace_entry,
     answer_with_tools,
     run_agent,
 )
@@ -55,46 +57,60 @@ def test_build_messages_includes_history() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_dispatch_calls_registered_tool() -> None:
-    called = {}
+class FakeClient:
+    """Stands in for ToolClient: no subprocess, records calls."""
 
-    def fake_tool(**kwargs):
-        called.update(kwargs)
-        return {"result": "ok"}
+    def __init__(self, output: str = '{"store_id": "S-1"}') -> None:
+        self.output = output
+        self.calls: list[tuple[str, dict]] = []
 
-    with patch.dict(agent_mod.TOOL_REGISTRY, {"my_tool": fake_tool}):
-        call = {
-            "function": {
-                "name": "my_tool",
-                "arguments": json.dumps({"store_id": "S-1"}),
-            },
-        }
-        output = _dispatch(call)
-    assert json.loads(output) == {"result": "ok"}
-    assert called == {"store_id": "S-1"}
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return None
+
+    def tool_definitions(self) -> list[dict]:
+        return [{"type": "function", "function": {"name": "get_live_dispatch_status"}}]
+
+    def call(self, name: str, arguments: dict) -> str:
+        self.calls.append((name, arguments))
+        return self.output
 
 
-def test_dispatch_unknown_tool_returns_error() -> None:
-    call = {"function": {"name": "no_such_tool", "arguments": "{}"}}
-    result = json.loads(_dispatch(call))
-    assert result["error"]["code"] == "UNKNOWN_TOOL"
+def test_dispatch_sends_name_and_arguments_to_the_client() -> None:
+    client = FakeClient('{"result": "ok"}')
+    call = {
+        "function": {"name": "my_tool", "arguments": json.dumps({"store_id": "S-1"})},
+    }
+    assert json.loads(_dispatch(call, client)) == {"result": "ok"}
+    assert client.calls == [("my_tool", {"store_id": "S-1"})]
 
 
 def test_dispatch_invalid_json_arguments_returns_error() -> None:
-    with patch.dict(agent_mod.TOOL_REGISTRY, {"t": dict}):
-        call = {"function": {"name": "t", "arguments": "not json"}}
-        result = json.loads(_dispatch(call))
-    assert result["error"]["code"] == "INVALID_INPUT"
+    client = FakeClient()
+    call = {"function": {"name": "t", "arguments": "not json"}}
+    assert json.loads(_dispatch(call, client))["error"]["code"] == "INVALID_INPUT"
+    assert client.calls == []
 
 
-def test_dispatch_wrong_kwargs_returns_error() -> None:
-    def strict_tool(store_id: str) -> dict:
-        return {}
+def test_trace_entry_survives_a_non_json_result() -> None:
+    call = {"function": {"name": "t", "arguments": "{}"}}
+    entry = _trace_entry(1, call, "plain text")
+    assert entry["error"] is None and entry["as_of"] is None
 
-    with patch.dict(agent_mod.TOOL_REGISTRY, {"strict": strict_tool}):
-        call = {"function": {"name": "strict", "arguments": json.dumps({"bad_key": 1})}}
-        result = json.loads(_dispatch(call))
-    assert result["error"]["code"] == "INVALID_INPUT"
+
+# ---------------------------------------------------------------------------
+# ToolClient against the real MCP server (no database needed for these calls)
+# ---------------------------------------------------------------------------
+
+
+def test_tool_client_lists_tools_and_rejects_bad_arguments() -> None:
+    with ToolClient() as client:
+        names = {d["function"]["name"] for d in client.tool_definitions()}
+        assert names == {"get_live_dispatch_status", "get_delivery_metrics"}
+        bad = json.loads(client.call("get_delivery_metrics", {"store_id": "S-1"}))
+    assert bad["error"]["code"] == "INVALID_INPUT"
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +147,7 @@ def _llm_tool_call(name: str, args: dict, call_id: str = "call-1") -> dict:
 
 def test_run_agent_direct_answer_no_tool_calls() -> None:
     with patch.object(agent_mod, "_call_llm", return_value=_llm_answer("All good.")):
-        result = run_agent("How are things?", store_id="S-1")
+        result = run_agent("How are things?", store_id="S-1", client=FakeClient())
     assert result["answer"] == "All good."
     assert result["llm_calls"] == 1
     assert result["trace"] == []
@@ -142,12 +158,10 @@ def test_run_agent_one_tool_call_then_answer() -> None:
         _llm_tool_call("get_live_dispatch_status", {"store_id": "S-1"}),
         _llm_answer("Queue looks fine."),
     ]
-    fake_dispatch = MagicMock(return_value=json.dumps({"store_id": "S-1", "queue": {}}))
-    with (
-        patch.object(agent_mod, "_call_llm", side_effect=responses),
-        patch.object(agent_mod, "_dispatch", fake_dispatch),
-    ):
-        result = run_agent("What's the queue?", store_id="S-1")
+    client = FakeClient(json.dumps({"store_id": "S-1", "queue": {}}))
+    with patch.object(agent_mod, "_call_llm", side_effect=responses):
+        result = run_agent("What's the queue?", store_id="S-1", client=client)
+    assert client.calls == [("get_live_dispatch_status", {"store_id": "S-1"})]
     assert result["answer"] == "Queue looks fine."
     assert result["llm_calls"] == 2
     assert len(result["trace"]) == 1
@@ -165,13 +179,13 @@ def test_run_agent_hits_max_steps() -> None:
                 {"store_id": "S-1"},
             ),
         ),
-        patch.object(
-            agent_mod,
-            "_dispatch",
-            return_value=json.dumps({"store_id": "S-1"}),
-        ),
     ):
-        result = run_agent("Loop forever", store_id="S-1", max_steps=2)
+        result = run_agent(
+            "Loop forever",
+            store_id="S-1",
+            max_steps=2,
+            client=FakeClient(),
+        )
     assert "Stopped" in result["answer"]
     assert result["llm_calls"] == 2
 
@@ -182,6 +196,33 @@ def test_run_agent_hits_max_steps() -> None:
 
 
 def test_answer_with_tools_returns_answer_string() -> None:
-    with patch.object(agent_mod, "_call_llm", return_value=_llm_answer("Done.")):
+    with (
+        patch.object(agent_mod, "ToolClient", FakeClient),
+        patch.object(agent_mod, "_call_llm", return_value=_llm_answer("Done.")),
+    ):
         answer = answer_with_tools("Any question?", store_id="S-1")
     assert answer == "Done."
+
+
+def test_call_llm_retries_a_rate_limit_then_succeeds() -> None:
+    limited = MagicMock(status_code=429, headers={"retry-after": "1"})
+    ok = MagicMock(status_code=200)
+    ok.json.return_value = {"choices": []}
+    with (
+        patch.object(agent_mod.requests, "post", side_effect=[limited, ok]) as post,
+        patch.object(agent_mod.time, "sleep") as sleep,
+        patch.object(agent_mod, "require", return_value="key"),
+    ):
+        assert agent_mod._call_llm([], []) == {"choices": []}
+    assert post.call_count == 2
+    sleep.assert_called_once_with(1.5)
+
+
+def test_run_agent_rejects_an_empty_final_answer() -> None:
+    with patch.object(agent_mod, "_call_llm", return_value=_llm_answer("")):
+        try:
+            run_agent("Anything?", store_id="S-1", client=FakeClient())
+        except RuntimeError as exc:
+            assert "empty answer" in str(exc)
+        else:
+            raise AssertionError("an empty answer must not be returned")

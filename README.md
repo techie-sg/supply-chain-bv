@@ -2,11 +2,13 @@
 
 [Live demo: Open DispatchDesk](https://supply-chain-bv-production.up.railway.app/)
 
-A dispatch assistant that answers questions using a simulated operating playbook. The current application provides Gradio chat with stored conversation history, Jina embeddings, PostgreSQL/pgvector retrieval, and Groq answer generation.
+A dispatch assistant that answers questions using a simulated operating playbook and, when a scenario is loaded, live (simulated) dispatch data. The application provides Gradio chat with stored conversation history, per-manager settings, Jina embeddings, PostgreSQL/pgvector retrieval, Groq answer generation, and read-only dispatch tools served over MCP.
 
 Demo tools load **normal**, **backlog**, and **rain** starting snapshots and inspect orders, riders, hourly metrics, and zones. Current data comes from PostgreSQL; Refresh reads saved changes. Other scenarios preview their YAML definitions. Loading a scenario replaces operational rows and clears chat.
 
-Chat uses the question, the stored conversation history, and retrieved policy passages. Conversations are saved in PostgreSQL, so a page refresh or restart resumes the latest chat. Operational scenario rows are not sent to the chat model. Operational tools, persistent preference memory, and action execution are planned work.
+Chat uses the question, the stored conversation history, the manager's settings, and retrieved policy passages. Conversations are saved in PostgreSQL, so a page refresh or restart resumes the latest chat; long chats are summarized so prompts stay small. With a scenario loaded, the assistant can also call two read-only tools for the live queue and rider status and for historical hourly metrics. Each answer has a collapsed **Agent trace** panel listing the tool calls (with the data's "as of" time) and the settings applied. Without a scenario, answers come from the playbook alone. Guardrail checks, caching, and action execution are planned work; the assistant only proposes actions.
+
+Settings (alert thresholds, batching, incentive cap, greeting) are changed only in the **Settings** tab. Design: [docs/memory.md](docs/memory.md).
 
 ## Setup
 
@@ -38,7 +40,7 @@ uv run python -m service.ingestion
 uv run python -m ui.gradio_app
 ```
 
-Open http://localhost:7860. Migrations are manual and run from your local machine. Application startup does not migrate, ingest documents, or load a scenario.
+Open http://localhost:7860. Load a scenario in **Demo tools** to give the assistant live data. Migrations (0001 to 0008) are manual and run from your local machine. Application startup does not migrate, ingest documents, or load a scenario.
 
 To change the listening port, set `PORT` in the process environment:
 
@@ -57,6 +59,21 @@ Defaults are `jina-embeddings-v5-text-nano` for embeddings and Groq's `openai/gp
 Assistant instructions live in [dispatch_manager_system.md](backend/service/rag_data/prompts/dispatch_manager_system.md), which the RAG service loads directly for each answer.
 
 The [RAG notebook](backend/notebooks/simple_rag.ipynb) demonstrates chunking, embedding, storage, retrieval, and a conversation with a follow-up. Select `backend/.venv/bin/python` as its kernel. The storage cell writes document data; provider cells make API calls.
+
+## Tools and MCP
+
+Two read-only tools are served by a local MCP server (`dispatchdesk-ops`, [`backend/mcp_server/server.py`](backend/mcp_server/server.py)) and described in [docs/tools.md](docs/tools.md):
+
+| Tool | Returns |
+| --- | --- |
+| `get_live_dispatch_status(store_id)` | Open queue (counts by status, oldest ages, orders), riders with hours and breaks, zones, rain flag, and the snapshot's `as_of` time with a `stale` flag (older than 5 minutes) |
+| `get_delivery_metrics(store_id, date, start_hour, end_hour)` | Hourly orders, 10-minute SLA, pick-pack, rider-wait and ride minutes, riders online, rain flag, and an order-weighted period summary |
+
+The chat starts the server for each question as a subprocess over stdio (no network port), so it needs no separate process. It uses `DATABASE_URL` from the environment or `backend/.env`. To check it on its own, run `uv run pytest tests/test_mcp_server.py tests/test_agent.py`, or start it with `uv run python -m mcp_server.server`; it speaks MCP on stdin and stdout, and its logs go to stderr.
+
+To see it in the chat, load a scenario, ask "Orders are backing up right now, what's going on and what should I do first?", and open the **Agent trace** under the answer. The app log shows a `Tool call` line from the agent and one from the server for each call.
+
+Groq's free tier allows 8,000 tokens per minute, and one question that uses the tools sends about 10,000 prompt tokens across two calls. Expect a wait of up to about 20 seconds on a second question within a minute; the app retries automatically.
 
 ## Evals
 
@@ -87,8 +104,9 @@ Set `DATABASE_URL`, `JINA_API_KEY`, and `GROQ_API_KEY` on the application servic
 
 | Path | Purpose |
 | --- | --- |
-| `backend/ui/` | Gradio callbacks, styles, and favicon |
-| `backend/service/` | RAG, ingestion, provider services, chunking, and scenarios |
+| `backend/ui/` | Gradio callbacks, the Settings tab, styles, and favicon |
+| `backend/service/` | RAG, ingestion, provider services, chunking, scenarios, conversations, preferences, summaries, tools, and the tool-calling agent |
+| `backend/mcp_server/` | MCP server for the dispatch tools |
 | `backend/queries/` | Database operations |
 | `backend/domain/` | Data contracts |
 | `backend/database/` | SQLAlchemy models and sessions |
@@ -109,4 +127,4 @@ uv run pytest --cov=. --cov-report=term-missing
 
 CI requires 90% coverage. Vector-store integration tests need `TEST_DATABASE_URL` pointing to a disposable PostgreSQL/pgvector database; they clear its document tables. Without that variable, those tests are skipped.
 
-See the [team](docs/team.md), [scenario guide](docs/scenarios.md), and [original requirements](docs/initial/requirements.md).
+See the [code overview](docs/code-overview.md), [tool spec](docs/tools.md), [memory design](docs/memory.md), [team](docs/team.md), [scenario guide](docs/scenarios.md), and [original requirements](docs/initial/requirements.md).

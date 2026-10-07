@@ -1,4 +1,5 @@
 from datetime import datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -145,6 +146,12 @@ def test_messages_record_who_what_and_an_ist_timestamp() -> None:
     assert message["who"] == "manager" and message["what"] == "Hi"
     offset = datetime.fromisoformat(message["when"]).utcoffset()
     assert offset is not None and offset.total_seconds() == 5.5 * 3600
+
+
+@pytest.fixture(autouse=True)
+def no_scenario_loaded(monkeypatch) -> None:
+    """Default to the playbook-only path; the database may hold a scenario."""
+    monkeypatch.setattr(conversations, "current_scenario", lambda: None)
 
 
 def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> None:
@@ -337,3 +344,58 @@ def test_a_summarized_chat_sends_the_summary_and_only_recent_messages(store) -> 
         "reply",
     ]
     assert seen[0][1] is None
+
+
+def test_with_a_scenario_loaded_the_agent_gets_guidance_settings_and_summary(
+    monkeypatch,
+) -> None:
+    seen = {}
+    prefs = SimpleNamespace(effective=list)
+
+    def prepare(question, **kwargs):
+        seen["prepare"] = (question, kwargs)
+        return "PREPARED"
+
+    def agent(question, **kwargs):
+        seen["agent"] = (question, kwargs)
+        return {"answer": "from tools", "trace": [{"tool": "get_live_dispatch_status"}]}
+
+    monkeypatch.setattr(conversations, "current_scenario", lambda: {"store_id": "S-9"})
+    monkeypatch.setattr(conversations, "prepare_message", prepare)
+    monkeypatch.setattr(conversations, "run_agent", agent)
+    monkeypatch.setattr(conversations, "demo_preferences", lambda: prefs)
+
+    reply, trace = conversations._answer("Why late?", history=[], summary="earlier")
+
+    assert reply == "from tools"
+    assert trace["tools"] == [{"tool": "get_live_dispatch_status"}]
+    assert seen["prepare"][1]["summary"] == "earlier"
+    assert seen["prepare"][1]["preferences"] is prefs
+    assert seen["agent"][1]["store_id"] == "S-9"
+    assert seen["agent"][1]["user_message"] == "PREPARED"
+
+
+def test_with_a_scenario_but_no_guidance_the_agent_is_not_started(monkeypatch) -> None:
+    monkeypatch.setattr(conversations, "current_scenario", lambda: {"store_id": "S-9"})
+    monkeypatch.setattr(conversations, "prepare_message", lambda *a, **k: None)
+    monkeypatch.setattr(
+        conversations,
+        "demo_preferences",
+        lambda: SimpleNamespace(effective=list),
+    )
+    monkeypatch.setattr(
+        conversations,
+        "run_agent",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("agent should not run")),
+    )
+    reply, trace = conversations._answer("Why late?", history=[])
+    assert "could not find relevant guidance" in reply
+    assert trace == {"tools": [], "preferences": []}
+
+
+def test_the_reply_is_stored_with_its_trace_and_returned_to_the_ui(store) -> None:
+    trace = {"tools": [{"tool": "get_live_dispatch_status"}], "preferences": []}
+    chat = service(lambda question, *, history: ("tool reply", trace))
+    assert chat.ask_traced("Queue?") == ("tool reply", trace)
+    assert chat.history()[-1]["trace"] == trace
+    assert "trace" not in chat.history()[0]

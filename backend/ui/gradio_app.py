@@ -1,5 +1,6 @@
 """Local DispatchDesk workspace for scenario data and dispatch guidance."""
 
+import json
 import os
 from collections.abc import Iterator, Sequence
 from datetime import datetime
@@ -13,11 +14,9 @@ import requests
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
-from domain.chat import ChatMessage
 from logging_config import configure_logging
-from service.agent import answer_with_tools
 from service.conversations import (
-    ask_question,
+    ask_question_traced,
     conversation_history,
     current_conversation_id,
     past_conversations,
@@ -25,7 +24,6 @@ from service.conversations import (
     start_new_conversation,
     title_latest_conversation,
 )
-from service.rag import answer_question as _answer_rag
 from service.scenarios import (
     TIMEZONE,
     current_scenario,
@@ -346,20 +344,61 @@ def _with_time(text: str, when: datetime, now: datetime) -> str:
     return f'{text}\n\n<span class="message-time">{_time_label(when, now)}</span>'
 
 
-def to_display(messages: Sequence[dict[str, str]]) -> list[dict]:
+def _tool_line(call: dict[str, Any]) -> str:
+    """One tool call: name, arguments, the data's as-of time and any problem."""
+    try:
+        arguments = json.loads(call.get("arguments") or "{}")
+    except json.JSONDecodeError:
+        arguments = {}
+    text = f"{call['tool']}({', '.join(f'{k}={v}' for k, v in arguments.items())})"
+    if call.get("as_of"):
+        as_of = datetime.fromisoformat(call["as_of"]).astimezone(TIMEZONE)
+        text += f" — data as of {as_of.strftime('%H:%M')} IST"
+        if call.get("stale"):
+            text += " (stale)"
+    if call.get("error"):
+        text += f" — error {call['error']}"
+    return text
+
+
+def _trace_html(trace: dict[str, Any] | None) -> str:
+    """A collapsed panel: tool calls, and the manager's own settings in effect."""
+    if not trace or not (trace.get("tools") or trace.get("preferences")):
+        return ""
+    tools = trace.get("tools") or []
+    rows = [f"<li>{escape(_tool_line(call))}</li>" for call in tools]
+    preferences = [
+        f"<li>{escape(item)}</li>" for item in trace.get("preferences") or []
+    ]
+    count = f"{len(tools)} tool call{'s' if len(tools) != 1 else ''}"
+    body = f"<p>Tools</p><ul>{''.join(rows) or '<li>None used</li>'}</ul>"
+    if preferences:
+        body += f"<p>Your settings applied</p><ul>{''.join(preferences)}</ul>"
+    return (
+        f'<details class="agent-trace"><summary>Agent trace · {count}</summary>'
+        f"{body}</details>"
+    )
+
+
+def to_display(messages: Sequence[dict[str, Any]]) -> list[dict]:
     """Stored {who, what, when} messages as chat bubbles with their times."""
     now = datetime.now(TIMEZONE)
     return [
         {
             "role": "user" if message["who"] == "manager" else "assistant",
             "content": _with_time(
-                message["what"],
+                message["what"] + _trace_block(message.get("trace")),
                 datetime.fromisoformat(message["when"]),
                 now,
             ),
         }
         for message in messages
     ]
+
+
+def _trace_block(trace: dict[str, Any] | None) -> str:
+    html = _trace_html(trace)
+    return f"\n\n{html}" if html else ""
 
 
 def restore_chat() -> list[dict]:
@@ -431,22 +470,6 @@ def clear_chat() -> tuple[list[dict], str]:
     return [], ""
 
 
-def answer_question(
-    message: str,
-    *,
-    history: list[ChatMessage] | None = None,
-) -> str:
-    """Route to the agent when a scenario is loaded, otherwise fall back to RAG."""
-    scenario = current_scenario()
-    if scenario:
-        return answer_with_tools(
-            message,
-            store_id=scenario["store_id"],
-            history=history,
-        )
-    return _answer_rag(message, history=history)
-
-
 def chat(
     message: str,
     history: list[dict] | None,
@@ -458,7 +481,7 @@ def chat(
     request_id = uuid4().hex
     try:
         with structlog.contextvars.bound_contextvars(request_id=request_id):
-            answer = ask_question(message)
+            answer, trace = ask_question_traced(message)
     except (
         requests.RequestException,
         SQLAlchemyError,
@@ -473,7 +496,10 @@ def chat(
     now = datetime.now(TIMEZONE)
     return history + [
         {"role": "user", "content": _with_time(message, now, now)},
-        {"role": "assistant", "content": _with_time(answer, now, now)},
+        {
+            "role": "assistant",
+            "content": _with_time(answer + _trace_block(trace), now, now),
+        },
     ], ""
 
 
