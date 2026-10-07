@@ -80,6 +80,7 @@ def list_conversations(
             Conversation.id,
             Conversation.created_at,
             Conversation.updated_at,
+            Conversation.title,
             Conversation.messages[0]["what"].astext.label("first_question"),
             message_count.label("message_count"),
         )
@@ -117,3 +118,19 @@ def resume_conversation(
     if conversation is None:
         raise LookupError(f"Conversation {conversation_id} does not exist")
     return conversation
+
+
+def set_title(
+    conversation_id: UUID,
+    title: str,
+    engine: Engine | None = None,
+) -> bool:
+    """Store a title if the conversation has none; leaves its recency unchanged."""
+    statement = (
+        update(Conversation)
+        .where(Conversation.id == conversation_id, Conversation.title.is_(None))
+        .values(title=title)
+        .returning(Conversation.id)
+    )
+    with get_session(engine) as session:
+        return session.execute(statement).scalar_one_or_none() is not None

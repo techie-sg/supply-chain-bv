@@ -128,9 +128,9 @@ def test_new_conversation_starts_with_empty_history(store) -> None:
     chat.ask("After clearing")
     assert seen[-1] == []
     assert len(store.rows) == 2
-    assert chat.history() == [
-        {"role": "user", "content": "After clearing"},
-        {"role": "assistant", "content": "reply"},
+    assert [(item["who"], item["what"]) for item in chat.history()] == [
+        ("manager", "After clearing"),
+        ("assistant", "reply"),
     ]
 
 
@@ -156,7 +156,7 @@ def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> N
 
     monkeypatch.setattr(conversations, "answer_question", answer)
     assert conversations.ask_question("Hello") == "reply"
-    assert conversations.conversation_history()[0]["content"] == "Hello"
+    assert conversations.conversation_history()[0]["what"] == "Hello"
     conversations.start_new_conversation()
     assert conversations.conversation_history() == []
     assert {(row.store_id, row.manager_id) for row in store.rows} == {
@@ -184,9 +184,9 @@ def test_resumed_conversation_is_continued_by_the_next_question(store) -> None:
         "Rain plan?",
     ]
 
-    assert chat.resume(first) == [
-        {"role": "user", "content": "Rain plan?"},
-        {"role": "assistant", "content": "reply to Rain plan?"},
+    assert [(item["who"], item["what"]) for item in chat.resume(first)] == [
+        ("manager", "Rain plan?"),
+        ("assistant", "reply to Rain plan?"),
     ]
     chat.ask("And now?")
     assert seen[-1][0]["content"] == "Rain plan?"
@@ -212,7 +212,100 @@ def test_ui_browse_entry_points(store, monkeypatch) -> None:
     [item] = conversations.past_conversations()
     assert str(item["id"]) == earlier_id
     assert item["first_question"] == "Earlier"
-    assert conversations.resume_past_conversation(str(item["id"]))[0] == {
-        "role": "user",
-        "content": "Earlier",
-    }
+    first = conversations.resume_past_conversation(str(item["id"]))[0]
+    assert (first["who"], first["what"]) == ("manager", "Earlier")
+
+
+def test_first_answer_gets_a_clean_title_once(store, monkeypatch) -> None:
+    calls, saved = [], []
+
+    def titler(question, answer):
+        calls.append((question, answer))
+        return '"Title: Rain backlog with two riders."\nmore text'
+
+    def set_title(conversation_id, title, engine=None):
+        saved.append(title)
+        store.rows[-1].title = title
+        return True
+
+    monkeypatch.setattr(conversations, "set_title", set_title)
+    chat = conversations.ConversationService(
+        "DS-1",
+        "karthik",
+        answer=lambda question, *, history: "Call in the standby rider.",
+        titler=titler,
+    )
+    assert chat.title_latest() is None
+    chat.ask("It's pouring and riders are short")
+    assert chat.title_latest() == "Rain backlog with two riders"
+    assert chat.title_latest() is None
+    assert calls == [
+        ("It's pouring and riders are short", "Call in the standby rider."),
+    ]
+    assert saved == ["Rain backlog with two riders"]
+
+
+def test_title_failures_leave_the_chat_untitled(store, monkeypatch) -> None:
+    def failing(question, answer):
+        raise RuntimeError("provider down")
+
+    chat = conversations.ConversationService(
+        "DS-1",
+        "karthik",
+        answer=lambda question, *, history: "reply",
+        titler=failing,
+    )
+    chat.ask("Rain plan?")
+    monkeypatch.setattr(conversations, "set_title", lambda *args, **kwargs: True)
+    assert chat.title_latest() is None
+    blank = conversations.ConversationService(
+        "DS-1",
+        "karthik",
+        answer=lambda question, *, history: "reply",
+        titler=lambda question, answer: "  \n",
+    )
+    assert blank.title_latest() is None
+    assert (
+        conversations.ConversationService(
+            "DS-1",
+            "karthik",
+            answer=lambda question, *, history: "reply",
+        ).title_latest()
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "title"),
+    [
+        ("Batching frozen orders", "Batching frozen orders"),
+        ("# Rider break limits!", "Rider break limits"),
+        ("**SLA dip after rain**", "SLA dip after rain"),
+        ("", None),
+        ("word " * 30, ("word " * 12).strip()),
+    ],
+)
+def test_clean_title(raw, title) -> None:
+    assert conversations.clean_title(raw) == title
+
+
+def test_ui_title_entry_point_uses_the_configured_model(store, monkeypatch) -> None:
+    seen = []
+
+    class Model:
+        def generate(self, system_prompt, user_message):
+            seen.append((system_prompt, user_message))
+            return "Rain plan"
+
+    monkeypatch.setattr(conversations, "create_llm_service", lambda: Model())
+    monkeypatch.setattr(
+        conversations,
+        "answer_question",
+        lambda question, *, history, preferences: "Use the standby rider.",
+    )
+    monkeypatch.setattr(conversations, "set_title", lambda *args, **kwargs: True)
+    conversations.ask_question("Rain plan?")
+    assert conversations.title_latest_conversation() == "Rain plan"
+    system_prompt, user_message = seen[0]
+    assert "2 to 6 words" in system_prompt
+    assert user_message == "Manager: Rain plan?\n\nAssistant: Use the standby rider."

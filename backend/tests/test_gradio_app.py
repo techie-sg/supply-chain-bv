@@ -1,8 +1,27 @@
+from datetime import datetime
+
 import gradio as gr
 import pytest
 
 from service import scenarios
 from ui import gradio_app
+
+NOW = datetime(2026, 10, 7, 19, 42, tzinfo=gradio_app.TIMEZONE)
+
+
+def timed(text: str, label: str = "19:42") -> str:
+    return f'{text}\n\n<span class="message-time">{label}</span>'
+
+
+@pytest.fixture
+def frozen_now(monkeypatch) -> datetime:
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW
+
+    monkeypatch.setattr(gradio_app, "datetime", FixedDateTime)
+    return NOW
 
 
 def test_theme_supports_gradio_launch_analytics_comparison() -> None:
@@ -170,6 +189,7 @@ def test_chat_failure_preserves_existing_history(monkeypatch) -> None:
 
 def test_reply_uses_pending_message_once_and_keeps_previous_history(
     monkeypatch,
+    frozen_now,
 ) -> None:
     calls = []
 
@@ -185,7 +205,10 @@ def test_reply_uses_pending_message_once_and_keeps_previous_history(
     pending = previous + [{"role": "user", "content": "Follow-up"}]
     finished, draft = next(gradio_app.respond_to_pending("Follow-up", pending))
     assert calls == ["Follow-up"]
-    assert finished == pending + [{"role": "assistant", "content": "reply"}]
+    assert finished == previous + [
+        {"role": "user", "content": timed("Follow-up")},
+        {"role": "assistant", "content": timed("reply")},
+    ]
     assert draft == ""
     assert len(previous) == 2
 
@@ -207,6 +230,7 @@ def test_failed_generation_restores_draft_without_duplicate_user_message(
 
 def test_chat_passes_only_the_question_without_reading_scenario_data(
     monkeypatch,
+    frozen_now,
 ) -> None:
     seen = []
 
@@ -226,8 +250,8 @@ def test_chat_passes_only_the_question_without_reading_scenario_data(
     history, _ = gradio_app.chat("What should we do?", earlier)
     assert seen == ["What should we do?"]
     assert history == earlier + [
-        {"role": "user", "content": "What should we do?"},
-        {"role": "assistant", "content": "reply"},
+        {"role": "user", "content": timed("What should we do?")},
+        {"role": "assistant", "content": timed("reply")},
     ]
 
 
@@ -271,13 +295,27 @@ def test_processing_indicator_clears_after_success_or_failure() -> None:
         assert not callback.trigger_only_on_failure
 
 
-def test_page_load_restores_the_stored_conversation(monkeypatch) -> None:
+def test_page_load_restores_the_stored_conversation(monkeypatch, frozen_now) -> None:
     stored = [
-        {"role": "user", "content": "Should riders jump red lights?"},
-        {"role": "assistant", "content": "No. Safety comes first."},
+        {
+            "who": "manager",
+            "what": "Should riders jump red lights?",
+            "when": "2026-10-06T21:05:00+05:30",
+        },
+        {
+            "who": "assistant",
+            "what": "No. Safety comes first.",
+            "when": "2026-10-07T08:10:00+05:30",
+        },
     ]
     monkeypatch.setattr(gradio_app, "conversation_history", lambda: stored)
-    assert gradio_app.restore_chat() == stored
+    assert gradio_app.restore_chat() == [
+        {
+            "role": "user",
+            "content": timed("Should riders jump red lights?", "6 Oct, 21:05"),
+        },
+        {"role": "assistant", "content": timed("No. Safety comes first.", "08:10")},
+    ]
     assert any(
         callback.fn is gradio_app.restore_chat
         and any(isinstance(component, gr.Chatbot) for component in callback.outputs)
@@ -327,16 +365,25 @@ def test_sidebar_lists_past_chats_and_marks_the_open_one(monkeypatch) -> None:
     assert gradio_app.conversation_choices()["choices"] == []
 
 
-def test_opening_a_past_conversation_shows_and_continues_it(monkeypatch) -> None:
+def test_opening_a_past_conversation_shows_and_continues_it(
+    monkeypatch,
+    frozen_now,
+) -> None:
     opened = []
 
     def resume(conversation_id):
         opened.append(conversation_id)
-        return [{"role": "user", "content": "Rain plan?"}]
+        return [
+            {
+                "who": "manager",
+                "what": "Rain plan?",
+                "when": "2026-10-07T19:30:00+05:30",
+            },
+        ]
 
     monkeypatch.setattr(gradio_app, "resume_past_conversation", resume)
     assert gradio_app.open_conversation("abc") == (
-        [{"role": "user", "content": "Rain plan?"}],
+        [{"role": "user", "content": timed("Rain plan?", "19:30")}],
         "",
     )
     assert opened == ["abc"]
@@ -383,7 +430,7 @@ def test_chat_preserves_nonblank_message_whitespace(monkeypatch) -> None:
     message = "  Should riders speed?\n"
     history, draft = gradio_app.chat(message, [])
     assert seen == [message]
-    assert history[0]["content"] == message
+    assert history[0]["content"].startswith(message)
     assert draft == ""
     assert gradio_app.chat(" \n\t", history) == (history, "")
     assert seen == [message]
@@ -497,3 +544,54 @@ def test_launch_supports_railway_port(monkeypatch, port, expected) -> None:
     assert options["server_port"] == expected
     assert options["share"] is False
     assert options["css_paths"] == gradio_app.CSS_PATH
+
+
+def test_times_are_shown_in_ist_with_the_day_for_older_messages() -> None:
+    from datetime import UTC
+
+    assert gradio_app._time_label(datetime(2026, 10, 7, 14, 12, tzinfo=UTC), NOW) == (
+        "19:42"
+    )
+    assert gradio_app._time_label(datetime(2026, 9, 30, 4, 0, tzinfo=UTC), NOW) == (
+        "30 Sep, 09:30"
+    )
+
+
+def test_sidebar_prefers_the_title_over_the_first_question() -> None:
+    assert (
+        gradio_app._conversation_title(
+            {"title": "Rain backlog with two riders", "first_question": "It's pouring"},
+        )
+        == "Rain backlog with two riders"
+    )
+    assert (
+        gradio_app._conversation_title(
+            {"title": None, "first_question": "It's pouring"},
+        )
+        == "It's pouring"
+    )
+
+
+def test_title_runs_after_the_answer_and_refreshes_the_sidebar(monkeypatch) -> None:
+    titled = []
+    monkeypatch.setattr(
+        gradio_app,
+        "title_latest_conversation",
+        lambda: titled.append(True),
+    )
+    monkeypatch.setattr(gradio_app, "conversation_choices", lambda: "choices")
+    assert gradio_app.title_conversation() == "choices"
+    assert titled == [True]
+
+    def unavailable():
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(gradio_app, "title_latest_conversation", unavailable)
+    assert gradio_app.title_conversation() == "choices"
+    callbacks = [
+        callback
+        for callback in gradio_app.app.fns.values()
+        if callback.fn is gradio_app.title_conversation
+    ]
+    assert len(callbacks) == 2
+    assert all(callback.concurrency_id == "titles" for callback in callbacks)
