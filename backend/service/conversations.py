@@ -18,6 +18,7 @@ from queries.conversations import (
     resume_conversation,
     start_conversation,
 )
+from service.preferences import demo_preferences
 from service.rag import answer_question
 from service.scenarios import TIMEZONE
 
@@ -109,8 +110,13 @@ class ConversationService:
         return reply
 
 
+def _answer(question: str, *, history: Sequence[ChatMessage]) -> str:
+    """Answer with the manager's settings in view, so they are applied."""
+    return answer_question(question, history=history, preferences=demo_preferences())
+
+
 def _service() -> ConversationService:
-    return ConversationService(DEMO_STORE_ID, DEMO_MANAGER_ID, answer=answer_question)
+    return ConversationService(DEMO_STORE_ID, DEMO_MANAGER_ID, answer=_answer)
 
 
 def ask_question(question: str) -> str:

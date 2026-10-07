@@ -27,6 +27,7 @@ from service.scenarios import (
     scenario_details,
     scenario_names,
 )
+from ui import settings
 
 logger = structlog.stdlib.get_logger(__name__)
 CSS_PATH = Path(__file__).with_name("gradio_app.css")
@@ -435,9 +436,13 @@ def _assistant_context(context: dict[str, Any] | None) -> str:
     )
 
 
+def open_settings() -> dict:
+    return gr.update(selected="settings")
+
+
 def _restore_tab(request: gr.Request) -> dict:
     view = request.query_params.get("view", "assistant")
-    return gr.update(selected="demo" if view == "demo" else "assistant")
+    return gr.update(selected=view if view in ("demo", "settings") else "assistant")
 
 
 TAB_URL_JS = """
@@ -447,7 +452,7 @@ async () => {
         '#workspace-tabs > .tab-wrapper [role="tab"][aria-selected="true"]'
     );
     const view = tab?.dataset.tabId;
-    if (view !== 'assistant' && view !== 'demo') return;
+    if (!['assistant', 'settings', 'demo'].includes(view)) return;
     const url = new URL(window.location.href);
     url.searchParams.set('view', view);
     window.history.replaceState(null, '', url);
@@ -518,6 +523,23 @@ def build_app() -> gr.Blocks:
                 container=False,
                 elem_id="history-list",
             )
+            with gr.Column(elem_id="settings-summary-block"):
+                with gr.Row(elem_id="settings-summary-heading"):
+                    gr.HTML(
+                        '<p class="sidebar-heading">Active settings</p>',
+                        apply_default_css=False,
+                    )
+                    edit_settings = gr.Button(
+                        "Edit",
+                        size="sm",
+                        scale=0,
+                        min_width=0,
+                        elem_id="edit-settings",
+                    )
+                settings_summary = gr.HTML(
+                    apply_default_css=False,
+                    elem_id="settings-summary",
+                )
         with gr.Tabs(selected="assistant", elem_id="workspace-tabs") as workspace:
             with (
                 gr.Tab("Assistant", id="assistant"),
@@ -579,6 +601,11 @@ def build_app() -> gr.Blocks:
                         gr.Button(question, size="sm", elem_classes="prompt-button")
                         for question in prompts
                     ]
+            with (
+                gr.Tab("Settings", id="settings"),
+                gr.Column(elem_id="settings-workspace", min_width=0),
+            ):
+                settings_form = settings.build(summary=settings_summary)
             with (
                 gr.Tab("Demo tools", id="demo"),
                 gr.Column(elem_id="demo-workspace", min_width=0),
@@ -673,6 +700,22 @@ def build_app() -> gr.Blocks:
                             elem_classes="panel-note",
                         )
         app.load(_restore_tab, outputs=workspace, queue=False)
+        app.load(
+            settings.load_settings,
+            outputs=settings_form.outputs(),
+            concurrency_id="settings",
+            concurrency_limit=1,
+        )
+        app.load(settings.load_summary, outputs=settings_summary)
+        # Selecting the tab from the server works even when narrow screens fold
+        # the tab into the "More tabs" menu.
+        edit_settings.click(
+            open_settings,
+            outputs=workspace,
+            js=CLOSE_SIDEBAR_ON_PHONE_JS,
+            queue=False,
+            show_progress="hidden",
+        )
         app.load(
             restore_chat,
             outputs=chatbot,

@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Protocol
 
 import structlog
 
@@ -35,6 +35,12 @@ def retrieval_query(
     return f"{recent_exchange}\nFollow-up question: {question}"
 
 
+class PreferenceContext(Protocol):
+    """The manager's settings, shown to the model so its answers apply them."""
+
+    def prompt_block(self) -> str: ...
+
+
 class RAGService:
     def __init__(
         self,
@@ -49,8 +55,13 @@ class RAGService:
         question: str,
         top_k: int = 3,
         history: Sequence[ChatMessage] | None = None,
+        preferences: PreferenceContext | None = None,
     ) -> str:
-        """Retrieve evidence and answer using the injected provider services."""
+        """Retrieve evidence and answer using the injected provider services.
+
+        With preferences, the model sees the manager's settings and applies them.
+        It cannot change them; that happens only in the Settings tab.
+        """
         if top_k < 1:
             raise ValueError("top_k must be positive")
         started = perf_counter()
@@ -76,6 +87,8 @@ class RAGService:
                 f"<context>\n{context}\n</context>\n\n"
                 f"Question: {question}"
             )
+        if preferences is not None:
+            user_message = f"{preferences.prompt_block()}\n\n{user_message}"
         answer = self.llm_service.generate(
             system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
             user_message=user_message,
@@ -99,6 +112,7 @@ def answer_question(
     question: str,
     top_k: int = 3,
     history: Sequence[ChatMessage] | None = None,
+    preferences: PreferenceContext | None = None,
 ) -> str:
     """UI entry point composing the configured services."""
     settings = get_settings()
@@ -106,4 +120,9 @@ def answer_question(
         embedding_service=create_embedding_service(settings),
         llm_service=create_llm_service(settings),
     )
-    return service.answer_question(question, top_k, history=history)
+    return service.answer_question(
+        question,
+        top_k,
+        history=history,
+        preferences=preferences,
+    )
