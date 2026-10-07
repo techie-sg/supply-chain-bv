@@ -4,13 +4,18 @@ from datetime import date as _date
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from database.models import HourlyMetric, Order, Rider, Zone
 from database.session import build_engine
+from service.scenarios import _read_scenario
+
+logger = structlog.stdlib.get_logger(__name__)
 
 TZ = ZoneInfo("Asia/Kolkata")
+STALE_AFTER_SEC = 300  # live data older than this is flagged stale
 _engine = build_engine()  # one engine for the module; connections are pooled
 
 
@@ -80,7 +85,13 @@ def get_live_dispatch_status(store_id: str) -> dict:
         for r in riders
     ]
 
-    packed_waiting = sum(1 for o in order_rows if o["status"] == "packed_waiting_rider")
+    packed = [o for o in order_rows if o["status"] == "packed_waiting_rider"]
+    packed_waiting = len(packed)
+    counts_by_status: dict[str, int] = {}
+    for row in order_rows:
+        counts_by_status[row["status"]] = counts_by_status.get(row["status"], 0) + 1
+    # order_rows is oldest first, so the first match is the oldest.
+    oldest_frozen_packed = next((o for o in packed if o["has_frozen_items"]), None)
     available = sum(1 for r in rider_rows if r["status"] == "available")
     returning = sum(
         1
@@ -88,16 +99,34 @@ def get_live_dispatch_status(store_id: str) -> dict:
         if r["eta_back_min"] is not None and r["eta_back_min"] <= 10
     )
 
+    scenario_key = (orders or riders)[0].scenario_key
+    data_age_sec = int((datetime.now(TZ) - as_of).total_seconds())
+    stale = data_age_sec > STALE_AFTER_SEC
+    if stale:
+        logger.warning(
+            "Stale live data",
+            store_id=store_id,
+            data_age_sec=data_age_sec,
+            stale_after_sec=STALE_AFTER_SEC,
+        )
+
     return {
         "store_id": store_id,
-        "scenario_key": (orders or riders)[0].scenario_key,
+        "scenario_key": scenario_key,
         "as_of": as_of.isoformat(),
-        "data_age_sec": int((datetime.now(TZ) - as_of).total_seconds()),
-        "conditions": {"is_raining": None},
+        "data_age_sec": data_age_sec,
+        "stale": stale,
+        "stale_after_sec": STALE_AFTER_SEC,
+        "conditions": {"is_raining": _read_scenario(scenario_key).is_raining},
         "queue": {
             "open_orders": len(order_rows),
             "packed_waiting": packed_waiting,
+            "counts_by_status": counts_by_status,
             "oldest_order_age_sec": order_rows[0]["age_sec"] if order_rows else None,
+            "oldest_packed_waiting_age_sec": packed[0]["age_sec"] if packed else None,
+            "oldest_frozen_packed_age_sec": (
+                oldest_frozen_packed["age_sec"] if oldest_frozen_packed else None
+            ),
             "orders_truncated": len(order_rows) > 50,
             "orders": order_rows[:50],
         },

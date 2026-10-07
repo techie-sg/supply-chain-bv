@@ -2,7 +2,7 @@
 
 | | |
 | --- | --- |
-| **Spec version** | 1.0 |
+| **Spec version** | 1.1 |
 | **Status** | Draft |
 | **Protocol** | Model Context Protocol (MCP), tools capability |
 | **MCP server** | `dispatchdesk-ops` (`backend/mcp_server/server.py`) |
@@ -87,6 +87,7 @@ Live data is a snapshot with an `as_of` timestamp. The snapshot does not advance
 
 - **Order ages** (`age_sec`, `oldest_order_age_sec`) are computed relative to `as_of`, not to the wall clock, so they describe the queue as it was when the snapshot was taken.
 - **`data_age_sec`** is the wall-clock time between `as_of` and the tool call. Consumers use it to label staleness: "Live data as of 20:14 (3 min ago)."
+- **`stale`** is `true` when `data_age_sec` exceeds `stale_after_sec` (300 s). A stale snapshot is still returned, never withheld. The agent must say it may be out of date ("The last snapshot I have is from 20:14 and may be out of date"), and the tool logs a `Stale live data` warning that observability counts as a stale-data event.
 - Any answer that states a live figure must also state `as_of`.
 
 ### 2.5 Computation responsibility
@@ -156,10 +157,15 @@ Tools return computed figures: counts, ratios, and order-weighted averages. The 
 | `scenario_key` | string | Loaded scenario (`normal`, `backlog`, `rain`, …). |
 | `as_of` | timestamp | When the snapshot was taken. |
 | `data_age_sec` | integer | Seconds between `as_of` and this call. |
-| `conditions.is_raining` | boolean \| null | Whether the current scenario declares rain. `null` if not available. |
+| `stale` | boolean | `true` if `data_age_sec` > `stale_after_sec`. |
+| `stale_after_sec` | integer | Staleness threshold, currently 300. |
+| `conditions.is_raining` | boolean | Whether the loaded scenario declares rain, read from the scenario definition for `scenario_key`. Use it to choose `avg_ride_min_rain` or `avg_ride_min_dry`. |
 | `queue.open_orders` | integer | Orders not yet delivered. |
 | `queue.packed_waiting` | integer | Orders with status `packed_waiting_rider`. |
+| `queue.counts_by_status` | object | Open orders per status, for example `{"picking": 3, "packed_waiting_rider": 5}`. Statuses with no orders are omitted. Picking plus packed waiting is the "orders piling up" count. |
 | `queue.oldest_order_age_sec` | integer \| null | Age of the oldest open order, relative to `as_of`. `null` if the queue is empty. |
+| `queue.oldest_packed_waiting_age_sec` | integer \| null | Age of the oldest order with status `packed_waiting_rider`. `null` if none. Age is measured from `placed_at`, because orders carry no packed timestamp. |
+| `queue.oldest_frozen_packed_age_sec` | integer \| null | Same, for the oldest packed-waiting order with `has_frozen_items` true. `null` if none. |
 | `queue.orders_truncated` | boolean | `true` if more than 50 open orders exist and only the 50 oldest are listed. |
 | `queue.orders[]` | array | Open orders, oldest first, at most 50. |
 | `queue.orders[].order_id` | string | |
@@ -221,11 +227,16 @@ Arguments:
   "scenario_key": "backlog",
   "as_of": "2026-10-05T20:10:00+05:30",
   "data_age_sec": 140,
+  "stale": false,
+  "stale_after_sec": 300,
   "conditions": { "is_raining": false },
   "queue": {
     "open_orders": 6,
     "packed_waiting": 6,
+    "counts_by_status": { "packed_waiting_rider": 6 },
     "oldest_order_age_sec": 540,
+    "oldest_packed_waiting_age_sec": 540,
+    "oldest_frozen_packed_age_sec": 420,
     "orders_truncated": false,
     "orders": [
       {
@@ -311,11 +322,16 @@ Arguments:
   "scenario_key": "rain",
   "as_of": "2026-10-05T20:40:00+05:30",
   "data_age_sec": 60,
+  "stale": false,
+  "stale_after_sec": 300,
   "conditions": { "is_raining": true },
   "queue": {
     "open_orders": 5,
     "packed_waiting": 5,
+    "counts_by_status": { "packed_waiting_rider": 5 },
     "oldest_order_age_sec": 480,
+    "oldest_packed_waiting_age_sec": 480,
+    "oldest_frozen_packed_age_sec": 240,
     "orders_truncated": false,
     "orders": [
       {
@@ -397,6 +413,8 @@ Arguments:
   "scenario_key": "normal",
   "as_of": "2026-10-05T19:30:00+05:30",
   "data_age_sec": 95,
+  "stale": false,
+  "stale_after_sec": 300,
   "conditions": { "is_raining": false },
   "summary": {
     "available_riders": 4,
@@ -716,3 +734,4 @@ Result (`isError: true`), text payload:
 | Version | Change |
 | --- | --- |
 | 1.0 | Initial specification of `get_live_dispatch_status` and `get_delivery_metrics`. |
+| 1.1 | `get_live_dispatch_status`: `conditions.is_raining` is now always populated; added `stale` and `stale_after_sec`; added `queue.counts_by_status`, `queue.oldest_packed_waiting_age_sec` and `queue.oldest_frozen_packed_age_sec` so stored alerts can be evaluated from tool output. |

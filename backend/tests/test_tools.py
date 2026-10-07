@@ -258,3 +258,33 @@ def test_delivery_metrics_missing_hours_reported() -> None:
     with patch.object(tools_mod, "Session", return_value=cm):
         result = get_delivery_metrics("S-1", "2026-10-02", 18, 21)
     assert result["period"]["hours_missing"] == [19, 20]
+
+
+def test_live_status_alert_fields_and_rain_flag() -> None:
+    placed = datetime(2026, 10, 3, 19, 0, tzinfo=TZ)
+    orders = [
+        _order(order_id="O-1", placed_at=placed),  # 30 min old, packed
+        _order(
+            order_id="O-2",
+            placed_at=placed.replace(minute=20),  # 10 min old, packed, frozen
+            has_frozen_items=True,
+        ),
+        _order(order_id="O-3", status="picking", placed_at=placed.replace(minute=25)),
+    ]
+    cm = _make_session([orders, [_rider(store_id="S-1")], [_zone()]])
+    with patch.object(tools_mod, "Session", return_value=cm):
+        result = get_live_dispatch_status("S-1")
+    queue = result["queue"]
+    assert queue["counts_by_status"] == {"packed_waiting_rider": 2, "picking": 1}
+    assert queue["oldest_packed_waiting_age_sec"] == 1800
+    assert queue["oldest_frozen_packed_age_sec"] == 600
+    assert result["conditions"]["is_raining"] is False  # the "normal" scenario
+
+
+def test_live_status_flags_stale_snapshot() -> None:
+    # The fixture snapshot is dated 2026-10-03, so it is far older than the limit.
+    cm = _make_session([[_order()], [_rider()], [_zone()]])
+    with patch.object(tools_mod, "Session", return_value=cm):
+        result = get_live_dispatch_status("S-1")
+    assert result["stale"] is True
+    assert result["stale_after_sec"] == tools_mod.STALE_AFTER_SEC

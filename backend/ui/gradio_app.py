@@ -13,7 +13,9 @@ import requests
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
+from domain.chat import ChatMessage
 from logging_config import configure_logging
+from service.agent import answer_with_tools
 from service.conversations import (
     ask_question,
     conversation_history,
@@ -23,7 +25,6 @@ from service.conversations import (
     start_new_conversation,
     title_latest_conversation,
 )
-from service.agent import answer_with_tools
 from service.rag import answer_question as _answer_rag
 from service.scenarios import (
     TIMEZONE,
