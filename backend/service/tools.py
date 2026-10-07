@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date as _date
 from datetime import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import structlog
@@ -53,7 +54,7 @@ def get_live_dispatch_status(store_id: str) -> dict:
     riders = [r for r in riders if r.store_id == store_id]
     as_of = (orders or riders)[0].as_of.astimezone(TZ)
 
-    order_rows = sorted(
+    order_rows: list[dict[str, Any]] = sorted(
         (
             {
                 "order_id": o.order_id,
@@ -70,7 +71,7 @@ def get_live_dispatch_status(store_id: str) -> dict:
         key=lambda row: row["age_sec"],
         reverse=True,  # oldest first
     )
-    rider_rows = [
+    rider_rows: list[dict[str, Any]] = [
         {
             "rider_id": r.rider_id,
             "name": r.name,

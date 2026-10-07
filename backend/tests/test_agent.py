@@ -6,6 +6,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 import service.agent as agent_mod
+from domain.chat import ChatMessage
 from service.agent import (
     AgentResult,
     ToolClient,
@@ -43,7 +44,7 @@ def test_build_messages_structure() -> None:
 
 
 def test_build_messages_includes_history() -> None:
-    history = [
+    history: list[ChatMessage] = [
         {"role": "user", "content": "Earlier question"},
         {"role": "assistant", "content": "Earlier answer"},
     ]

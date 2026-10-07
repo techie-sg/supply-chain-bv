@@ -14,9 +14,10 @@ import threading
 import time
 from collections.abc import Sequence
 from concurrent.futures import Future
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Protocol, Self
 from zoneinfo import ZoneInfo
 
 import requests
@@ -56,6 +57,14 @@ def _error_text(code: str, message: str, **details: Any) -> str:
     return json.dumps(
         {"error": {"code": code, "message": message, "details": details}},
     )
+
+
+class ToolSession(Protocol):
+    """What the agent loop needs from the tool server; tests supply a fake."""
+
+    def tool_definitions(self) -> list[dict]: ...
+
+    def call(self, name: str, arguments: dict[str, Any]) -> str: ...
 
 
 class ToolClient:
@@ -216,7 +225,7 @@ def _call_llm(messages: list[dict], tools: list[dict]) -> dict:
     return response.json()
 
 
-def _dispatch(call: dict, client: ToolClient) -> str:
+def _dispatch(call: dict, client: ToolSession) -> str:
     """Run one tool call through the MCP server and return its JSON result."""
     try:
         arguments = json.loads(call["function"]["arguments"] or "{}")
@@ -282,7 +291,7 @@ def run_agent(
     store_id: str,
     history: Sequence[ChatMessage] | None = None,
     max_steps: int = 5,
-    client: ToolClient | None = None,
+    client: ToolSession | None = None,
     user_message: str | None = None,
 ) -> AgentResult:
     """Run the tool-calling loop and return the final answer with a trace.
@@ -290,7 +299,7 @@ def run_agent(
     `user_message` replaces the bare question, so the caller can include
     retrieved guidance, the manager's settings and a conversation summary.
     """
-    with client or ToolClient() as tools:
+    with nullcontext(client) if client else ToolClient() as tools:
         definitions = tools.tool_definitions()
         messages = _build_messages(user_message or question, store_id, history)
         trace: list[dict] = []

@@ -11,7 +11,7 @@ from typing import Annotated, Any
 
 import structlog
 from mcp.server.mcpserver import MCPServer
-from mcp_types import CallToolResult, TextContent, ToolAnnotations
+from mcp_types import CallToolResult, ContentBlock, TextContent, ToolAnnotations
 
 from domain.tools import (
     DeliveryMetrics,
@@ -56,7 +56,7 @@ server = MCPServer("dispatchdesk-ops")
 
 def _result(data: dict[str, Any]) -> CallToolResult:
     """Success carries structured content; a tool error carries only the error JSON."""
-    text = [TextContent(type="text", text=json.dumps(data))]
+    text: list[ContentBlock] = [TextContent(type="text", text=json.dumps(data))]
     if "error" in data:
         return CallToolResult(content=text, is_error=True)
     return CallToolResult(content=text, structured_content=data)

@@ -6,6 +6,7 @@ import pytest
 
 from database.models import Conversation
 from service import conversations
+from service.preferences import PreferenceService
 
 
 class FakeStore:
@@ -150,8 +151,9 @@ def test_messages_record_who_what_and_an_ist_timestamp() -> None:
 
 @pytest.fixture(autouse=True)
 def no_scenario_loaded(monkeypatch) -> None:
-    """Default to the playbook-only path; the database may hold a scenario."""
+    """Default to the playbook-only path with no stored settings or scenario."""
     monkeypatch.setattr(conversations, "current_scenario", lambda: None)
+    monkeypatch.setattr(PreferenceService, "effective", lambda self: [])
 
 
 def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> None:
