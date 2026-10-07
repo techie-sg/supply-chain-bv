@@ -383,3 +383,20 @@ p.settings-status { padding-left: 0; color: var(--desk-muted); }
 .summary-detail { display: block; color: var(--desk-muted); }
 .summary-yours { flex: none; padding: 1px 6px; border-radius: 6px; font-size: 11px; background: var(--desk-tint); color: var(--desk-accent); }
 .summary-off { margin: 4px 10px 0; font-size: 11px; color: var(--desk-muted); }
+
+/* Message time under each bubble's text. */
+#conversation .message-time { display: block; margin-top: 2px; font-size: 11px; line-height: 1; color: var(--desk-muted); opacity: .85; text-align: right; }
+#conversation .message.bot .message-time { text-align: left; }
+
+/* Keep the header and the workspace switcher visible while the page scrolls. */
+#brand-home { position: fixed !important; top: 0; left: 0; right: 0; width: auto !important; z-index: 40; margin: 0 !important; background: var(--desk-bg); }
+.column:has(> #chat-sidebar.open) #brand-home { left: 272px; }
+#workspace-tabs > .tab-wrapper { position: fixed !important; z-index: 41; }
+/* The fixed header leaves the page flow, so reserve its height above the content. */
+#workspace-tabs { margin-top: 77px !important; }
+@media (max-width: 768px) {
+  .column:has(> #chat-sidebar.open) #brand-home { left: 0; }
+}
+@media (max-width: 550px) {
+  #workspace-tabs { margin-top: 67px !important; }
+}

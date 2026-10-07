@@ -15,6 +15,7 @@ from queries.conversations import (
     latest_conversation,
     list_conversations,
     resume_conversation,
+    set_title,
     start_conversation,
 )
 
@@ -148,3 +149,20 @@ def test_resuming_another_stores_or_missing_conversation_fails(
         resume_conversation(other.id, "DS-1", "karthik", conversation_engine)
     with pytest.raises(LookupError):
         resume_conversation(uuid4(), "DS-1", "karthik", conversation_engine)
+
+
+def test_title_is_set_once_without_changing_recency(
+    conversation_engine: Engine,
+) -> None:
+    older = start_conversation("DS-1", "karthik", conversation_engine)
+    append_message(older.id, message("manager", "Rain plan?"), conversation_engine)
+    newer = start_conversation("DS-1", "karthik", conversation_engine)
+    append_message(newer.id, message("manager", "Batching?"), conversation_engine)
+
+    assert set_title(older.id, "Rain plan", conversation_engine)
+    assert not set_title(older.id, "Another title", conversation_engine)
+    items = list_conversations("DS-1", "karthik", engine=conversation_engine)
+    assert [(item["id"], item["title"]) for item in items] == [
+        (newer.id, None),
+        (older.id, "Rain plan"),
+    ]

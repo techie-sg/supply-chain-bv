@@ -1,7 +1,8 @@
 """Local DispatchDesk workspace for scenario data and dispatch guidance."""
 
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
+from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -20,8 +21,10 @@ from service.conversations import (
     past_conversations,
     resume_past_conversation,
     start_new_conversation,
+    title_latest_conversation,
 )
 from service.scenarios import (
+    TIMEZONE,
     current_scenario,
     load_scenario,
     scenario_details,
@@ -326,19 +329,48 @@ def restore_workspace() -> tuple:
     )
 
 
+def _time_label(when: datetime, now: datetime) -> str:
+    """Time for today's messages; day and time for older ones, in IST."""
+    when = when.astimezone(TIMEZONE)
+    if when.date() == now.astimezone(TIMEZONE).date():
+        return when.strftime("%H:%M")
+    return f"{when.day} {when.strftime('%b, %H:%M')}"
+
+
+def _with_time(text: str, when: datetime, now: datetime) -> str:
+    """Message text with its time below it; shown only, never sent to the model."""
+    return f'{text}\n\n<span class="message-time">{_time_label(when, now)}</span>'
+
+
+def to_display(messages: Sequence[dict[str, str]]) -> list[dict]:
+    """Stored {who, what, when} messages as chat bubbles with their times."""
+    now = datetime.now(TIMEZONE)
+    return [
+        {
+            "role": "user" if message["who"] == "manager" else "assistant",
+            "content": _with_time(
+                message["what"],
+                datetime.fromisoformat(message["when"]),
+                now,
+            ),
+        }
+        for message in messages
+    ]
+
+
 def restore_chat() -> list[dict]:
     """Show the latest stored conversation when the page loads."""
     try:
-        return [dict(message) for message in conversation_history()]
+        return to_display(conversation_history())
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not restore the conversation", exc_info=True)
         return []
 
 
 def _conversation_title(item: dict[str, Any]) -> str:
-    """The first question, on one line, short enough for the sidebar."""
-    question = " ".join((item["first_question"] or "").split())
-    return question if len(question) <= 40 else question[:39] + "…"
+    """The chat's title, or its first question until titled; one short line."""
+    label = " ".join((item.get("title") or item["first_question"] or "").split())
+    return label if len(label) <= 40 else label[:39] + "…"
 
 
 def conversation_choices() -> dict:
@@ -365,7 +397,16 @@ def open_conversation(conversation_id: str | None) -> tuple[list[dict], str]:
     except (SQLAlchemyError, RuntimeError, LookupError, ValueError) as exc:
         logger.exception("Could not open conversation %s", conversation_id)
         raise gr.Error("Could not open that conversation. Please try again.") from exc
-    return [dict(message) for message in messages], ""
+    return to_display(messages), ""
+
+
+def title_conversation() -> dict:
+    """Title the open chat after its first answer, then refresh the sidebar."""
+    try:
+        title_latest_conversation()
+    except (SQLAlchemyError, RuntimeError):
+        logger.warning("Could not title the conversation", exc_info=True)
+    return conversation_choices()
 
 
 def clear_chat() -> tuple[list[dict], str]:
@@ -401,9 +442,10 @@ def chat(
         raise gr.Error(
             "The assistant is unavailable right now. Please try again.",
         ) from exc
+    now = datetime.now(TIMEZONE)
     return history + [
-        {"role": "user", "content": message},
-        {"role": "assistant", "content": answer},
+        {"role": "user", "content": _with_time(message, now, now)},
+        {"role": "assistant", "content": _with_time(answer, now, now)},
     ], ""
 
 
@@ -795,7 +837,13 @@ def build_app() -> gr.Blocks:
                 outputs=[processing, submit, message],
                 queue=False,
                 show_progress="hidden",
-            ).then(conversation_choices, outputs=history_list)
+            ).then(conversation_choices, outputs=history_list).then(
+                title_conversation,
+                outputs=history_list,
+                concurrency_id="titles",
+                concurrency_limit=1,
+                show_progress="hidden",
+            )
         chatbot.change(
             fn=None,
             js="""(history) => [
@@ -818,8 +866,11 @@ def build_app() -> gr.Blocks:
                 const bounds = latest.getBoundingClientRect();
                 const dock = document.querySelector('#composer-dock').getBoundingClientRect();
                 const bottom = dock.top - 24;
-                const target = bounds.height > bottom - 24
-                    ? scrollY + bounds.top - 24
+                // Leave room for the pinned header above the message.
+                const header = document.querySelector('#brand-home')?.getBoundingClientRect().height || 0;
+                const top = header + 24;
+                const target = bounds.height > bottom - top
+                    ? scrollY + bounds.top - top
                     : scrollY + bounds.bottom - bottom;
                 window.scrollTo({top: Math.max(0, target), behavior:
                     matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});

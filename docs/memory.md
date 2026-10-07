@@ -25,7 +25,7 @@ Five new tables in the `app` schema for the MVP, plus one parked. Messages are a
 
 | # | Table | Purpose | Fields |
 | --- | --- | --- | --- |
-| 1 | `conversations` | One row per chat. Holds its messages as a JSON list and its summary. | `id`, `store_id`, `manager_id`, `messages`, `summary`, `summary_covers_to`, `created_at`, `updated_at` |
+| 1 | `conversations` | One row per chat. Holds its messages as a JSON list and its summary. | `id`, `store_id`, `manager_id`, `messages`, `summary`, `summary_covers_to`, `title`, `created_at`, `updated_at` |
 | 2 | `preference_definitions` | Catalogue of every configurable item, with defaults and limits. Seeded by migration. | `code`, `category`, `name`, `description`, `value_type`, `unit`, `operator`, `default_value`, `min_value`, `max_value`, `allowed_values`, `default_enabled`, `default_cooldown_min`, `locked` |
 | 3 | `store_preferences` | A manager's values for catalogue items. No row means the defaults apply. | `id`, `store_id`, `manager_id`, `code`, `enabled`, `value`, `options`, `status`, `created_at` |
 | 4 | `handover_notes` | Free-text notes passed from one shift to the next. | `id`, `store_id`, `manager_id`, `shift`, `note`, `created_at` |
@@ -77,6 +77,7 @@ Each message records who said it, what was said, and when:
 | `messages` | jsonb | no | `[]` | list of messages; must be a JSON array |
 | `summary` | text | yes | | see section 5 |
 | `summary_covers_to` | int | yes | | position of the last message included in the summary |
+| `title` | varchar(120) | yes | | short title, set once after the first answer (below) |
 | `created_at` | timestamptz | no | `now()` | when the chat started |
 | `updated_at` | timestamptz | no | `now()` | changes on every new message |
 
@@ -109,12 +110,17 @@ If the same manager has two browser tabs open, both write to the latest conversa
 - Model history comes from the stored messages, replacing the Gradio state as the source of truth: the summary if one exists, followed by the messages after `summary_covers_to`, in order. `manager` maps to the model's user role.
 - Pairs for evals and review are each manager message with the assistant message that follows it.
 
+### Titles and timestamps
+
+- **Title:** after a new chat's first answer is shown, a separate model call writes a 2 to 6 word title from the first question and answer (prompt in `rag_data/prompts/conversation_title.md`). It runs after the reply, on its own queue, so it never delays the answer or the next question. The title is set only once. If the call fails, the title stays empty and the sidebar shows the first question instead.
+- **Timestamps:** every message shows its time under the bubble, from its stored `when`: the time for today, and the day and time for older messages, in IST. The time is display only; the model receives the plain message text.
+
 ### Chat sidebar
 
 A sidebar, like Claude's, lets the manager browse and continue past chats:
 
 - **New chat** at the top starts a new conversation.
-- **Recent** lists past conversations, newest first, titled by their first question. Empty conversations are not listed. The open conversation is highlighted.
+- **Recent** lists past conversations, newest first, by title (or first question until titled). Empty conversations are not listed. The open conversation is highlighted.
 - Clicking a chat shows its messages and makes it current by setting its `updated_at` to now. The next question continues that chat. No other state is needed, because the current conversation is always the most recently updated one.
 - The list refreshes after each answer, New chat, opening a chat, and loading a scenario.
 - The sidebar can be collapsed. On phones it starts closed and closes after a chat is chosen.
