@@ -1,9 +1,10 @@
 """Store chat conversations and append messages to them."""
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Engine, func, select, type_coerce, update
+from sqlalchemy import DateTime, Engine, cast, func, select, type_coerce, update
 from sqlalchemy.dialects.postgresql import JSONB
 
 from database.models import Conversation
@@ -134,3 +135,59 @@ def set_title(
     )
     with get_session(engine) as session:
         return session.execute(statement).scalar_one_or_none() is not None
+
+
+def save_summary(
+    conversation_id: UUID,
+    summary: str,
+    covers_to: int,
+    expected_covers_to: int | None,
+    engine: Engine | None = None,
+) -> bool:
+    """Store a rolled-forward summary only if no other run moved it meanwhile.
+
+    Messages are never touched; recency (`updated_at`) is left unchanged.
+    """
+    statement = (
+        update(Conversation)
+        .where(
+            Conversation.id == conversation_id,
+            Conversation.summary_covers_to.is_not_distinct_from(expected_covers_to),
+        )
+        .values(
+            summary=summary,
+            summary_covers_to=covers_to,
+            summarized_at=func.now(),
+        )
+        .returning(Conversation.id)
+    )
+    with get_session(engine) as session:
+        return session.execute(statement).scalar_one_or_none() is not None
+
+
+def idle_unsummarized(
+    idle_before: datetime,
+    limit: int,
+    engine: Engine | None = None,
+) -> list[Conversation]:
+    """Chats whose last message is older than `idle_before` and not yet covered.
+
+    Coverage is by position: the summary must reach the last message's index.
+    """
+    message_count = func.jsonb_array_length(Conversation.messages)
+    last_message_at = cast(
+        Conversation.messages[-1]["when"].astext,
+        DateTime(timezone=True),
+    )
+    statement = (
+        select(Conversation)
+        .where(
+            message_count > 0,
+            func.coalesce(Conversation.summary_covers_to, -1) < message_count - 1,
+            last_message_at < idle_before,
+        )
+        .order_by(last_message_at)
+        .limit(limit)
+    )
+    with get_session(engine) as session:
+        return list(session.scalars(statement))

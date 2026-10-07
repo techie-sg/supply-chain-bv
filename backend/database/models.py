@@ -230,6 +230,7 @@ class Conversation(Base):
     summary: Mapped[str | None] = mapped_column(Text)
     summary_covers_to: Mapped[int | None] = mapped_column(Integer)
     title: Mapped[str | None] = mapped_column(String(120))
+    summarized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

@@ -25,7 +25,7 @@ Five new tables in the `app` schema for the MVP, plus one parked. Messages are a
 
 | # | Table | Purpose | Fields |
 | --- | --- | --- | --- |
-| 1 | `conversations` | One row per chat. Holds its messages as a JSON list and its summary. | `id`, `store_id`, `manager_id`, `messages`, `summary`, `summary_covers_to`, `title`, `created_at`, `updated_at` |
+| 1 | `conversations` | One row per chat. Holds its messages as a JSON list and its summary. | `id`, `store_id`, `manager_id`, `messages`, `summary`, `summary_covers_to`, `summarized_at`, `title`, `created_at`, `updated_at` |
 | 2 | `preference_definitions` | Catalogue of every configurable item, with defaults and limits. Seeded by migration. | `code`, `category`, `name`, `description`, `value_type`, `unit`, `operator`, `default_value`, `min_value`, `max_value`, `allowed_values`, `default_enabled`, `default_cooldown_min`, `locked` |
 | 3 | `store_preferences` | A manager's values for catalogue items. No row means the defaults apply. | `id`, `store_id`, `manager_id`, `code`, `enabled`, `value`, `options`, `status`, `created_at` |
 | 4 | `handover_notes` | Free-text notes passed from one shift to the next. | `id`, `store_id`, `manager_id`, `shift`, `note`, `created_at` |
@@ -78,6 +78,7 @@ Each message records who said it, what was said, and when:
 | `summary` | text | yes | | see section 5 |
 | `summary_covers_to` | int | yes | | position of the last message included in the summary |
 | `title` | varchar(120) | yes | | short title, set once after the first answer (below) |
+| `summarized_at` | timestamptz | yes | | when the summary was last saved |
 | `created_at` | timestamptz | no | `now()` | when the chat started |
 | `updated_at` | timestamptz | no | `now()` | changes on every new message |
 
@@ -307,25 +308,34 @@ At the start of every question, load the manager's effective settings (active ro
 
 ## 5. Conversation summary
 
-Each conversation has at most one summary, stored on its `conversations` row (`summary` and `summary_covers_to`). There is no separate summaries table.
+Status: implemented.
 
-Purpose: keep long chats within the model's context. Full history is passed on every question today, which gets slow and expensive in a long peak and eventually overflows. The summary replaces older messages.
+Each conversation has at most one summary, on its own row: `summary`, `summary_covers_to` (the index of the last message folded in), and `summarized_at`. The `messages` list is never edited; only the summary rolls forward. There is no separate summaries table.
 
-How it works:
-- When the history grows past a limit, the older messages are summarized, together with the previous summary if there is one.
-- The result is saved in `summary`, and `summary_covers_to` records the position of the last message it covers. The same row is updated in place; old summaries are not kept.
-- The prompt is the summary plus every message after `summary_covers_to`, word for word.
+Purpose: keep prompts small in long chats, and have a complete summary of every chat once it goes quiet (for reopening, handover and dreaming).
 
-Principles:
-- The messages are the source of truth. A summary can always be discarded and regenerated.
-- Preferences are loaded separately every question, so summarizing never drops a stored rule.
-- The summarizer must not add facts. Figures in a summary are historical and labeled with their time.
-- Advisory only. A summary never overrides policy, preferences or tool data.
-- Because it lives on the conversation, a restart or refresh keeps it, with no repeated model call.
+Terms, as constants in `backend/constants.py`:
 
-A handover note drafted from a chat is generated on request and saved by the manager as a `handover_notes` row. It is not a separate stored summary.
+| Term | Value | Meaning |
+| --- | --- | --- |
+| Raw messages | | messages after `summary_covers_to` (all, if there is no summary) |
+| Recent window | 6 messages | always sent to the model word for word |
+| Count limit | 16 messages | raw messages above this trigger folding |
+| Size limit | 3,000 tokens | raw text above this (characters / 4) triggers folding |
+| Idle time | 30 minutes | since the last message's own `when` |
+| Job interval | 5 minutes | how often the scheduler looks for idle chats, at most 10 per run |
 
-Open question: is the limit a token budget or a message count?
+Triggers:
+- **After an answer:** if the raw messages exceed the count or size limit, fold every raw message except the recent window. Runs on its own queue after the reply, so it never delays an answer.
+- **Idle (scheduler):** a background job started with the app finds chats whose last message is older than the idle time and whose summary does not reach the last index, and folds every message, including the recent window. Selection uses message positions and the last message's time, not `updated_at`.
+
+Folding: the previous summary plus the messages to add go to the model with `rag_data/prompts/conversation_summary.md`, which keeps questions, diagnoses, proposals with their approval state, quoted figures as earlier figures, and open follow-ups, and forbids new facts. The save is conditional on `summary_covers_to` being unchanged since the run started, so overlapping runs (for example two app instances) never overwrite each other. It does not change `updated_at`.
+
+Prompt: the summary goes in a `<conversation_summary>` block, followed by the raw messages after `summary_covers_to`, but always at least the recent window, so a chat resumed after an idle summary keeps its last exchanges in full. If summarizing fails, nothing changes and the full raw history is sent.
+
+The summary is used by the model only; the chat shows the stored messages unchanged.
+
+Worked example (count limit, short messages): at 18 messages, 0 to 11 are folded and `summary_covers_to` becomes 11; at 30, 12 to 23 are folded and it becomes 23. The model never receives more than 16 raw messages plus the summary.
 
 ## 6. Dreaming (suggestions)
 
@@ -465,9 +475,8 @@ Left out of the MVP on purpose, to add when needed:
 ## Open decisions
 
 1. Conversation retention: keep forever for now, or set a limit?
-2. Summary limit: token budget or message count?
-3. Briefing trigger: greeting only (assumed), or also automatically on the first message of a new conversation?
-4. Dreaming: suggest-only (assumed, never auto-apply) and in this document (assumed), or a separate one?
-5. Where suggestions appear: a panel in the UI, or raised by the assistant at the start of a session?
-6. Alert evaluation and any fired-alert table: pending the team discussion.
-7. Incentive cap upper bound (for example ₹500 per shift).
+2. Briefing trigger: greeting only (assumed), or also automatically on the first message of a new conversation?
+3. Dreaming: suggest-only (assumed, never auto-apply) and in this document (assumed), or a separate one?
+4. Where suggestions appear: a panel in the UI, or raised by the assistant at the start of a session?
+5. Alert evaluation and any fired-alert table: pending the team discussion.
+6. Incentive cap upper bound (for example ₹500 per shift).

@@ -595,3 +595,40 @@ def test_title_runs_after_the_answer_and_refreshes_the_sidebar(monkeypatch) -> N
     ]
     assert len(callbacks) == 2
     assert all(callback.concurrency_id == "titles" for callback in callbacks)
+
+
+def test_summary_runs_after_the_answer_on_its_own_queue(monkeypatch) -> None:
+    ran = []
+    monkeypatch.setattr(
+        gradio_app,
+        "summarize_latest_conversation",
+        lambda: ran.append(True),
+    )
+    gradio_app.summarize_conversation()
+    assert ran == [True]
+
+    def unavailable():
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(gradio_app, "summarize_latest_conversation", unavailable)
+    gradio_app.summarize_conversation()
+    callbacks = [
+        callback
+        for callback in gradio_app.app.fns.values()
+        if callback.fn is gradio_app.summarize_conversation
+    ]
+    assert len(callbacks) == 2
+    assert all(callback.concurrency_id == "summaries" for callback in callbacks)
+
+
+def test_launch_starts_the_idle_summary_job(monkeypatch) -> None:
+    started = []
+
+    class Job:
+        def start(self):
+            started.append(True)
+
+    monkeypatch.setattr(gradio_app, "idle_summary_job", Job)
+    monkeypatch.setattr(gradio_app.app, "launch", lambda **kwargs: None)
+    gradio_app.main()
+    assert started == [True]
