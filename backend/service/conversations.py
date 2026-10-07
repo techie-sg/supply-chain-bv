@@ -26,6 +26,7 @@ from service.factory import create_llm_service
 from service.preferences import demo_preferences
 from service.rag import answer_question
 from service.scenarios import TIMEZONE
+from service.summaries import history_start
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -126,9 +127,11 @@ class ConversationService:
             )
             or self.start_new()
         )
-        history = to_chat_messages(conversation.messages)
+        # The summary stands in for older messages; recent ones stay word for word.
+        history = to_chat_messages(conversation.messages[history_start(conversation) :])
+        extra = {"summary": conversation.summary} if conversation.summary else {}
         append_message(conversation.id, new_message("manager", question), self.engine)
-        reply = self.answer(question, history=history)
+        reply = self.answer(question, history=history, **extra)
         append_message(conversation.id, new_message("assistant", reply), self.engine)
         return reply
 
@@ -174,9 +177,19 @@ class ConversationService:
         return title
 
 
-def _answer(question: str, *, history: Sequence[ChatMessage]) -> str:
-    """Answer with the manager's settings in view, so they are applied."""
-    return answer_question(question, history=history, preferences=demo_preferences())
+def _answer(
+    question: str,
+    *,
+    history: Sequence[ChatMessage],
+    summary: str | None = None,
+) -> str:
+    """Answer with the manager's settings and the chat's summary in view."""
+    return answer_question(
+        question,
+        history=history,
+        preferences=demo_preferences(),
+        summary=summary,
+    )
 
 
 def _title(question: str, answer: str) -> str:

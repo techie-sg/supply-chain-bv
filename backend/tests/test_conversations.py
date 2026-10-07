@@ -150,7 +150,7 @@ def test_messages_record_who_what_and_an_ist_timestamp() -> None:
 def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> None:
     seen = []
 
-    def answer(question, *, history, preferences):
+    def answer(question, *, history, preferences, summary=None):
         seen.append(preferences)
         return "reply"
 
@@ -203,7 +203,7 @@ def test_ui_browse_entry_points(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences: "reply",
+        lambda question, *, history, preferences, summary=None: "reply",
     )
     conversations.ask_question("Earlier")
     earlier_id = conversations.current_conversation_id()
@@ -301,7 +301,9 @@ def test_ui_title_entry_point_uses_the_configured_model(store, monkeypatch) -> N
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences: "Use the standby rider.",
+        lambda question, *, history, preferences, summary=None: (
+            "Use the standby rider."
+        ),
     )
     monkeypatch.setattr(conversations, "set_title", lambda *args, **kwargs: True)
     conversations.ask_question("Rain plan?")
@@ -309,3 +311,29 @@ def test_ui_title_entry_point_uses_the_configured_model(store, monkeypatch) -> N
     system_prompt, user_message = seen[0]
     assert "2 to 6 words" in system_prompt
     assert user_message == "Manager: Rain plan?\n\nAssistant: Use the standby rider."
+
+
+def test_a_summarized_chat_sends_the_summary_and_only_recent_messages(store) -> None:
+    seen = []
+
+    def answer(question, *, history, summary=None):
+        seen.append((history, summary))
+        return "reply"
+
+    chat = service(answer)
+    for index in range(10):
+        chat.ask(f"q{index}")
+    row = store.rows[-1]
+    row.summary, row.summary_covers_to = "Earlier: rain backlog.", 19
+    chat.ask("And now?")
+    history, summary = seen[-1]
+    assert summary == "Earlier: rain backlog."
+    assert [item["content"] for item in history] == [
+        "q7",
+        "reply",
+        "q8",
+        "reply",
+        "q9",
+        "reply",
+    ]
+    assert seen[0][1] is None

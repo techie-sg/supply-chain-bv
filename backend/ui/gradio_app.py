@@ -30,6 +30,7 @@ from service.scenarios import (
     scenario_details,
     scenario_names,
 )
+from service.summaries import idle_summary_job, summarize_latest_conversation
 from ui import settings
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -407,6 +408,14 @@ def title_conversation() -> dict:
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not title the conversation", exc_info=True)
     return conversation_choices()
+
+
+def summarize_conversation() -> None:
+    """After an answer, fold older messages into the summary if over a limit."""
+    try:
+        summarize_latest_conversation()
+    except (SQLAlchemyError, RuntimeError, ValueError, requests.RequestException):
+        logger.warning("Could not summarize the conversation", exc_info=True)
 
 
 def clear_chat() -> tuple[list[dict], str]:
@@ -843,6 +852,11 @@ def build_app() -> gr.Blocks:
                 concurrency_id="titles",
                 concurrency_limit=1,
                 show_progress="hidden",
+            ).then(
+                summarize_conversation,
+                concurrency_id="summaries",
+                concurrency_limit=1,
+                show_progress="hidden",
             )
         chatbot.change(
             fn=None,
@@ -897,6 +911,7 @@ app = build_app()
 
 def main() -> None:
     configure_logging()
+    idle_summary_job().start()
     port = int(os.environ.get("PORT", "7860"))
     logger.info("DispatchDesk starting", host="0.0.0.0", port=port)
     app.launch(

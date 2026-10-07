@@ -56,11 +56,13 @@ class RAGService:
         top_k: int = 3,
         history: Sequence[ChatMessage] | None = None,
         preferences: PreferenceContext | None = None,
+        summary: str | None = None,
     ) -> str:
         """Retrieve evidence and answer using the injected provider services.
 
         With preferences, the model sees the manager's settings and applies them.
         It cannot change them; that happens only in the Settings tab.
+        `summary` stands in for older messages that `history` no longer holds.
         """
         if top_k < 1:
             raise ValueError("top_k must be positive")
@@ -86,6 +88,11 @@ class RAGService:
                 "message, not the excerpts.\n\n"
                 f"<context>\n{context}\n</context>\n\n"
                 f"Question: {question}"
+            )
+        if summary:
+            user_message = (
+                "<conversation_summary>\nEarlier in this chat (a summary; it may "
+                f"omit details):\n{summary}\n</conversation_summary>\n\n{user_message}"
             )
         if preferences is not None:
             user_message = f"{preferences.prompt_block()}\n\n{user_message}"
@@ -113,6 +120,7 @@ def answer_question(
     top_k: int = 3,
     history: Sequence[ChatMessage] | None = None,
     preferences: PreferenceContext | None = None,
+    summary: str | None = None,
 ) -> str:
     """UI entry point composing the configured services."""
     settings = get_settings()
@@ -125,4 +133,5 @@ def answer_question(
         top_k,
         history=history,
         preferences=preferences,
+        summary=summary,
     )
