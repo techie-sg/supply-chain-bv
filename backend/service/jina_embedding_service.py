@@ -18,17 +18,20 @@ class JinaEmbeddingService(EmbeddingService):
         self,
         model: str = JINA_MODEL,
         api_key: SecretStr | None = None,
+        task_adapters: bool = False,
     ) -> None:
         self.model = model
         self._api_key = api_key
+        self.task_adapters = task_adapters
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return self._embed(texts)
+        return self._embed(texts, "retrieval.passage")
 
     def embed_query(self, text: str) -> list[float]:
-        return self._embed([text])[0]
+        return self._embed([text], "retrieval.query")[0]
 
-    def _embed(self, texts: list[str]) -> list[list[float]]:
+    def _embed(self, texts: list[str], task: str) -> list[list[float]]:
+        """Send `task` only when adapters are on; Jina embeds asymmetrically then."""
         if not texts:
             return []
 
@@ -43,6 +46,7 @@ class JinaEmbeddingService(EmbeddingService):
             json={
                 "model": self.model,
                 "input": texts,
+                **({"task": task} if self.task_adapters else {}),
             },
             timeout=60,
         )
