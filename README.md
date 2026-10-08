@@ -97,7 +97,7 @@ Idle-conversation summarization runs through the `summaries` CLI command. Gradio
 | Variables | `DATABASE_URL`, `GROQ_API_KEY` |
 | Healthcheck and public domain | None |
 
-Keep the web service's start command as `python cli.py app`. The cron command runs one batch of up to ten conversations idle for at least thirty minutes, then exits. Railway schedules use UTC. Locally, run the same task with `uv run python cli.py summaries`.
+Keep the web service's start command as `python cli.py app`. The cron command runs one batch of up to ten conversations idle for at least fifteen minutes, then exits. Railway schedules use UTC. Locally, run the same task with `uv run python cli.py summaries`.
 
 ### Daily review
 
