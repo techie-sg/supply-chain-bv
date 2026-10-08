@@ -34,7 +34,6 @@ from service.scenarios import (
 )
 from service.setting_changes import confirm_proposals
 from service.summaries import (
-    idle_summary_job,
     summarize_latest_conversation,
     summarize_open_conversation,
 )
@@ -1132,10 +1131,8 @@ if __name__ == "__main__":
 app = build_app()
 
 
-def main(*, run_scheduler: bool = True) -> None:
+def main() -> None:
     configure_logging()
-    if run_scheduler:
-        idle_summary_job().start()
     port = int(os.environ.get("PORT", "7860"))
     logger.info("DispatchDesk starting", host="0.0.0.0", port=port)
     app.launch(
