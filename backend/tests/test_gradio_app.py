@@ -277,8 +277,8 @@ def test_chat_callbacks_receive_no_scenario_state() -> None:
         if callback.fn is gradio_app.respond_to_pending
     ]
     assert len(callbacks) == 2
-    # The message, the chat, and the selected manager; never the scenario.
-    assert all(len(callback.inputs) == 3 for callback in callbacks)
+    # The message, displayed chat, selected manager, and selected chat ID.
+    assert all(len(callback.inputs) == 4 for callback in callbacks)
     manager = manager_state()
     assert all(callback.inputs[2] is manager for callback in callbacks)
     assert all(
@@ -339,7 +339,7 @@ def test_page_load_restores_the_stored_conversation(monkeypatch, frozen_now) -> 
         {"role": "assistant", "content": timed("No. Safety comes first.", "08:10")},
     ]
     assert any(
-        callback.fn is gradio_app.restore_chat
+        callback.fn is gradio_app.restore_conversation
         and any(isinstance(component, gr.Chatbot) for component in callback.outputs)
         for callback in gradio_app.app.fns.values()
     )
@@ -415,6 +415,8 @@ def test_opening_a_past_conversation_shows_and_continues_it(
     assert gradio_app.open_conversation("abc") == (
         [{"role": "user", "content": timed("Rain plan?", "19:30")}],
         "",
+        "abc",
+        gr.update(selected="assistant"),
     )
     assert opened == ["abc"]
     skipped = gradio_app.open_conversation(None)
@@ -449,6 +451,51 @@ def test_clear_chat_failure_keeps_the_conversation(monkeypatch) -> None:
     assert "private connection information" not in str(error.value)
 
 
+def test_linked_chat_is_restored_without_using_the_latest_chat(monkeypatch):
+    from types import SimpleNamespace
+
+    opened = []
+    monkeypatch.setattr(
+        gradio_app,
+        "open_conversation",
+        lambda chat_id, manager_id=None: (
+            opened.append(chat_id) or [{"role": "user", "content": "Rain?"}],
+            "",
+            chat_id,
+            gr.update(selected="assistant"),
+        ),
+    )
+    history, chat_id = gradio_app.restore_conversation(
+        gradio_app.DEMO_MANAGER_ID,
+        SimpleNamespace(query_params={"chat": "older-chat", "view": "settings"}),
+    )
+    assert opened == ["older-chat"] and chat_id == "older-chat"
+    assert history == [{"role": "user", "content": "Rain?"}]
+
+
+def test_chat_browser_metadata_uses_selected_chat(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        gradio_app,
+        "conversation_details",
+        lambda chat_id, manager_id=None: (
+            seen.append(chat_id) or {"id": chat_id, "title": "Rain response"}
+        ),
+    )
+    assert gradio_app.conversation_location(
+        gradio_app.DEMO_MANAGER_ID,
+        "older-chat",
+    ) == {
+        "id": "older-chat",
+        "title": "Rain response",
+    }
+    assert seen == ["older-chat"]
+    assert gradio_app.conversation_location(gradio_app.DEMO_MANAGER_ID, None) == {
+        "id": None,
+        "title": "New chat",
+    }
+
+
 def test_chat_preserves_nonblank_message_whitespace(monkeypatch) -> None:
     seen = []
 
@@ -468,10 +515,15 @@ def test_chat_preserves_nonblank_message_whitespace(monkeypatch) -> None:
 
 def test_new_chat_waits_for_outstanding_workspace_callbacks(monkeypatch) -> None:
     started = []
+
+    def start_new(manager_id=None):
+        started.append(True)
+        return "new-chat-id"
+
     monkeypatch.setattr(
         gradio_app,
         "start_new_conversation",
-        lambda manager_id=None: started.append(True),
+        start_new,
     )
     clear = next(
         item
@@ -488,7 +540,7 @@ def test_new_chat_waits_for_outstanding_workspace_callbacks(monkeypatch) -> None
     assert callback.concurrency_limit == 1
     assert callback.fn is not None
     assert callback.fn is gradio_app.clear_chat
-    assert callback.fn() == ([], "")
+    assert callback.fn() == ([], "", "new-chat-id", gr.update(selected="assistant"))
     assert started == [True]
     assert all(
         chat_callback.queue
@@ -997,7 +1049,8 @@ def test_chat_and_confirmation_use_the_selected_manager(
 def test_every_manager_scoped_callback_receives_the_selected_manager() -> None:
     manager = manager_state()
     scoped = {
-        gradio_app.restore_chat,
+        gradio_app.restore_conversation,
+        gradio_app.restore_latest_conversation,
         gradio_app.conversation_choices,
         gradio_app.open_conversation,
         gradio_app.title_conversation,
@@ -1048,7 +1101,8 @@ def test_switching_manager_clears_the_card_and_reloads_their_workspace() -> None
         for callback in gradio_app.app.fns.values()
         if callback.fn
         in (
-            gradio_app.restore_chat,
+            gradio_app.restore_conversation,
+            gradio_app.restore_latest_conversation,
             gradio_app.conversation_choices,
             settings.load_settings,
             settings.load_summary,
@@ -1056,7 +1110,8 @@ def test_switching_manager_clears_the_card_and_reloads_their_workspace() -> None
         and callback.trigger_after is not None
     ]
     # Page load and switching manager each reload chat, chats and settings.
-    assert loaders.count(gradio_app.restore_chat) == 2
+    assert loaders.count(gradio_app.restore_conversation) == 1
+    assert loaders.count(gradio_app.restore_latest_conversation) == 1
     assert loaders.count(settings.load_settings) >= 2
     # The pending-change card is cleared right after the switch.
     [clear] = [

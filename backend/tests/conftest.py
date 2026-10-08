@@ -1,16 +1,50 @@
-"""Shared fixtures."""
+"""Shared fixtures and isolation from local application configuration."""
 
+import os
 from uuid import uuid4
 
 import pytest
 from catalogue import definitions
-from sqlalchemy import Connection
+from sqlalchemy import Connection, Engine
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.engine import make_url
 
+from config import Settings
 from database.models import Manager, StorePreference
-from database.session import Base
+from database.session import Base, normalize_pg_url
 from domain.memory import PreferenceStatus
 from service import preferences
+
+_test_environment = pytest.MonkeyPatch()
+
+
+def pytest_configure() -> None:
+    """Disable local dotenv loading before test modules are collected."""
+    _test_environment.setitem(Settings.model_config, "env_file", None)
+    for name in ("DATABASE_URL", "DB_URL", "JINA_API_KEY", "GROQ_API_KEY"):
+        _test_environment.delenv(name, raising=False)
+
+
+def pytest_unconfigure() -> None:
+    _test_environment.undo()
+
+
+@pytest.fixture(autouse=True)
+def restrict_database_connections(monkeypatch):
+    """Unit tests mock the database; integration tests explicitly opt in."""
+    test_url = os.environ.get("TEST_DATABASE_URL")
+    allowed = make_url(normalize_pg_url(test_url)) if test_url else None
+    raw_connection = Engine.raw_connection
+
+    def connect(engine):
+        if allowed is None or engine.url != allowed:
+            raise AssertionError(
+                "Mock database access in unit tests. Integration tests must use "
+                "an explicit TEST_DATABASE_URL.",
+            )
+        return raw_connection(engine)
+
+    monkeypatch.setattr(Engine, "raw_connection", connect)
 
 
 class FakeStore:

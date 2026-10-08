@@ -133,17 +133,25 @@ def test_listing_skips_empty_chats_and_shows_newest_first(
         list_conversations("DS-1", "karthik", 0, conversation_engine)
 
 
-def test_resuming_makes_a_past_conversation_the_latest(
+def test_resuming_preserves_message_timestamp_and_recent_order(
     conversation_engine: Engine,
 ) -> None:
     past = start_conversation("DS-1", "karthik", conversation_engine)
     append_message(past.id, message("manager", "Rain plan?"), conversation_engine)
-    start_conversation("DS-1", "karthik", conversation_engine)
+    newer = start_conversation("DS-1", "karthik", conversation_engine)
+    append_message(newer.id, message("manager", "New topic"), conversation_engine)
+    before = list_conversations("DS-1", "karthik", engine=conversation_engine)
 
     resumed = resume_conversation(past.id, "DS-1", "karthik", conversation_engine)
     assert resumed.messages == [message("manager", "Rain plan?")]
     latest = latest_conversation("DS-1", "karthik", conversation_engine)
-    assert latest is not None and latest.id == past.id
+    assert latest is not None and latest.id == newer.id
+    assert list_conversations("DS-1", "karthik", engine=conversation_engine) == before
+    append_message(past.id, message("manager", "Following up"), conversation_engine)
+    assert (
+        list_conversations("DS-1", "karthik", engine=conversation_engine)[0]["id"]
+        == past.id
+    )
 
 
 def test_resuming_another_stores_or_missing_conversation_fails(

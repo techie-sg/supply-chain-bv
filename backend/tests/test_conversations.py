@@ -46,13 +46,23 @@ class FakeStore:
             {"id": row.id, "first_question": row.messages[0]["what"]}
             for row in reversed(self.rows)
             if row.messages
+            and row.store_id == store_id
+            and row.manager_id == manager_id
         ][:limit]
 
     def resume(self, conversation_id, store_id, manager_id, engine=None):
-        row = next((row for row in self.rows if row.id == conversation_id), None)
+        row = next(
+            (
+                row
+                for row in self.rows
+                if row.id == conversation_id
+                and row.store_id == store_id
+                and row.manager_id == manager_id
+            ),
+            None,
+        )
         if row is None:
             raise LookupError(conversation_id)
-        self.touch(row)
         return row
 
 
@@ -199,6 +209,10 @@ def test_resumed_conversation_is_continued_by_the_next_question(store) -> None:
         ("manager", "Rain plan?"),
         ("assistant", "reply to Rain plan?"),
     ]
+    assert [item["first_question"] for item in chat.past()] == [
+        "Batching?",
+        "Rain plan?",
+    ]
     chat.ask("And now?")
     assert seen[-1][0]["content"] == "Rain plan?"
     assert [m["what"] for m in store.rows[-1].messages][-1] == "reply to And now?"
@@ -208,6 +222,29 @@ def test_resumed_conversation_is_continued_by_the_next_question(store) -> None:
 def test_resuming_an_unknown_conversation_fails(store) -> None:
     with pytest.raises(LookupError):
         service(lambda question, *, history: "unused").resume(uuid4())
+
+
+def test_explicit_chat_selection_survives_newer_activity_in_another_chat(store):
+    first = service(lambda question, **kwargs: "First answer")
+    first.ask("Rain plan?")
+    first_id = first.current_id()
+    second = service(lambda question, **kwargs: "Second answer")
+    second.start_new()
+    second.ask("Backlog plan?")
+    second_id = second.current_id()
+    selected = conversations.ConversationService(
+        "DS-1",
+        "karthik",
+        answer=lambda question, **kwargs: "Rain follow-up",
+        conversation_id=str(first_id),
+    )
+    assert selected.history()[0]["what"] == "Rain plan?"
+    assert selected.past()[0]["id"] == second_id
+    assert selected.current_id() == first_id
+    selected.ask("What next?")
+    assert selected.past()[0]["id"] == first_id
+    assert second.history()[0]["what"] == "Backlog plan?"
+    assert len(second.history()) == 2
 
 
 def test_ui_browse_entry_points(store, monkeypatch) -> None:
@@ -431,3 +468,20 @@ def test_ui_ask_returns_the_changes_the_assistant_proposed(
     assert preference_store.rows == []
     conversations.add_note("Saved.")
     assert conversations.conversation_history()[-1]["what"] == "Saved."
+
+
+def test_selected_chat_cannot_be_read_or_written_by_another_manager(store):
+    owner = service(lambda question, **kwargs: "Answer")
+    owner.ask("Rain plan?")
+    conversation_id = str(owner.current_id())
+    other = conversations.ConversationService(
+        "DS-1",
+        "other-manager",
+        answer=lambda question, **kwargs: "Wrong answer",
+        conversation_id=conversation_id,
+    )
+    with pytest.raises(LookupError):
+        other.history()
+    with pytest.raises(LookupError):
+        other.ask("Follow-up")
+    assert len(owner.history()) == 2

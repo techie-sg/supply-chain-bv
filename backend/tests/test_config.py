@@ -1,7 +1,30 @@
 import pytest
 
-from config import Settings, require
-from database.session import database_url
+from config import Settings, get_settings, require
+from database.session import build_engine, database_url
+
+
+def test_default_test_settings_do_not_load_the_local_env(monkeypatch) -> None:
+    from pydantic_settings.sources import DotEnvSettingsSource
+
+    def forbid_local_file(self, file_path, *args, **kwargs):
+        raise AssertionError("Tests must not read the application's .env")
+
+    monkeypatch.setattr(DotEnvSettingsSource, "_read_env_file", forbid_local_file)
+    settings = get_settings()
+    assert Settings.model_config["env_file"] is None
+    assert settings.database_url is None
+    assert settings.jina_api_key is None
+    assert settings.groq_api_key is None
+
+
+def test_unmocked_database_access_is_blocked_before_connecting() -> None:
+    engine = build_engine("postgresql://fake:fake@invalid.example/not-a-test-db")
+    try:
+        with pytest.raises(AssertionError, match="Mock database access"):
+            engine.connect()
+    finally:
+        engine.dispose()
 
 
 def test_require_rejects_missing_values_without_leaking(monkeypatch) -> None:

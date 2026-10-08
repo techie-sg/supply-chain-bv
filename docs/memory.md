@@ -37,7 +37,7 @@ Not designed yet: approval log, reminders and snoozed alerts, trace events.
 | `summary` | text, null | section 3 |
 | `summary_covers_to` | int, null | index of the last message in the summary |
 | `summarized_at` | timestamptz, null | when the summary was last saved |
-| `created_at`, `updated_at` | timestamptz | `updated_at` changes on each new message or when a chat is reopened |
+| `created_at`, `updated_at` | timestamptz | `updated_at` changes on each new message; opening a chat leaves it unchanged |
 
 Index `(store_id, manager_id, updated_at)`.
 
@@ -46,7 +46,7 @@ A message: `{"who": "manager" | "assistant", "what": "...", "when": "2026-10-06T
 **Lifecycle**
 - The current chat is the most recently updated one for the store and manager. There is no status column and no idle timeout.
 - A new chat starts on first use, **New chat**, or a scenario load. A refresh or restart resumes the current chat.
-- Opening a past chat from the sidebar sets its `updated_at` to now, so the next question continues it.
+- Opening a past chat selects its ID in the browser session without changing `updated_at` or the Recent order. Replies, notes, titles, and summaries target that selected ID. The URL carries the chat ID so refreshes reopen it, and the page title follows the chat title.
 - Two browser tabs write to the same current chat; accepted for the demo.
 
 **Write path:** append the manager's message first (one atomic `UPDATE`), call the model, then append the reply. On failure nothing is appended and the error is logged; the question is kept.
@@ -174,7 +174,7 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | --- | --- | --- |
 | 1 | Messages are a JSON list on `conversations` | a `messages` table or question-and-answer rows: more tables for an MVP |
 | 2 | A message is `{who, what, when}`; its list position is its id | per-message ids and timestamps columns |
-| 3 | The current chat is the latest by `updated_at`; no status, `ended_at` or idle timeout | stored active or closed flags, which can go stale |
+| 3 | Selected manager and chat IDs are kept in browser session state and the URL; without a chat selection, default to that manager's latest by `updated_at` | changing message timestamps just to select a chat, which changes Recent order |
 | 4 | Several shift managers per store (`app.managers`, migration 0010), each with a unique shift; everything per manager, chosen with a picker | one demo manager: couldn't show per-manager settings; store-wide preferences |
 | 5 | Settings are a fixed catalogue with min, max and locked policy items | free-form rules: can't be validated |
 | 6 | Settings change in the Settings tab, or in chat as a model proposal that code validates and the manager confirms (revised; was Settings tab only) | the model saving directly: in testing it dropped changes and claimed saves it never made. Now the tool only proposes and returns `saved: false`, code merges unmentioned fields, the card shows exactly what will be saved, and code rewrites a reply that only echoes the tool |

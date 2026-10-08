@@ -152,6 +152,7 @@ def test_summarize_now_folds_every_message_of_the_open_chat(saved, monkeypatch) 
     service = SummaryService(lambda system_prompt, user_message: "Summary")
     monkeypatch.setattr(summaries, "latest_conversation", lambda *args: None)
     assert not service.summarize_now("DS-1", "karthik")
+
     open_chat = chat(8, covers_to=3)
     monkeypatch.setattr(summaries, "latest_conversation", lambda *args: open_chat)
     assert service.summarize_now("DS-1", "karthik")
@@ -159,6 +160,21 @@ def test_summarize_now_folds_every_message_of_the_open_chat(saved, monkeypatch) 
     fully = chat(8, covers_to=7)
     monkeypatch.setattr(summaries, "latest_conversation", lambda *args: fully)
     assert not service.summarize_now("DS-1", "karthik")
+
+
+def test_summary_on_demand_targets_selected_chat_instead_of_latest(saved, monkeypatch):
+    selected = chat(4)
+    looked_up = []
+
+    def lookup(chat_id, store_id, manager_id, engine):
+        looked_up.append((chat_id, store_id, manager_id))
+        return selected
+
+    monkeypatch.setattr(summaries, "resume_conversation", lookup)
+    service = SummaryService(lambda *args: "Selected chat summary")
+    assert service.summarize_now("DS-1", "karthik", str(selected.id))
+    assert looked_up == [(selected.id, "DS-1", "karthik")]
+    assert saved[0][0] == selected.id
 
 
 def test_ui_summarize_now_entry_point_uses_the_demo_manager(saved, monkeypatch) -> None:
