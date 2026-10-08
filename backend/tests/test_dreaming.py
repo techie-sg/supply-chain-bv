@@ -42,6 +42,9 @@ class FakeReviewStore:
         self.suggestions: list[Suggestion] = []
         self.notes: list = []
         self.advanced: list[tuple] = []
+        self.managers = [SimpleNamespace(store_id="DS-1", manager_id="karthik")]
+        self.digests: dict[str, SimpleNamespace] = {}
+        self.saved_digests: list[tuple] = []
 
     def to_review(self, engine=None):
         return [
@@ -105,6 +108,20 @@ class FakeReviewStore:
     def latest_notes(self, store_id, engine=None):
         return self.notes
 
+    def all_managers(self, engine=None):
+        return self.managers
+
+    def get_digest(self, manager_id, engine=None):
+        return self.digests.get(manager_id)
+
+    def save_digest(self, store_id, manager_id, digest, sources, engine=None):
+        self.saved_digests.append((manager_id, digest, sources))
+        self.digests[manager_id] = SimpleNamespace(
+            digest=digest,
+            sources=sources,
+            built_at=NOW,
+        )
+
 
 @pytest.fixture
 def review(monkeypatch, preference_store) -> FakeReviewStore:
@@ -120,6 +137,9 @@ def review(monkeypatch, preference_store) -> FakeReviewStore:
         "dismiss_pending_drafts": fake.dismiss_drafts,
         "save_handover_note": fake.save_note,
         "latest_handover_notes": fake.latest_notes,
+        "all_managers": fake.all_managers,
+        "get_digest": fake.get_digest,
+        "save_digest": fake.save_digest,
     }.items():
         monkeypatch.setattr(dreaming, name, method)
     return fake
@@ -421,3 +441,107 @@ def test_run_review_uses_the_configured_model(
     monkeypatch.setattr(dreaming, "create_llm_service", lambda: Model())
     report = dreaming.run_review()
     assert report.chats == 0 and report.failures == []
+
+
+# Memory digest ---------------------------------------------------------------
+
+OLD = "2026-09-30T19:00:00+05:30"
+
+
+def summarized(when: str, summary: str, covers_to: int = 1) -> Conversation:
+    conversation = chat(
+        [message("manager", "Q", when), message("assistant", "A", when)],
+        summary=summary,
+        title="Rain backlog",
+    )
+    conversation.summary_covers_to = covers_to
+    return conversation
+
+
+def test_digest_reads_last_week_summaries_and_keeps_eight_bullets(review) -> None:
+    recent = summarized(TODAY, "Radius shrink deferred.")
+    review.chats = [
+        recent,
+        chat([message("manager", "Unsummarized")]),
+        summarized(OLD, "Old"),
+    ]
+    seen = []
+
+    def reply(system_prompt, user_message):
+        seen.append((system_prompt, user_message))
+        return "Here you go:\n" + "\n".join(f"* item {n}" for n in range(10))
+
+    assert service(reply).memory_digest("DS-1", "karthik", NOW)
+    [(system_prompt, user_message)] = seen
+    assert "at most 8 short bullets" in system_prompt
+    assert user_message == "Chat on 8 Oct: Rain backlog\nRadius shrink deferred."
+    [(manager_id, digest, sources)] = review.saved_digests
+    assert manager_id == "karthik"
+    assert digest == "\n".join(f"- item {n}" for n in range(8))
+    assert sources == [{"conversation_id": str(recent.id), "covers_to": 1}]
+
+
+def test_digest_skips_the_model_when_its_sources_are_unchanged(review) -> None:
+    review.chats = [summarized(TODAY, "Rain backlog.")]
+    calls = []
+
+    def reply(system_prompt, user_message):
+        calls.append(user_message)
+        return "- Rain backlog on 8 Oct."
+
+    reviewer = service(reply)
+    assert reviewer.memory_digest("DS-1", "karthik", NOW)
+    assert not reviewer.memory_digest("DS-1", "karthik", NOW)
+    assert len(calls) == 1
+    review.chats[0].summary_covers_to = 3
+    assert reviewer.memory_digest("DS-1", "karthik", NOW)
+    assert len(calls) == 2
+
+
+def test_digest_clears_when_no_recent_chats_remain(review) -> None:
+    review.digests["karthik"] = SimpleNamespace(
+        digest="- Old item",
+        sources=[{"conversation_id": "x", "covers_to": 1}],
+        built_at=NOW,
+    )
+    review.chats = [summarized(OLD, "Old")]
+    assert service("unused").memory_digest("DS-1", "karthik", NOW)
+    assert review.saved_digests == [("karthik", None, [])]
+    assert dreaming.memory_block("karthik") is None
+
+
+def test_none_reply_saves_an_empty_digest(review) -> None:
+    review.chats = [summarized(TODAY, "Greeting only.")]
+    assert service("NONE").memory_digest("DS-1", "karthik", NOW)
+    assert review.saved_digests[0][1] is None
+
+
+def test_run_rebuilds_digests_and_isolates_their_failures(review) -> None:
+    review.chats = [summarized(TODAY, "Rain backlog.")]
+    review.chats[0].dreamed_to = 1
+    report = service("- Rain backlog on 8 Oct.").run(NOW)
+    assert report.digests == 1 and report.failures == []
+    assert report.text() == (
+        "No new messages since the last review. Updated 1 memory digest."
+    )
+    review.chats[0].summary_covers_to = 5
+
+    def failing(system_prompt, user_message):
+        raise RuntimeError("provider down")
+
+    report = service(failing).run(NOW)
+    assert report.digests == 0 and report.failures == ["memory digest"]
+    assert review.digests["karthik"].digest == "- Rain backlog on 8 Oct."
+
+
+def test_memory_block_labels_the_digest_as_earlier_chats(review) -> None:
+    review.digests["karthik"] = SimpleNamespace(
+        digest="- Z3 floods in heavy rain (said 6 Oct).",
+        sources=[],
+        built_at=NOW,
+    )
+    assert dreaming.memory_block("karthik") == (
+        "From this manager's chats in the 7 days before 8 Oct:\n"
+        "- Z3 floods in heavy rain (said 6 Oct)."
+    )
+    assert dreaming.memory_digest("karthik") is review.digests["karthik"]

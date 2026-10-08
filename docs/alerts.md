@@ -1,6 +1,6 @@
 # DispatchDesk alerts design
 
-Status: implemented. Section 1 (setting alerts through chat) is in `backend/service/setting_changes.py`. Sections 4 to 6 (checking alerts, the pop-up, the `<alerts>` block) are in `backend/service/alerts.py`, `backend/queries/alerts.py` and `backend/ui/alerts.py`, with migration `0011_alert_events`. Differences from the draft below: `alert_events` is a log with one row per pop-up (no active/resolved status), which gives both the cooldown and the count per day; there is no demo-time override yet, so windows use the real time in Asia/Kolkata; and the pop-up's buttons are Diagnose, Start new chat and dismiss (no snooze).
+Status: implemented. Section 1 (setting alerts through chat) is in `backend/service/setting_changes.py`. Sections 4 to 6 (checking alerts, the pop-up, the `<alerts>` block) are in `backend/service/alerts.py`, `backend/queries/alerts.py` and `backend/ui/alerts.py`, with migration `0012_alert_events`. Differences from the draft below: `alert_events` is a log with one row per pop-up (no active/resolved status), which gives both the cooldown and the count per day; there is no demo-time override yet, so windows use the real time in Asia/Kolkata; and the pop-up's buttons are Diagnose, Start new chat and dismiss (no snooze).
 
 Scope: MVP. It covers the five alert types in the preference catalogue ([memory.md](memory.md), section 2). The chat path in section 1 also works for the other configurable items (surge-only batching, incentive cap, briefing); cold-chain isolation is locked.
 

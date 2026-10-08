@@ -709,14 +709,14 @@ def test_summary_runs_after_the_answer_on_its_own_queue(monkeypatch) -> None:
     assert all(callback.concurrency_id == "summaries" for callback in callbacks)
 
 
-def test_summary_bar_is_hidden_for_an_empty_chat(monkeypatch) -> None:
+def test_summary_trigger_is_hidden_for_an_empty_chat(monkeypatch) -> None:
     monkeypatch.setattr(
         gradio_app,
         "conversation_summary",
         lambda manager_id=None: None,
     )
-    bar, _, text, _ = gradio_app.summary_card()
-    assert bar == gr.update(visible=False) and text == ""
+    trigger, status, text, _ = gradio_app.summary_card()
+    assert trigger == gr.update(visible=False) and status == text == ""
 
     def unavailable(manager_id=None):
         raise RuntimeError("database down")
@@ -736,11 +736,11 @@ def test_unsummarized_chat_offers_to_summarize(monkeypatch) -> None:
             "summarized_at": None,
         },
     )
-    bar, box, text, button = gradio_app.summary_card()
-    assert bar == gr.update(visible=True)
-    assert box == gr.update(label="Not summarized yet · 4 messages")
-    assert "**Summarize now**" in text
-    assert button == gr.update(value="Summarize now")
+    trigger, status, text, button = gradio_app.summary_card()
+    assert trigger == gr.update(visible=True)
+    assert status == "4 messages · No summary yet"
+    assert "key decisions and details" in text
+    assert button == gr.update(value="Create summary")
 
 
 def test_summary_card_shows_coverage_and_update_time(monkeypatch, frozen_now) -> None:
@@ -754,16 +754,14 @@ def test_summary_card_shows_coverage_and_update_time(monkeypatch, frozen_now) ->
             "summarized_at": datetime(2026, 10, 7, 19, 30, tzinfo=gradio_app.TIMEZONE),
         },
     )
-    _, box, text, button = gradio_app.summary_card()
-    assert box == gr.update(
-        label="Summary of earlier messages · covers 12 of 30 · updated 19:30",
-    )
+    _, status, text, button = gradio_app.summary_card()
+    assert status == "12 of 30 messages · Updated 19:30"
     assert text.startswith("- Standby rider approved.")
-    assert "The full messages are below." in text
+    assert "Your full conversation stays in the chat." in text
     assert button == gr.update(value="Update summary")
 
 
-def test_summarize_now_updates_and_opens_the_card(monkeypatch, frozen_now) -> None:
+def test_summarize_now_updates_the_popover_content(monkeypatch, frozen_now) -> None:
     views = iter(
         [
             {
@@ -791,11 +789,8 @@ def test_summarize_now_updates_and_opens_the_card(monkeypatch, frozen_now) -> No
         "conversation_summary",
         lambda manager_id=None: next(views),
     )
-    _, box, text, _ = gradio_app.summarize_now()
-    assert box == gr.update(
-        label="Summary of earlier messages · covers 30 of 30 · updated 19:42",
-        open=True,
-    )
+    _, status, text, _ = gradio_app.summarize_now()
+    assert status == "30 of 30 messages · Updated 19:42"
     assert text.startswith("- Now includes the latest exchange.")
 
 
@@ -823,7 +818,7 @@ def test_summarize_now_reports_when_nothing_is_new(monkeypatch) -> None:
         gradio_app.summarize_now()
 
 
-def test_summary_bar_is_pinned_collapsed_and_refreshed_with_the_chat() -> None:
+def test_summary_popover_is_refreshed_with_the_chat() -> None:
     def block(kind, elem_id):
         return next(
             item
@@ -831,10 +826,9 @@ def test_summary_bar_is_pinned_collapsed_and_refreshed_with_the_chat() -> None:
             if isinstance(item, kind) and item.elem_id == elem_id
         )
 
-    bar = block(gr.Row, "chat-summary-bar")
-    card = block(gr.Accordion, "chat-summary")
+    trigger = block(gr.Button, "summary-trigger")
     button = block(gr.Button, "summarize-now")
-    assert bar.visible is False and card.open is False
+    assert trigger.visible is False
     refreshers = [
         callback
         for callback in gradio_app.app.fns.values()
@@ -843,14 +837,14 @@ def test_summary_bar_is_pinned_collapsed_and_refreshed_with_the_chat() -> None:
     # Page load, switching manager, opening a chat, a scenario load, New chat,
     # starting a chat from an alert, and after each answer.
     assert len(refreshers) == 8
-    assert all(bar in callback.outputs for callback in refreshers)
+    assert all(trigger in callback.outputs for callback in refreshers)
     [click] = [
         callback
         for callback in gradio_app.app.fns.values()
         if (button._id, "click") in callback.targets
     ]
     assert click.fn is gradio_app.summarize_now
-    assert click.concurrency_id == "summaries"
+    assert click.concurrency_id == "workspace"
 
 
 CHANGE = {

@@ -74,6 +74,7 @@ def store(monkeypatch) -> FakeStore:
     monkeypatch.setattr(conversations, "append_message", fake.append)
     # Keep tests off any real database: no handover notes.
     monkeypatch.setattr(conversations, "handover_block", lambda store_id: None)
+    monkeypatch.setattr(conversations, "memory_block", lambda manager_id: None)
     monkeypatch.setattr(conversations, "list_conversations", fake.list)
     monkeypatch.setattr(conversations, "resume_conversation", fake.resume)
     return fake
@@ -169,6 +170,7 @@ def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> N
         preferences,
         summary=None,
         handover=None,
+        memory=None,
         tools=(),
         alerts=None,
     ):
@@ -252,7 +254,7 @@ def test_ui_browse_entry_points(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None, handover=None, tools=(), alerts=None: (
+        lambda question, *, history, preferences, summary=None, handover=None, memory=None, tools=(), alerts=None: (
             "reply"
         ),
     )
@@ -352,7 +354,7 @@ def test_ui_title_entry_point_uses_the_configured_model(store, monkeypatch) -> N
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None, handover=None, tools=(), alerts=None: (
+        lambda question, *, history, preferences, summary=None, handover=None, memory=None, tools=(), alerts=None: (
             "Use the standby rider."
         ),
     )
@@ -418,7 +420,7 @@ def test_ui_summary_entry_point_uses_the_open_chat(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None, handover=None, tools=(), alerts=None: (
+        lambda question, *, history, preferences, summary=None, handover=None, memory=None, tools=(), alerts=None: (
             "reply"
         ),
     )
@@ -455,6 +457,7 @@ def test_ui_ask_returns_the_changes_the_assistant_proposed(
         preferences,
         summary=None,
         handover=None,
+        memory=None,
         tools=(),
         alerts=None,
     ):

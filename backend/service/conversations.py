@@ -24,7 +24,7 @@ from queries.conversations import (
     start_conversation,
 )
 from service.alerts import alerts_block
-from service.dreaming import handover_block
+from service.dreaming import handover_block, memory_block
 from service.factory import create_llm_service
 from service.llm_service import Tool
 from service.preferences import PreferenceService, manager_preferences
@@ -218,8 +218,7 @@ def _answer(
     preferences: PreferenceService | None = None,
     tools: Sequence[Tool] = (),
 ) -> str:
-    """Answer with the settings, alerts, summary and last handover in view."""
-    handover = handover_block(DEMO_STORE_ID)
+    """Answer with the settings, alerts, summary, last handover and memory."""
     preferences = preferences or manager_preferences()
     alerts = _alerts(preferences.manager_id)
     return answer_question(
@@ -227,7 +226,8 @@ def _answer(
         history=history,
         preferences=preferences,
         summary=summary,
-        handover=handover,
+        handover=handover_block(DEMO_STORE_ID),
+        memory=memory_block(preferences.manager_id),
         tools=tools,
         alerts=alerts,
     )

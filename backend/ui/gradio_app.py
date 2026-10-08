@@ -47,45 +47,60 @@ from ui import suggestions as suggestions_ui
 logger = structlog.stdlib.get_logger(__name__)
 CSS_PATH = Path(__file__).with_name("gradio_app.css")
 THEME = gr.themes.Base(
-    primary_hue="indigo",
-    secondary_hue="violet",
-    neutral_hue="slate",
+    primary_hue="rose",
+    secondary_hue="rose",
+    neutral_hue="gray",
     # Gradio 6.29 compares the first font with built-in Font objects at launch.
     font=[gr.themes.GoogleFont("DM Sans", weights=[400, 500, 600, 700]), "sans-serif"],
 ).set(
-    body_background_fill="#18181a",
-    body_background_fill_dark="#18181a",
-    body_text_color="#eeedf0",
-    body_text_color_dark="#eeedf0",
-    body_text_color_subdued="#c0bec7",
-    body_text_color_subdued_dark="#c0bec7",
-    block_background_fill="#232325",
-    block_background_fill_dark="#232325",
-    block_border_color="#363539",
-    block_border_color_dark="#363539",
+    color_accent="#87364b",
+    color_accent_soft="#34272c",
+    color_accent_soft_dark="#34272c",
+    body_background_fill="#191919",
+    body_background_fill_dark="#191919",
+    body_text_color="#f2eee9",
+    body_text_color_dark="#f2eee9",
+    body_text_color_subdued="#bcb7b1",
+    body_text_color_subdued_dark="#bcb7b1",
+    block_background_fill="#222222",
+    block_background_fill_dark="#222222",
+    block_border_color="#3d3a38",
+    block_border_color_dark="#3d3a38",
     block_radius="12px",
     block_label_background_fill="transparent",
     block_label_background_fill_dark="transparent",
-    block_label_text_color="#c0bec7",
-    block_label_text_color_dark="#c0bec7",
-    input_background_fill="#232325",
-    input_background_fill_dark="#232325",
-    input_border_color="#3e3c43",
-    input_border_color_dark="#3e3c43",
-    button_primary_background_fill="#b4a3de",
-    button_primary_background_fill_dark="#b4a3de",
-    button_primary_background_fill_hover="#c5b6e9",
-    button_primary_background_fill_hover_dark="#c5b6e9",
-    button_primary_text_color="#211c2c",
-    button_primary_text_color_dark="#211c2c",
-    button_primary_border_color="#b4a3de",
-    button_primary_border_color_dark="#b4a3de",
-    button_secondary_background_fill="#232325",
-    button_secondary_background_fill_dark="#232325",
-    button_secondary_background_fill_hover="#302c38",
-    button_secondary_background_fill_hover_dark="#302c38",
-    button_secondary_text_color="#ded9e7",
-    button_secondary_text_color_dark="#ded9e7",
+    block_label_text_color="#bcb7b1",
+    block_label_text_color_dark="#bcb7b1",
+    input_background_fill="#222222",
+    input_background_fill_dark="#222222",
+    input_border_color="#3d3a38",
+    input_border_color_dark="#3d3a38",
+    input_border_color_focus="#79505c",
+    input_border_color_focus_dark="#79505c",
+    link_text_color="#d3a3af",
+    link_text_color_dark="#d3a3af",
+    link_text_color_hover="#e7bcc7",
+    link_text_color_hover_dark="#e7bcc7",
+    button_primary_background_fill="#87364b",
+    button_primary_background_fill_dark="#87364b",
+    button_primary_background_fill_hover="#9b4058",
+    button_primary_background_fill_hover_dark="#9b4058",
+    button_primary_text_color="#fbf7f3",
+    button_primary_text_color_dark="#fbf7f3",
+    button_primary_border_color="#87364b",
+    button_primary_border_color_dark="#87364b",
+    button_primary_border_color_hover="#9b4058",
+    button_primary_border_color_hover_dark="#9b4058",
+    button_secondary_background_fill="#282828",
+    button_secondary_background_fill_dark="#282828",
+    button_secondary_background_fill_hover="#2e2e2e",
+    button_secondary_background_fill_hover_dark="#2e2e2e",
+    button_secondary_text_color="#f2eee9",
+    button_secondary_text_color_dark="#f2eee9",
+    button_secondary_border_color="#3d3a38",
+    button_secondary_border_color_dark="#3d3a38",
+    button_secondary_border_color_hover="#79505c",
+    button_secondary_border_color_hover_dark="#79505c",
     button_border_width="1px",
     button_large_radius="10px",
 )
@@ -138,6 +153,57 @@ FINISH_CHAT_JS = """
     {__type__: 'update', interactive: true},
     {__type__: 'update', interactive: true}
 ]
+"""
+
+
+SUMMARY_POPOVER_JS = """
+() => {
+    const panel = document.querySelector('#chat-summary-panel');
+    const dock = document.querySelector('#composer-dock');
+    if (!panel || !dock || panel.dataset.popoverReady) return;
+    panel.dataset.popoverReady = 'true';
+    panel.popover = 'auto';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-labelledby', 'chat-summary-title');
+    panel.tabIndex = -1;
+    const prepare = (button) => {
+        if (!button) return;
+        button.setAttribute('popovertarget', panel.id);
+        button.setAttribute('aria-controls', panel.id);
+        button.setAttribute('aria-haspopup', 'dialog');
+        button.title = 'Conversation summary';
+        button.setAttribute('aria-expanded', String(panel.matches(':popover-open')));
+    };
+    const position = () => {
+        const bounds = dock.getBoundingClientRect();
+        const width = Math.min(560, innerWidth - 24);
+        panel.style.left = `${Math.max(12, Math.min(bounds.right - width, innerWidth - width - 12))}px`;
+        panel.style.bottom = `${Math.max(12, innerHeight - bounds.top + 12)}px`;
+    };
+    prepare(document.querySelector('#summary-trigger'));
+    for (const event of ['focusin', 'pointerover', 'click']) {
+        document.addEventListener(event, (e) => {
+            const button = e.target.closest('#summary-trigger');
+            if (!button) return;
+            prepare(button);
+            position();
+        }, true);
+    }
+    panel.addEventListener('toggle', () => {
+        prepare(document.querySelector('#summary-trigger'));
+        if (panel.matches(':popover-open')) panel.focus({preventScroll: true});
+    });
+    const reposition = () => {
+        if (panel.matches(':popover-open')) position();
+    };
+    new ResizeObserver(reposition).observe(dock);
+    window.addEventListener('resize', reposition);
+}
+"""
+
+
+CLOSE_SUMMARY_JS = """
+() => document.querySelector('#chat-summary-panel:popover-open')?.hidePopover()
 """
 
 
@@ -457,17 +523,16 @@ def title_conversation(
 
 
 SUMMARY_NOTE = (
-    '\n\n<p class="summary-note">Written by the assistant for its own context. '
-    "The full messages are below.</p>"
+    '\n\n<p class="summary-note">Your full conversation stays in the chat.</p>'
 )
 
 
 def summary_card(
     manager_id: str = DEMO_MANAGER_ID,
     conversation_id: str | None = None,
-) -> tuple[dict, dict, str, dict]:
-    """The pinned summary row: hidden for an empty chat, otherwise its state."""
-    hidden = (gr.update(visible=False), gr.skip(), "", gr.skip())
+) -> tuple[dict, str, str, dict]:
+    """Show the summary trigger for a saved chat and refresh its popover content."""
+    hidden = (gr.update(visible=False), "", "", gr.skip())
     try:
         view = conversation_summary(**_chat_scope(manager_id, conversation_id))
     except (SQLAlchemyError, RuntimeError):
@@ -478,18 +543,18 @@ def summary_card(
     if view["summary"] is None:
         return (
             gr.update(visible=True),
-            gr.update(label=f"Not summarized yet · {view['total']} messages"),
-            "No summary yet. **Summarize now** folds this chat's messages into one.",
-            gr.update(value="Summarize now"),
+            f"{view['total']} messages · No summary yet",
+            "Bring the key decisions and details from this conversation into one place.",
+            gr.update(value="Create summary"),
         )
-    label = f"Summary of earlier messages · covers {view['covered']} of {view['total']}"
+    status = f"{view['covered']} of {view['total']} messages"
     if view["summarized_at"] is not None:
-        label += (
-            f" · updated {_time_label(view['summarized_at'], datetime.now(TIMEZONE))}"
+        status += (
+            f" · Updated {_time_label(view['summarized_at'], datetime.now(TIMEZONE))}"
         )
     return (
         gr.update(visible=True),
-        gr.update(label=label),
+        status,
         view["summary"] + SUMMARY_NOTE,
         gr.update(value="Update summary"),
     )
@@ -498,8 +563,8 @@ def summary_card(
 def summarize_now(
     manager_id: str = DEMO_MANAGER_ID,
     conversation_id: str | None = None,
-) -> tuple[dict, dict, str, dict]:
-    """Fold every message of the open chat into its summary, then show it open."""
+) -> tuple[dict, str, str, dict]:
+    """Summarize the open chat and refresh the content inside its open popover."""
     try:
         updated = summarize_open_conversation(
             **_chat_scope(manager_id, conversation_id),
@@ -514,10 +579,7 @@ def summarize_now(
         raise gr.Error("Could not summarize this chat. Please try again.") from exc
     if not updated:
         gr.Info("The summary already covers every message.")
-    bar, box, text, button = summary_card(**_chat_scope(manager_id, conversation_id))
-    if updated:
-        box = gr.update(label=box["label"], open=True)
-    return bar, box, text, button
+    return summary_card(**_chat_scope(manager_id, conversation_id))
 
 
 def summarize_conversation(
@@ -772,7 +834,10 @@ MANAGER_URL_JS = """
 def _assistant_context(context: dict[str, Any] | None) -> str:
     """Identify the loaded scenario, independently of the demo preview."""
     if not context:
-        return '<div class="current-scenario"><span>Scenario unavailable</span></div>'
+        return (
+            '<div class="current-scenario"><span>Current scenario</span>'
+            "<strong>Not available</strong></div>"
+        )
     return (
         '<div class="current-scenario"><span>Current scenario</span>'
         f"<strong>{escape(context['title'])}</strong></div>"
@@ -973,6 +1038,12 @@ def build_app() -> gr.Blocks:
                         apply_default_css=False,
                         elem_id="settings-summary",
                     )
+                context_banner = gr.HTML(
+                    '<div class="current-scenario"><span>Current scenario</span>'
+                    "<strong>Checking…</strong></div>",
+                    apply_default_css=False,
+                    elem_id="sidebar-scenario",
+                )
                 with gr.Column(elem_id="manager-profile"):
                     manager_picker = gr.Dropdown(
                         choices=[],
@@ -995,23 +1066,6 @@ def build_app() -> gr.Blocks:
                 gr.Column(elem_id="manager-workspace", min_width=0),
                 gr.Column(elem_id="assistant-panel", min_width=0),
             ):
-                with gr.Row(
-                    visible=False,
-                    elem_id="chat-summary-bar",
-                ) as summary_bar:
-                    with gr.Accordion(
-                        "Summary of earlier messages",
-                        open=False,
-                        elem_id="chat-summary",
-                    ) as summary_box:
-                        summary_text = gr.Markdown(elem_id="chat-summary-text")
-                    summarize_button = gr.Button(
-                        "Summarize now",
-                        size="sm",
-                        scale=0,
-                        min_width=140,
-                        elem_id="summarize-now",
-                    )
                 chatbot = gr.Chatbot(
                     label="Conversation",
                     show_label=False,
@@ -1053,6 +1107,27 @@ def build_app() -> gr.Blocks:
                         apply_default_css=False,
                         elem_id="chat-processing",
                     )
+                    with gr.Column(elem_id="chat-summary-panel", min_width=0):
+                        gr.HTML(
+                            '<div class="summary-heading">'
+                            '<h3 id="chat-summary-title">Conversation summary</h3>'
+                            '<button type="button" aria-label="Close summary" '
+                            'popovertarget="chat-summary-panel" popovertargetaction="hide">'
+                            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                            'stroke-width="1.5" aria-hidden="true">'
+                            '<path d="m6 6 12 12M6 18 18 6"/></svg></button></div>',
+                            apply_default_css=False,
+                        )
+                        summary_status = gr.HTML(
+                            apply_default_css=False,
+                            elem_id="chat-summary-status",
+                        )
+                        summary_text = gr.Markdown(elem_id="chat-summary-text")
+                        summarize_button = gr.Button(
+                            "Create summary",
+                            size="sm",
+                            elem_id="summarize-now",
+                        )
                     with gr.Row(elem_id="message-composer"):
                         message = gr.Textbox(
                             label="Ask your dispatch assistant",
@@ -1062,6 +1137,14 @@ def build_app() -> gr.Blocks:
                             max_lines=6,
                             container=False,
                             elem_id="message-input",
+                        )
+                        summary_trigger = gr.Button(
+                            "Summary",
+                            size="sm",
+                            scale=0,
+                            min_width=0,
+                            visible=False,
+                            elem_id="summary-trigger",
                         )
                         submit = gr.Button(
                             "Send",
@@ -1089,16 +1172,6 @@ def build_app() -> gr.Blocks:
                 gr.Tab("Demo tools", id="demo", render_children=True),
                 gr.Column(elem_id="demo-workspace", min_width=0),
             ):
-                with gr.Row(elem_id="demo-context"):
-                    context_banner = gr.HTML(
-                        '<div class="current-scenario"><span>Checking scenario…</span></div>'
-                        if choices
-                        else _assistant_context(None),
-                        apply_default_css=False,
-                        elem_id="assistant-context",
-                        scale=0,
-                        min_width=0,
-                    )
                 with gr.Row(elem_id="demo-heading"):
                     situation = gr.HTML(
                         _situation_heading(None, scenarios),
@@ -1253,6 +1326,7 @@ def build_app() -> gr.Blocks:
             dismiss_suggestion,
             suggestion_status,
         ) = settings_form.suggestions
+        memory_view = settings_form.memory
         suggestion_outputs = [
             suggestions_entry,
             suggestions_entry_text,
@@ -1308,7 +1382,7 @@ def build_app() -> gr.Blocks:
             suggestions_ui.refresh_for,
             inputs=manager,
             outputs=suggestion_outputs,
-        )
+        ).then(settings.load_memory, inputs=manager, outputs=memory_view)
         mark_reviewed_button.click(
             suggestions_ui.mark_issues_reviewed,
             inputs=manager,
@@ -1331,13 +1405,35 @@ def build_app() -> gr.Blocks:
             queue=False,
             show_progress="hidden",
         )
-        summary_outputs = [summary_bar, summary_box, summary_text, summarize_button]
+        summary_outputs = [
+            summary_trigger,
+            summary_status,
+            summary_text,
+            summarize_button,
+        ]
         summarize_button.click(
             summarize_now,
             inputs=[manager, active_chat],
             outputs=summary_outputs,
-            concurrency_id="summaries",
+            # A manual update must finish before switching to another chat.
+            concurrency_id="workspace",
             concurrency_limit=1,
+            show_progress="hidden",
+            js="""(...args) => {
+                const button = document.querySelector('#summarize-now');
+                button.setAttribute('aria-busy', 'true');
+                button.disabled = true;
+                return args;
+            }""",
+        ).then(
+            fn=None,
+            js="""() => {
+                const button = document.querySelector('#summarize-now');
+                button.removeAttribute('aria-busy');
+                button.disabled = false;
+            }""",
+            queue=False,
+            show_progress="hidden",
         )
 
         def show_manager(event, linked=False):
@@ -1378,6 +1474,7 @@ def build_app() -> gr.Blocks:
                     inputs=manager,
                     outputs=answer_issues,
                 )
+                .then(settings.load_memory, inputs=manager, outputs=memory_view)
                 .then(
                     alerts_ui.queue_new,
                     inputs=[manager, alert_queue, alert_seen],
@@ -1409,6 +1506,7 @@ def build_app() -> gr.Blocks:
         ).then(fn=None, js=CLOSE_SIDEBAR_ON_PHONE_JS)
         app.load(fn=None, js=CLOSE_SIDEBAR_ON_PHONE_JS)
         app.load(fn=None, js=CHAT_NAVIGATION_JS)
+        app.load(fn=None, js=SUMMARY_POPOVER_JS)
         history_list.input(
             open_conversation,
             inputs=[history_list, manager],
@@ -1416,6 +1514,11 @@ def build_app() -> gr.Blocks:
             concurrency_id="workspace",
             concurrency_limit=1,
         ).then(fn=None, js=CLOSE_SIDEBAR_ON_PHONE_JS)
+        active_chat.change(
+            fn=None,
+            js=CLOSE_SUMMARY_JS,
+            queue=False,
+        )
         active_chat.change(
             conversation_choices,
             inputs=[manager, active_chat],
@@ -1564,8 +1667,7 @@ def build_app() -> gr.Blocks:
                     ? actions.getBoundingClientRect().bottom : bounds.bottom;
                 const dock = document.querySelector('#composer-dock').getBoundingClientRect();
                 const bottom = dock.top - 24;
-                const summary = document.querySelector('#chat-summary-bar');
-                const top = (summary?.getBoundingClientRect().height || 0) + 24;
+                const top = 24;
                 const target = messageBottom - bounds.top > bottom - top
                     ? scrollY + bounds.top - top
                     : scrollY + messageBottom - bottom;

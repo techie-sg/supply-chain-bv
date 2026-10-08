@@ -399,6 +399,33 @@ class HandoverNote(Base):
     )
 
 
+class MemoryDigest(Base):
+    """What the daily review remembers about a manager's recent chats."""
+
+    __tablename__ = "memory_digests"
+    __table_args__ = (
+        CheckConstraint(
+            "jsonb_typeof(sources) = 'array'",
+            name="ck_memory_digests_sources",
+        ),
+        {"schema": "app"},
+    )
+
+    manager_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("app.managers.manager_id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    store_id: Mapped[str] = mapped_column(String(32))
+    digest: Mapped[str | None] = mapped_column(Text)
+    # [{"conversation_id": ..., "covers_to": <summary_covers_to>}], newest first.
+    sources: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")
+    built_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
 class Suggestion(Base):
     """A proposal from the daily review; it changes nothing until accepted."""
 

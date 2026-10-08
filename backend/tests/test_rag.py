@@ -179,6 +179,7 @@ def test_ui_entry_point_passes_preferences_through(monkeypatch) -> None:
             preferences,
             summary,
             handover,
+            memory,
             tools,
             alerts,
         ):
@@ -212,6 +213,35 @@ def test_summary_is_placed_before_the_retrieved_context(monkeypatch) -> None:
         "details):\n- Standby rider approved.\n</conversation_summary>\n\n"
         "Retrieved context:"
     ) in user
+
+
+def test_blocks_come_in_order_with_memory_after_the_handover(monkeypatch) -> None:
+    llm = FakeLLMService()
+    monkeypatch.setattr(
+        rag,
+        "retrieve",
+        lambda **kwargs: [{"chunk_id": "doc#1", "content": "Policy."}],
+    )
+    RAGService(FakeEmbeddingService(), llm).answer_question(
+        "Hi",
+        preferences=FakePreferences(),
+        summary="- Earlier.",
+        handover="Handover from 8 Oct:\n- Rain.",
+        memory="- Z3 floods in heavy rain (said 6 Oct).",
+    )
+    _, user = llm.messages[0]
+    order = [
+        user.index(tag)
+        for tag in (
+            "<preferences>",
+            "<handover_notes>",
+            "<recent_context>",
+            "<conversation_summary>",
+            "Retrieved context:",
+        )
+    ]
+    assert order == sorted(order)
+    assert "Advisory only" in user and "- Z3 floods in heavy rain" in user
 
 
 class ToolLLMService(FakeLLMService):

@@ -194,7 +194,14 @@ def test_admin_report_handles_storage_errors(monkeypatch) -> None:
 def test_sidebar_review_opens_the_suggestions_category() -> None:
     nav, *panels, save_row = gradio_app.show_suggestions()
     assert nav["value"] == "suggestions"
-    assert [panel["visible"] for panel in panels] == [False, False, False, False, True]
+    assert [panel["visible"] for panel in panels] == [
+        False,
+        False,
+        False,
+        False,
+        True,
+        False,
+    ]
     assert save_row["visible"] is False
     review = next(
         block
