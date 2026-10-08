@@ -632,3 +632,121 @@ def test_launch_starts_the_idle_summary_job(monkeypatch) -> None:
     monkeypatch.setattr(gradio_app.app, "launch", lambda **kwargs: None)
     gradio_app.main()
     assert started == [True]
+
+
+def test_summary_bar_is_hidden_for_an_empty_chat(monkeypatch) -> None:
+    monkeypatch.setattr(gradio_app, "conversation_summary", lambda: None)
+    bar, _, text, _ = gradio_app.summary_card()
+    assert bar == gr.update(visible=False) and text == ""
+
+    def unavailable():
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(gradio_app, "conversation_summary", unavailable)
+    assert gradio_app.summary_card()[0] == gr.update(visible=False)
+
+
+def test_unsummarized_chat_offers_to_summarize(monkeypatch) -> None:
+    monkeypatch.setattr(
+        gradio_app,
+        "conversation_summary",
+        lambda: {"summary": None, "covered": 0, "total": 4, "summarized_at": None},
+    )
+    bar, box, text, button = gradio_app.summary_card()
+    assert bar == gr.update(visible=True)
+    assert box == gr.update(label="Not summarized yet · 4 messages")
+    assert "**Summarize now**" in text
+    assert button == gr.update(value="Summarize now")
+
+
+def test_summary_card_shows_coverage_and_update_time(monkeypatch, frozen_now) -> None:
+    monkeypatch.setattr(
+        gradio_app,
+        "conversation_summary",
+        lambda: {
+            "summary": "- Standby rider approved.",
+            "covered": 12,
+            "total": 30,
+            "summarized_at": datetime(2026, 10, 7, 19, 30, tzinfo=gradio_app.TIMEZONE),
+        },
+    )
+    _, box, text, button = gradio_app.summary_card()
+    assert box == gr.update(
+        label="Summary of earlier messages · covers 12 of 30 · updated 19:30",
+    )
+    assert text.startswith("- Standby rider approved.")
+    assert "The full messages are below." in text
+    assert button == gr.update(value="Update summary")
+
+
+def test_summarize_now_updates_and_opens_the_card(monkeypatch, frozen_now) -> None:
+    views = iter(
+        [
+            {
+                "summary": "- Now includes the latest exchange.",
+                "covered": 30,
+                "total": 30,
+                "summarized_at": datetime(
+                    2026,
+                    10,
+                    7,
+                    19,
+                    42,
+                    tzinfo=gradio_app.TIMEZONE,
+                ),
+            },
+        ],
+    )
+    monkeypatch.setattr(gradio_app, "summarize_open_conversation", lambda: True)
+    monkeypatch.setattr(gradio_app, "conversation_summary", lambda: next(views))
+    _, box, text, _ = gradio_app.summarize_now()
+    assert box == gr.update(
+        label="Summary of earlier messages · covers 30 of 30 · updated 19:42",
+        open=True,
+    )
+    assert text.startswith("- Now includes the latest exchange.")
+
+
+def test_summarize_now_reports_when_nothing_is_new(monkeypatch) -> None:
+    notices: list[str] = []
+    monkeypatch.setattr(gradio_app.gr, "Info", notices.append)
+    monkeypatch.setattr(gradio_app, "summarize_open_conversation", lambda: False)
+    monkeypatch.setattr(gradio_app, "conversation_summary", lambda: None)
+    gradio_app.summarize_now()
+    assert notices == ["The summary already covers every message."]
+
+    def failing():
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(gradio_app, "summarize_open_conversation", failing)
+    with pytest.raises(gr.Error, match="Could not summarize this chat"):
+        gradio_app.summarize_now()
+
+
+def test_summary_bar_is_pinned_collapsed_and_refreshed_with_the_chat() -> None:
+    def block(kind, elem_id):
+        return next(
+            item
+            for item in gradio_app.app.blocks.values()
+            if isinstance(item, kind) and item.elem_id == elem_id
+        )
+
+    bar = block(gr.Row, "chat-summary-bar")
+    card = block(gr.Accordion, "chat-summary")
+    button = block(gr.Button, "summarize-now")
+    assert bar.visible is False and card.open is False
+    refreshers = [
+        callback
+        for callback in gradio_app.app.fns.values()
+        if callback.fn is gradio_app.summary_card
+    ]
+    # Page load, opening a chat, a scenario load, New chat, and after each answer.
+    assert len(refreshers) == 6
+    assert all(bar in callback.outputs for callback in refreshers)
+    [click] = [
+        callback
+        for callback in gradio_app.app.fns.values()
+        if (button._id, "click") in callback.targets
+    ]
+    assert click.fn is gradio_app.summarize_now
+    assert click.concurrency_id == "summaries"

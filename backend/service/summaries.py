@@ -137,6 +137,13 @@ class SummaryService:
             return False
         return self.fold(conversation, keep_recent=SUMMARY_RECENT_MESSAGES)
 
+    def summarize_now(self, store_id: str, manager_id: str) -> bool:
+        """Fold every message of the open chat, recent ones included, on request."""
+        conversation = latest_conversation(store_id, manager_id, self.engine)
+        if conversation is None:
+            return False
+        return self.fold(conversation, keep_recent=0)
+
     def summarize_idle(self, now: datetime | None = None) -> int:
         """Summarize chats idle for the idle time in full; returns how many."""
         now = now or datetime.now(TIMEZONE)
@@ -177,6 +184,11 @@ def summary_service() -> SummaryService:
 def summarize_latest_conversation() -> bool:
     """UI entry point: fold the open chat after an answer if it is over a limit."""
     return summary_service().after_answer(DEMO_STORE_ID, DEMO_MANAGER_ID)
+
+
+def summarize_open_conversation() -> bool:
+    """UI entry point: bring the open chat's summary up to its latest message."""
+    return summary_service().summarize_now(DEMO_STORE_ID, DEMO_MANAGER_ID)
 
 
 def idle_summary_job() -> IntervalJob:

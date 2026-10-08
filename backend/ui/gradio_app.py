@@ -17,6 +17,7 @@ from logging_config import configure_logging
 from service.conversations import (
     ask_question,
     conversation_history,
+    conversation_summary,
     current_conversation_id,
     past_conversations,
     resume_past_conversation,
@@ -30,7 +31,11 @@ from service.scenarios import (
     scenario_details,
     scenario_names,
 )
-from service.summaries import idle_summary_job, summarize_latest_conversation
+from service.summaries import (
+    idle_summary_job,
+    summarize_latest_conversation,
+    summarize_open_conversation,
+)
 from ui import settings
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -410,6 +415,62 @@ def title_conversation() -> dict:
     return conversation_choices()
 
 
+SUMMARY_NOTE = (
+    '\n\n<p class="summary-note">Written by the assistant for its own context. '
+    "The full messages are below.</p>"
+)
+
+
+def summary_card() -> tuple[dict, dict, str, dict]:
+    """The pinned summary row: hidden for an empty chat, otherwise its state."""
+    hidden = (gr.update(visible=False), gr.skip(), "", gr.skip())
+    try:
+        view = conversation_summary()
+    except (SQLAlchemyError, RuntimeError):
+        logger.warning("Could not load the conversation summary", exc_info=True)
+        return hidden
+    if view is None:
+        return hidden
+    if view["summary"] is None:
+        return (
+            gr.update(visible=True),
+            gr.update(label=f"Not summarized yet · {view['total']} messages"),
+            "No summary yet. **Summarize now** folds this chat's messages into one.",
+            gr.update(value="Summarize now"),
+        )
+    label = f"Summary of earlier messages · covers {view['covered']} of {view['total']}"
+    if view["summarized_at"] is not None:
+        label += (
+            f" · updated {_time_label(view['summarized_at'], datetime.now(TIMEZONE))}"
+        )
+    return (
+        gr.update(visible=True),
+        gr.update(label=label),
+        view["summary"] + SUMMARY_NOTE,
+        gr.update(value="Update summary"),
+    )
+
+
+def summarize_now() -> tuple[dict, dict, str, dict]:
+    """Fold every message of the open chat into its summary, then show it open."""
+    try:
+        updated = summarize_open_conversation()
+    except (
+        SQLAlchemyError,
+        RuntimeError,
+        ValueError,
+        requests.RequestException,
+    ) as exc:
+        logger.exception("Could not summarize the conversation on request")
+        raise gr.Error("Could not summarize this chat. Please try again.") from exc
+    if not updated:
+        gr.Info("The summary already covers every message.")
+    bar, box, text, button = summary_card()
+    if updated:
+        box = gr.update(label=box["label"], open=True)
+    return bar, box, text, button
+
+
 def summarize_conversation() -> None:
     """After an answer, fold older messages into the summary if over a limit."""
     try:
@@ -607,6 +668,23 @@ def build_app() -> gr.Blocks:
                         scale=0,
                         min_width=0,
                     )
+                with gr.Row(
+                    visible=False,
+                    elem_id="chat-summary-bar",
+                ) as summary_bar:
+                    with gr.Accordion(
+                        "Summary of earlier messages",
+                        open=False,
+                        elem_id="chat-summary",
+                    ) as summary_box:
+                        summary_text = gr.Markdown(elem_id="chat-summary-text")
+                    summarize_button = gr.Button(
+                        "Summarize now",
+                        size="sm",
+                        scale=0,
+                        min_width=140,
+                        elem_id="summarize-now",
+                    )
                 chatbot = gr.Chatbot(
                     label="Conversation",
                     show_label=False,
@@ -767,12 +845,22 @@ def build_app() -> gr.Blocks:
             queue=False,
             show_progress="hidden",
         )
+        summary_outputs = [summary_bar, summary_box, summary_text, summarize_button]
+        summarize_button.click(
+            summarize_now,
+            outputs=summary_outputs,
+            concurrency_id="summaries",
+            concurrency_limit=1,
+        )
         app.load(
             restore_chat,
             outputs=chatbot,
             concurrency_id="workspace",
             concurrency_limit=1,
-        ).then(conversation_choices, outputs=history_list)
+        ).then(conversation_choices, outputs=history_list).then(
+            summary_card,
+            outputs=summary_outputs,
+        )
         app.load(fn=None, js=CLOSE_SIDEBAR_ON_PHONE_JS)
         history_list.input(
             open_conversation,
@@ -781,6 +869,9 @@ def build_app() -> gr.Blocks:
             concurrency_id="workspace",
             concurrency_limit=1,
         ).then(conversation_choices, outputs=history_list).then(
+            summary_card,
+            outputs=summary_outputs,
+        ).then(
             fn=None,
             js=CLOSE_SIDEBAR_ON_PHONE_JS,
         )
@@ -824,7 +915,7 @@ def build_app() -> gr.Blocks:
         ).success(_assistant_context, inputs=current, outputs=context_banner).then(
             conversation_choices,
             outputs=history_list,
-        )
+        ).then(summary_card, outputs=summary_outputs)
         for event in (submit.click, message.submit):
             event(
                 fn=None,
@@ -857,7 +948,7 @@ def build_app() -> gr.Blocks:
                 concurrency_id="summaries",
                 concurrency_limit=1,
                 show_progress="hidden",
-            )
+            ).then(summary_card, outputs=summary_outputs, show_progress="hidden")
         chatbot.change(
             fn=None,
             js="""(history) => [
@@ -897,6 +988,9 @@ def build_app() -> gr.Blocks:
             concurrency_id="workspace",
             concurrency_limit=1,
         ).then(conversation_choices, outputs=history_list).then(
+            summary_card,
+            outputs=summary_outputs,
+        ).then(
             fn=None,
             js=CLOSE_SIDEBAR_ON_PHONE_JS,
         )
