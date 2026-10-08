@@ -90,22 +90,6 @@ THEME = gr.themes.Base(
 )
 
 
-def _icon(name: str) -> str:
-    """Small, local line icons; no external font or image dependency."""
-    paths = {
-        "box": '<path d="m12 3 9 5v8l-9 5-9-5V8l9-5Z"/><path d="m3 8 9 5 9-5M12 13v8M7.5 5.5l9 5"/>',
-        "riders": '<circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 4a3 3 0 0 1 0 6M21 21v-3a6 6 0 0 0-4-5.7"/>',
-        "clock": '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-        "zones": '<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6ZM9 3v15M15 6v15"/>',
-        "spark": '<path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4L12 3Z"/>',
-    }
-    return (
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-        'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" '
-        f'aria-hidden="true">{paths[name]}</svg>'
-    )
-
-
 CHAT_PLACEHOLDER = """
 <div class="chat-welcome">
     <div class="welcome-orbit" aria-hidden="true"><span class="welcome-emblem"></span></div>
@@ -704,7 +688,10 @@ def cancel_pending(
 
 
 def _manager_label(manager: ShiftManager) -> str:
-    return manager.name
+    return (
+        f"{manager.name}\n{manager.shift_name} shift · "
+        f"{manager.shift_start}–{manager.shift_end}"
+    )
 
 
 def manager_badge(manager: ShiftManager | None) -> str:
@@ -714,8 +701,9 @@ def manager_badge(manager: ShiftManager | None) -> str:
     return (
         '<div class="manager-badge"><span>Manager</span>'
         f"<strong>{escape(manager.name)}</strong>"
-        f"<em>{escape(manager.shift_name)} shift · {escape(manager.shift_start)}–"
-        f"{escape(manager.shift_end)} · {escape(manager.shift_id)}</em></div>"
+        f'<em data-shift-id="{escape(manager.shift_id)}">'
+        f"{escape(manager.shift_name)} shift · {escape(manager.shift_start)}–"
+        f"{escape(manager.shift_end)}</em></div>"
     )
 
 
@@ -799,6 +787,12 @@ async () => {
     );
     const view = tab?.dataset.tabId;
     if (!['assistant', 'settings', 'demo'].includes(view)) return;
+    const navigation = {assistant: 'new-chat', settings: 'edit-settings', demo: 'sidebar-demo'};
+    for (const [name, id] of Object.entries(navigation)) {
+        const button = document.getElementById(id);
+        if (name === view) button?.setAttribute('aria-current', 'page');
+        else button?.removeAttribute('aria-current');
+    }
     const url = new URL(window.location.href);
     url.searchParams.set('view', view);
     window.history.replaceState(null, '', url);
@@ -883,13 +877,6 @@ def build_app() -> gr.Blocks:
         choices[0][1] if choices else None,
     )
     with gr.Blocks(title="DispatchDesk", delete_cache=(3600, 86400)) as app:
-        gr.HTML(
-            '<header class="desk-header"><a href="/?view=assistant" class="brand" aria-label="Reload Assistant"><span class="brand-mark">'
-            f'{_icon("box")}</span><span>Dispatch<span class="brand-light">Desk</span></span>'
-            "</a></header>",
-            apply_default_css=False,
-            elem_id="brand-home",
-        )
         current = gr.State(None)
         active_chat = gr.State(None)
         chat_location = gr.JSON(visible=False)
@@ -899,22 +886,32 @@ def build_app() -> gr.Blocks:
         pending_changes = gr.State([])
         with gr.Sidebar(label="Workspace", width=288, elem_id="chat-sidebar"):
             with gr.Column(elem_id="sidebar-top"):
-                manager_picker = gr.Dropdown(
-                    choices=[],
-                    value=None,
-                    label="Shift manager",
-                    show_label=False,
-                    container=False,
-                    filterable=False,
-                    interactive=True,
-                    elem_id="manager-picker",
+                gr.HTML(
+                    '<a href="/?view=assistant" class="sidebar-brand" '
+                    'aria-label="Reload Assistant">DispatchDesk</a>',
+                    apply_default_css=False,
+                    elem_id="sidebar-brand",
                 )
-                new_chat = gr.Button(
-                    "New chat",
-                    size="sm",
-                    variant="secondary",
-                    elem_id="new-chat",
-                )
+                with gr.Column(elem_id="sidebar-navigation"):
+                    new_chat = gr.Button(
+                        "New chat",
+                        size="sm",
+                        variant="secondary",
+                        elem_id="new-chat",
+                        elem_classes="sidebar-nav-item",
+                    )
+                    edit_settings = gr.Button(
+                        "Settings",
+                        size="sm",
+                        elem_id="edit-settings",
+                        elem_classes="sidebar-nav-item",
+                    )
+                    demo_navigation = gr.Button(
+                        "Demo tools",
+                        size="sm",
+                        elem_id="sidebar-demo",
+                        elem_classes="sidebar-nav-item",
+                    )
             with gr.Column(elem_id="sidebar-history"):
                 gr.HTML(
                     '<p class="sidebar-heading">Recent chats</p>',
@@ -953,35 +950,28 @@ def build_app() -> gr.Blocks:
                         apply_default_css=False,
                         elem_id="settings-summary",
                     )
-                edit_settings = gr.Button(
-                    "Settings",
-                    size="sm",
-                    min_width=0,
-                    elem_id="edit-settings",
-                )
+                with gr.Column(elem_id="manager-profile"):
+                    manager_picker = gr.Dropdown(
+                        choices=[],
+                        value=None,
+                        label="Shift manager",
+                        show_label=False,
+                        container=False,
+                        filterable=False,
+                        interactive=True,
+                        elem_id="manager-picker",
+                    )
+                    badge = gr.HTML(
+                        manager_badge(None),
+                        apply_default_css=False,
+                        elem_id="assistant-manager",
+                    )
         with gr.Tabs(selected="assistant", elem_id="workspace-tabs") as workspace:
             with (
                 gr.Tab("Assistant", id="assistant"),
                 gr.Column(elem_id="manager-workspace", min_width=0),
                 gr.Column(elem_id="assistant-panel", min_width=0),
             ):
-                with gr.Row(elem_id="assistant-heading"):
-                    badge = gr.HTML(
-                        manager_badge(None),
-                        apply_default_css=False,
-                        elem_id="assistant-manager",
-                        scale=0,
-                        min_width=0,
-                    )
-                    context_banner = gr.HTML(
-                        '<div class="current-scenario"><span>Checking scenario…</span></div>'
-                        if choices
-                        else _assistant_context(None),
-                        apply_default_css=False,
-                        elem_id="assistant-context",
-                        scale=0,
-                        min_width=0,
-                    )
                 with gr.Row(
                     visible=False,
                     elem_id="chat-summary-bar",
@@ -1005,6 +995,7 @@ def build_app() -> gr.Blocks:
                     height="auto",
                     autoscroll=False,
                     layout="bubble",
+                    group_consecutive_messages=False,
                     placeholder=CHAT_PLACEHOLDER,
                     buttons=["copy"],
                     elem_id="conversation",
@@ -1072,9 +1063,19 @@ def build_app() -> gr.Blocks:
             ):
                 settings_form = settings.build(manager, summary=settings_summary)
             with (
-                gr.Tab("Demo tools", id="demo"),
+                gr.Tab("Demo tools", id="demo", render_children=True),
                 gr.Column(elem_id="demo-workspace", min_width=0),
             ):
+                with gr.Row(elem_id="demo-context"):
+                    context_banner = gr.HTML(
+                        '<div class="current-scenario"><span>Checking scenario…</span></div>'
+                        if choices
+                        else _assistant_context(None),
+                        apply_default_css=False,
+                        elem_id="assistant-context",
+                        scale=0,
+                        min_width=0,
+                    )
                 with gr.Row(elem_id="demo-heading"):
                     situation = gr.HTML(
                         _situation_heading(None, scenarios),
@@ -1266,8 +1267,14 @@ def build_app() -> gr.Blocks:
             concurrency_id="review",
             concurrency_limit=1,
         )
-        # Selecting the tab from the server works even when narrow screens fold
-        # the tab into the "More tabs" menu.
+        # Sidebar navigation selects the same workspace panels and URL state.
+        demo_navigation.click(
+            lambda: gr.update(selected="demo"),
+            outputs=workspace,
+            js=CLOSE_SIDEBAR_ON_PHONE_JS,
+            queue=False,
+            show_progress="hidden",
+        )
         edit_settings.click(
             open_settings,
             outputs=workspace,
@@ -1486,14 +1493,16 @@ def build_app() -> gr.Blocks:
                 const latest = messages[messages.length - 1];
                 if (!latest) return;
                 const bounds = latest.getBoundingClientRect();
+                const actions = latest.closest('.message-row')?.nextElementSibling;
+                const messageBottom = actions?.classList.contains('message-buttons')
+                    ? actions.getBoundingClientRect().bottom : bounds.bottom;
                 const dock = document.querySelector('#composer-dock').getBoundingClientRect();
                 const bottom = dock.top - 24;
-                // Leave room for the pinned header above the message.
-                const header = document.querySelector('#brand-home')?.getBoundingClientRect().height || 0;
-                const top = header + 24;
-                const target = bounds.height > bottom - top
+                const summary = document.querySelector('#chat-summary-bar');
+                const top = (summary?.getBoundingClientRect().height || 0) + 24;
+                const target = messageBottom - bounds.top > bottom - top
                     ? scrollY + bounds.top - top
-                    : scrollY + bounds.bottom - bottom;
+                    : scrollY + messageBottom - bottom;
                 window.scrollTo({top: Math.max(0, target), behavior:
                     matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
             }""",

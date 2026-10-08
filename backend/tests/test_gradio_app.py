@@ -992,7 +992,7 @@ def test_page_load_picks_the_manager_from_the_url(monkeypatch) -> None:
     manager_id, picker, badge = gradio_app.restore_manager(request(manager="imran"))
     assert manager_id == "imran" and picker["value"] == "imran"
     assert [value for _, value in picker["choices"]] == ["ananya", "karthik", "imran"]
-    assert picker["choices"][2][0] == "Imran Shaikh"
+    assert picker["choices"][2][0] == "Imran Shaikh\nNight shift · 22:00–06:00"
     assert "Imran Shaikh" in badge and "SHIFT-NGT" in badge
     # Unknown or missing ids fall back to the demo manager.
     assert gradio_app.restore_manager(request(manager="nobody"))[0] == "karthik"
