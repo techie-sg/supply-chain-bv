@@ -25,14 +25,14 @@ machine can reach already set in your shell, run:
 cd backend
 uv sync --locked
 uv run alembic current
-uv run alembic upgrade head
+uv run python cli.py migrate
 uv run alembic current
 ```
 
 `current` shows the database revision before and after the upgrade. The
 migration changes only the database selected by that URL.
 
-Start the Gradio workspace with `uv run python -m ui.gradio_app` from `backend/`.
+Start the Gradio workspace with `uv run python cli.py app` from `backend/`.
 The scenario dropdown lists each YAML file by its title. **Current situation**
 shows the loaded scenario's name and description. Selecting another scenario
 previews its data without changing the current situation. Click **Load scenario** to replace the operational
