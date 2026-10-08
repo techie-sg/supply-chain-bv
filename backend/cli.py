@@ -9,6 +9,7 @@ def main(argv: list[str] | None = None) -> None:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("app", help="Start the Gradio application")
     commands.add_parser("summaries", help="Summarize idle conversations once and exit")
+    commands.add_parser("review", help="Run the daily review (dreaming) once and exit")
     commands.add_parser("migrate", help="Apply database migrations up to head")
     commands.add_parser("ingest", help="Ingest the configured policy corpus")
     args = parser.parse_args(argv)
@@ -29,6 +30,18 @@ def main(argv: list[str] | None = None) -> None:
         structlog.stdlib.get_logger(__name__).info(
             "Idle conversation summary job completed",
             summarized=count,
+        )
+    elif args.command == "review":
+        import structlog
+
+        from logging_config import configure_logging
+        from service.dreaming import run_review
+
+        configure_logging()
+        report = run_review()
+        structlog.stdlib.get_logger(__name__).info(
+            "Daily review job completed",
+            report=report.text(),
         )
     elif args.command == "migrate":
         from alembic.config import Config

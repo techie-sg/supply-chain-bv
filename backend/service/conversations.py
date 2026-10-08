@@ -22,6 +22,7 @@ from queries.conversations import (
     set_title,
     start_conversation,
 )
+from service.dreaming import handover_block
 from service.factory import create_llm_service
 from service.llm_service import Tool
 from service.preferences import PreferenceService, demo_preferences
@@ -227,12 +228,14 @@ def _answer(
     preferences: PreferenceService | None = None,
     tools: Sequence[Tool] = (),
 ) -> str:
-    """Answer with the manager's settings and the chat's summary in view."""
+    """Answer with the settings, the chat's summary and the last handover in view."""
+    handover = handover_block(DEMO_STORE_ID)
     return answer_question(
         question,
         history=history,
         preferences=preferences or demo_preferences(),
         summary=summary,
+        handover=handover,
         tools=tools,
     )
 

@@ -80,3 +80,31 @@ def test_ingestion_is_explicit_and_runs_once(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "service.ingestion", SimpleNamespace(main=ingest))
     cli.main(["ingest"])
     ingest.assert_called_once_with()
+
+
+def test_review_command_runs_the_daily_review_once(monkeypatch) -> None:
+    from service import dreaming
+
+    report = dreaming.ReviewReport(chats=2, handover_drafts=1)
+    calls: list[bool] = []
+
+    def run_review():
+        calls.append(True)
+        return report
+
+    monkeypatch.setattr(dreaming, "run_review", run_review)
+    monkeypatch.setattr(logging_config, "configure_logging", lambda: None)
+    cli.main(["review"])
+    assert calls == [True]
+
+
+def test_review_failure_propagates_to_fail_the_cron_run(monkeypatch) -> None:
+    from service import dreaming
+
+    def failing():
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(dreaming, "run_review", failing)
+    monkeypatch.setattr(logging_config, "configure_logging", lambda: None)
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        cli.main(["review"])

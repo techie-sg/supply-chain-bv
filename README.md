@@ -97,6 +97,19 @@ Idle-conversation summarization runs through the `summaries` CLI command. Gradio
 
 Keep the web service's start command as `python cli.py app`. The cron command runs one batch of up to ten conversations idle for at least thirty minutes, then exits. Railway schedules use UTC. Locally, run the same task with `uv run python cli.py summaries`.
 
+### Daily review
+
+The daily review (dreaming) runs from cron once a day; admins can also run it from **Run review now** in Demo tools. Create a second cron service from the same repository with root `/backend`:
+
+| Setting | Value |
+| --- | --- |
+| Start command | `python cli.py review` |
+| Cron schedule | `0 18 * * *` (18:00 UTC = 23:30 IST) |
+| Variables | `DATABASE_URL`, `GROQ_API_KEY` |
+| Healthcheck and public domain | None |
+
+Locally: `uv run python cli.py review`.
+
 ## Code layout
 
 | Path | Purpose |

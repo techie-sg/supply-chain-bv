@@ -16,3 +16,7 @@ SUMMARY_MAX_RAW_MESSAGES = 16  # fold when raw messages exceed this count
 SUMMARY_MAX_RAW_TOKENS = 3000  # or when raw text exceeds this (characters / 4)
 SUMMARY_IDLE_MINUTES = 30  # an idle chat is summarized in full
 SUMMARY_JOB_BATCH = 10  # idle chats summarized per run at most
+
+# Dreaming: a daily review of chats that proposes, never applies.
+DREAMING_MIN_CHATS = 3  # a settings suggestion needs evidence from this many chats
+DREAMING_RECENT_CHATS = 20  # chats read for settings suggestions

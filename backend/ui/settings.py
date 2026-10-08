@@ -19,6 +19,7 @@ from service.preferences import (
     demo_preferences,
     limits,
 )
+from ui import suggestions as suggestions_ui
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -62,6 +63,9 @@ class SettingsForm:
     briefing: gr.CheckboxGroup
     briefing_info: gr.Markdown
     status: gr.Markdown
+    nav: gr.Radio | None = None
+    suggestions: tuple[Any, ...] = ()
+    category_outputs: tuple[Any, ...] = ()  # each panel, then the Save row
 
     def inputs(self) -> list[Any]:
         """Editable fields, in the order `entries` reads them."""
@@ -368,17 +372,34 @@ CATEGORIES = [
     ("batching", "Batching", "Rules for putting more than one order on a trip."),
     ("incentive", "Incentive", "The most you will spend on surge incentives."),
     ("greeting", "Greeting", "What to show when you say hi."),
+    (
+        "suggestions",
+        "Suggestions",
+        (
+            "Proposals from the daily review of your chats. Nothing changes until "
+            "you accept one."
+        ),
+    ),
 ]
 
 # Show only the chosen category's panel; runs in the browser, no server call.
+# The last output is the Save row, which does not apply to suggestions.
 SHOW_CATEGORY_JS = (
     "(category) => ["
     + ", ".join(
         f"{{__type__: 'update', visible: category === '{key}'}}"
         for key, _, _ in CATEGORIES
     )
-    + "]"
+    + ", {__type__: 'update', visible: category !== 'suggestions'}]"
 )
+
+
+def show_category(key: str) -> list[dict]:
+    """Server-side twin of SHOW_CATEGORY_JS, for opening a category from elsewhere."""
+    return [
+        *(gr.update(visible=key == category) for category, _, _ in CATEGORIES),
+        gr.update(visible=key != "suggestions"),
+    ]
 
 
 def _reset_button(code: str, resets: list[tuple[gr.Button, str]]) -> None:
@@ -512,7 +533,12 @@ def build(summary: gr.HTML | None = None) -> SettingsForm:
                         _reset_button(PreferenceCode.BRIEFING, resets)
                     briefing_info = gr.Markdown(elem_classes="setting-info-block")
 
-            with gr.Row(elem_id="settings-actions"):
+            with gr.Column(visible=False, elem_classes="settings-panel") as panel:
+                panels.append(panel)
+                _panel_heading(*headings["suggestions"])
+                suggestion_parts = suggestions_ui.build_panel()
+
+            with gr.Row(elem_id="settings-actions") as actions:
                 save = gr.Button(
                     "Save settings",
                     variant="primary",
@@ -525,7 +551,7 @@ def build(summary: gr.HTML | None = None) -> SettingsForm:
         fn=None,
         js=SHOW_CATEGORY_JS,
         inputs=nav,
-        outputs=panels,
+        outputs=[*panels, actions],
         queue=False,
         show_progress="hidden",
     )
@@ -540,6 +566,9 @@ def build(summary: gr.HTML | None = None) -> SettingsForm:
         briefing,
         briefing_info,
         status,
+        nav=nav,
+        suggestions=suggestion_parts,
+        category_outputs=(*panels, actions),
     )
     events = [
         save.click(
