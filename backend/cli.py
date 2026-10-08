@@ -45,9 +45,6 @@ def run_command(args: argparse.Namespace) -> None:
             summarized=count,
         )
     elif args.command == "review":
-        import structlog
-
-        from logging_config import configure_logging
         from service.dreaming import run_review
 
         configure_logging()

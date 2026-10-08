@@ -6,6 +6,7 @@ from datetime import datetime
 from uuid import uuid4
 
 import pytest
+from conftest import ensure_managers
 from sqlalchemy import Engine, delete, select, text
 from sqlalchemy.exc import IntegrityError
 
@@ -32,6 +33,7 @@ def conversation_engine() -> Iterator[Engine]:
     try:
         with engine.begin() as connection:
             connection.execute(text("CREATE SCHEMA IF NOT EXISTS app"))
+            ensure_managers(connection)
             Base.metadata.tables["app.conversations"].create(
                 connection,
                 checkfirst=True,

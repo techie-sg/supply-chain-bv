@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from datetime import date
 
 import pytest
+from conftest import ensure_managers
 from sqlalchemy import Engine, delete, text
 
 from database.models import Conversation, HandoverNote, Suggestion
@@ -36,6 +37,7 @@ def review_engine() -> Iterator[Engine]:
     try:
         with engine.begin() as connection:
             connection.execute(text("CREATE SCHEMA IF NOT EXISTS app"))
+            ensure_managers(connection)
             for table in tables:
                 Base.metadata.tables[table].create(connection, checkfirst=True)
             for model in (Suggestion, HandoverNote, Conversation):
