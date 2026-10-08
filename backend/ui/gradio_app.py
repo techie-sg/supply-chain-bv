@@ -1132,9 +1132,10 @@ if __name__ == "__main__":
 app = build_app()
 
 
-def main() -> None:
+def main(*, run_scheduler: bool = True) -> None:
     configure_logging()
-    idle_summary_job().start()
+    if run_scheduler:
+        idle_summary_job().start()
     port = int(os.environ.get("PORT", "7860"))
     logger.info("DispatchDesk starting", host="0.0.0.0", port=port)
     app.launch(
