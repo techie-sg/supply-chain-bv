@@ -21,7 +21,7 @@ Not designed yet: approval log, reminders and snoozed alerts, trace events.
 2. Writes are deterministic. The model reads memory but never writes it. Settings change in the Settings tab, or in chat when the manager confirms a change the model proposed; code validates and saves both.
 3. Settings come from a fixed catalogue with typed values and limits, and can make policy stricter, never looser.
 4. Memory text is user-written data, treated as reference and never as instructions.
-5. Everything is scoped to a store and manager. The demo has one: `DS-BLR-014`, `karthik`.
+5. Everything is scoped to a store and manager. The demo store `DS-BLR-014` has three shift managers in `app.managers`, each with a unique `shift_id`: `ananya` (Morning, `SHIFT-MOR`, 06:00 to 14:00), `karthik` (Evening, `SHIFT-EVE`, 14:00 to 22:00) and `imran` (Night, `SHIFT-NGT`, 22:00 to 06:00). Each has their own chats, settings and pending proposals; the sidebar's **Shift manager** picker switches between them and the choice is kept in the URL (`?manager=`).
 6. Background work (titles, summaries) never delays an answer, and its failures change nothing.
 
 ## 1. Conversations
@@ -175,7 +175,7 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | 1 | Messages are a JSON list on `conversations` | a `messages` table or question-and-answer rows: more tables for an MVP |
 | 2 | A message is `{who, what, when}`; its list position is its id | per-message ids and timestamps columns |
 | 3 | The current chat is the latest by `updated_at`; no status, `ended_at` or idle timeout | stored active or closed flags, which can go stale |
-| 4 | One demo manager per store; everything per manager | store-wide preferences |
+| 4 | Several shift managers per store (`app.managers`, migration 0010), each with a unique shift; everything per manager, chosen with a picker | one demo manager: couldn't show per-manager settings; store-wide preferences |
 | 5 | Settings are a fixed catalogue with min, max and locked policy items | free-form rules: can't be validated |
 | 6 | Settings change in the Settings tab, or in chat as a model proposal that code validates and the manager confirms (revised; was Settings tab only) | the model saving directly: in testing it dropped changes and claimed saves it never made. Now the tool only proposes and returns `saved: false`, code merges unmentioned fields, the card shows exactly what will be saved, and code rewrites a reply that only echoes the tool |
 | 7 | Settings changes supersede rows, never edit them | in-place updates lose history |
@@ -217,6 +217,7 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | `queries/conversations.py`, `queries/preferences.py` | database access |
 | `service/conversations.py` | ask, history, titles, sidebar entry points |
 | `service/preferences.py` | effective settings, validation, save and reset, `<preferences>` block |
+| `service/managers.py`, `queries/managers.py` | the store's shift managers, choosing one |
 | `service/setting_changes.py` | chat setting changes: tool, merge, validate, confirm |
 | `service/summaries.py`, `cli.py` | summary folding, one-shot idle job |
 | `ui/gradio_app.py`, `ui/settings.py` | chat, sidebar, Settings tab |

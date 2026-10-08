@@ -41,7 +41,11 @@ def test_refresh_lists_pending_suggestions_with_their_details(
     monkeypatch,
     preference_store,
 ) -> None:
-    monkeypatch.setattr(suggestions_ui, "pending_suggestions", lambda: [SETTING, DRAFT])
+    monkeypatch.setattr(
+        suggestions_ui,
+        "pending_suggestions",
+        lambda manager_id=None: [SETTING, DRAFT],
+    )
     entry, entry_text, items, detail, note, actions, _ = suggestions_ui.refresh()
     assert entry == gr.update(visible=True) and actions == gr.update(visible=True)
     assert entry_text == '<p class="sidebar-heading">Suggestions · 2</p>'
@@ -63,12 +67,16 @@ def test_refresh_lists_pending_suggestions_with_their_details(
 
 
 def test_empty_or_unavailable_suggestions_hide_the_entry(monkeypatch) -> None:
-    monkeypatch.setattr(suggestions_ui, "pending_suggestions", list)
+    monkeypatch.setattr(
+        suggestions_ui,
+        "pending_suggestions",
+        lambda manager_id=None: [],
+    )
     entry, _, items, detail, *_ = suggestions_ui.refresh()
     assert entry == gr.update(visible=False) and items["choices"] == []
     assert detail == "No suggestions right now."
 
-    def unavailable():
+    def unavailable(manager_id=None):
         raise RuntimeError("database down")
 
     monkeypatch.setattr(suggestions_ui, "pending_suggestions", unavailable)
@@ -77,7 +85,12 @@ def test_empty_or_unavailable_suggestions_hide_the_entry(monkeypatch) -> None:
 
 
 def test_accept_and_dismiss_report_their_outcome(monkeypatch) -> None:
-    monkeypatch.setattr(suggestions_ui, "pending_suggestions", list)
+    # The suggestion is one of the selected manager's pending ones.
+    monkeypatch.setattr(
+        suggestions_ui,
+        "pending_suggestions",
+        lambda manager_id=None: [SETTING],
+    )
     calls = []
 
     def accept(suggestion_id, note):
@@ -90,7 +103,7 @@ def test_accept_and_dismiss_report_their_outcome(monkeypatch) -> None:
         "dismiss_suggestion",
         lambda suggestion_id: calls.append(suggestion_id),
     )
-    target = str(uuid4())
+    target = str(SETTING.id)
     assert suggestions_ui.accept(target, "note")[-1] == "Saved."
     assert suggestions_ui.dismiss(target)[-1] == "Dismissed."
     assert suggestions_ui.accept(None, None)[-1] == "Choose a suggestion first."
@@ -127,7 +140,11 @@ def test_admin_report_runs_the_review_and_lists_issues(monkeypatch) -> None:
         },
     )
     resolved = []
-    monkeypatch.setattr(suggestions_ui, "open_answer_issues", lambda: [issue])
+    monkeypatch.setattr(
+        suggestions_ui,
+        "open_answer_issues",
+        lambda manager_id=None: [issue],
+    )
     monkeypatch.setattr(suggestions_ui, "run_review", lambda: ReviewReport(chats=2))
     monkeypatch.setattr(
         suggestions_ui,
@@ -151,7 +168,7 @@ def test_admin_report_runs_the_review_and_lists_issues(monkeypatch) -> None:
 
 
 def test_admin_report_handles_storage_errors(monkeypatch) -> None:
-    def unavailable():
+    def unavailable(manager_id=None):
         raise RuntimeError("database down")
 
     monkeypatch.setattr(suggestions_ui, "open_answer_issues", unavailable)
@@ -189,4 +206,64 @@ def test_sidebar_review_opens_the_suggestions_category() -> None:
         getattr(callback.fn, "__name__", None)
         for callback in gradio_app.app.fns.values()
     }
-    assert {"refresh", "accept", "dismiss", "run_review_now", "issues_table"} <= names
+    assert {
+        "refresh_for",
+        "accept",
+        "dismiss",
+        "run_review_now",
+        "issues_table",
+    } <= names
+
+
+def test_suggestions_follow_the_selected_manager(monkeypatch) -> None:
+    owners = {"ananya": [SETTING], "karthik": [DRAFT]}
+    seen = []
+
+    def pending(manager_id=None):
+        seen.append(manager_id)
+        return owners.get(manager_id, [])
+
+    monkeypatch.setattr(suggestions_ui, "pending_suggestions", pending)
+    monkeypatch.setattr(
+        suggestions_ui,
+        "accept_suggestion",
+        lambda suggestion_id, note: pytest.fail("Must not apply another's"),
+    )
+    monkeypatch.setattr(
+        suggestions_ui,
+        "dismiss_suggestion",
+        lambda suggestion_id: pytest.fail("Must not dismiss another's"),
+    )
+    _, _, items, *_ = suggestions_ui.refresh_for("ananya")
+    assert [value for _, value in items["choices"]] == [str(SETTING.id)]
+    # Karthik cannot accept or dismiss Ananya's suggestion.
+    assert suggestions_ui.accept(str(SETTING.id), None, "karthik")[-1] == (
+        "Not applied: That suggestion is not one of yours."
+    )
+    assert suggestions_ui.dismiss(str(SETTING.id), "karthik")[-1] == (
+        "Not dismissed: that suggestion is not one of yours."
+    )
+    assert set(seen) == {"ananya", "karthik"}
+
+
+def test_review_panels_reload_with_the_selected_manager() -> None:
+    manager = next(
+        block
+        for block in gradio_app.app.blocks.values()
+        if isinstance(block, gr.State) and block.value == gradio_app.DEMO_MANAGER_ID
+    )
+    scoped = {
+        suggestions_ui.refresh_for,
+        suggestions_ui.select,
+        suggestions_ui.accept,
+        suggestions_ui.dismiss,
+        suggestions_ui.issues_table,
+        suggestions_ui.run_review_now,
+        suggestions_ui.mark_issues_reviewed,
+    }
+    seen = set()
+    for callback in gradio_app.app.fns.values():
+        if callback.fn in scoped:
+            assert manager in callback.inputs, callback.fn.__name__
+            seen.add(callback.fn)
+    assert seen == scoped

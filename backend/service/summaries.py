@@ -179,11 +179,11 @@ def summary_service() -> SummaryService:
     return SummaryService(summarize=_summarize)
 
 
-def summarize_latest_conversation() -> bool:
+def summarize_latest_conversation(manager_id: str = DEMO_MANAGER_ID) -> bool:
     """UI entry point: fold the open chat after an answer if it is over a limit."""
-    return summary_service().after_answer(DEMO_STORE_ID, DEMO_MANAGER_ID)
+    return summary_service().after_answer(DEMO_STORE_ID, manager_id)
 
 
-def summarize_open_conversation() -> bool:
+def summarize_open_conversation(manager_id: str = DEMO_MANAGER_ID) -> bool:
     """UI entry point: bring the open chat's summary up to its latest message."""
-    return summary_service().summarize_now(DEMO_STORE_ID, DEMO_MANAGER_ID)
+    return summary_service().summarize_now(DEMO_STORE_ID, manager_id)

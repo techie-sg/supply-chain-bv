@@ -4,8 +4,11 @@ from uuid import uuid4
 
 import pytest
 from catalogue import definitions
+from sqlalchemy import Connection
+from sqlalchemy.dialects.postgresql import insert
 
-from database.models import StorePreference
+from database.models import Manager, StorePreference
+from database.session import Base
 from domain.memory import PreferenceStatus
 from service import preferences
 
@@ -65,3 +68,31 @@ def preference_store(monkeypatch) -> FakeStore:
     monkeypatch.setattr(preferences, "save_preference", fake.save)
     monkeypatch.setattr(preferences, "remove_preference", fake.remove)
     return fake
+
+
+# Manager ids the database tests write as. Conversations and preferences have a
+# foreign key to app.managers, so these rows must exist first.
+TEST_MANAGERS = ("karthik", "ananya", "imran", "someone-else")
+
+
+def ensure_managers(connection: Connection) -> None:
+    """Create app.managers if needed and add the test managers, each on a shift."""
+    Base.metadata.tables["app.managers"].create(connection, checkfirst=True)
+    connection.execute(
+        insert(Manager)
+        .values(
+            [
+                {
+                    "manager_id": manager_id,
+                    "store_id": "DS-1",
+                    "name": manager_id.title(),
+                    "shift_id": f"SHIFT-{manager_id.upper()}",
+                    "shift_name": "Test",
+                    "shift_start": "00:00",
+                    "shift_end": "23:59",
+                }
+                for manager_id in TEST_MANAGERS
+            ],
+        )
+        .on_conflict_do_nothing(index_elements=["manager_id"]),
+    )

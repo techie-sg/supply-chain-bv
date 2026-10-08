@@ -341,4 +341,4 @@ Evaluation:
 3. Stale data: should a snapshot older than some limit be labelled stale, and what limit?
 4. Snooze and acknowledge: add to the panel now, or keep with "prospective memory" for later?
 5. Should the pop-up repeat in every open browser tab of the same manager, or only once?
-6. Manager identity. The app has one hard-coded manager (`DEMO_MANAGER_ID = "karthik"` in `constants.py`) and no sign-in, so every visitor to the live demo is the same manager and shares the same alerts. Per-manager alerts only separate people once each session knows who its manager is: a sign-in, or at least a manager picker for the demo. Until then the design is per manager in the data, but the demo has one manager.
+6. Manager identity. Partly resolved: the store now has three shift managers (`app.managers`, migration 0010) and a picker in the sidebar, so each manager's alerts are separate. There is still no sign-in, so anyone using the demo can pick any manager.

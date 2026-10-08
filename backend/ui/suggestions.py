@@ -14,6 +14,7 @@ import gradio as gr
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
+from constants import DEMO_MANAGER_ID
 from database.models import Suggestion
 from domain.memory import AlertOptions, SuggestionKind, SuggestionStatus
 from queries.dreaming import resolve_suggestion
@@ -27,8 +28,8 @@ from service.dreaming import (
 from service.preferences import (
     EffectiveSetting,
     PreferenceError,
-    demo_preferences,
     describe,
+    manager_preferences,
 )
 from service.scenarios import TIMEZONE
 
@@ -71,7 +72,7 @@ class SuggestionsPanel:
 def _setting_text(payload: dict[str, Any]) -> str:
     definitions = {
         setting.definition.code: setting.definition
-        for setting in demo_preferences().effective()
+        for setting in manager_preferences().effective()
     }
     definition = definitions.get(payload["code"])
     if definition is None:
@@ -109,10 +110,14 @@ def _details(suggestion: Suggestion | None) -> tuple[str, dict]:
     return detail, gr.update(visible=False, value="")
 
 
-def refresh(status: str = "", selected: str | None = None) -> tuple:
+def refresh(
+    status: str = "",
+    selected: str | None = None,
+    manager_id: str = DEMO_MANAGER_ID,
+) -> tuple:
     """Sidebar entry and panel for the manager's pending suggestions."""
     try:
-        items = pending_suggestions()
+        items = pending_suggestions(manager_id=manager_id)
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not load suggestions", exc_info=True)
         return (
@@ -143,37 +148,66 @@ def refresh(status: str = "", selected: str | None = None) -> tuple:
     )
 
 
-def select(suggestion_id: str | None) -> tuple[str, dict]:
+def refresh_for(manager_id: str = DEMO_MANAGER_ID) -> tuple:
+    """The panel for one manager; the entry point for events that pass only them."""
+    return refresh(manager_id=manager_id)
+
+
+def _owned(suggestion_id: str, manager_id: str) -> bool:
+    """Whether the suggestion is one of this manager's pending ones."""
+    return any(
+        str(item.id) == suggestion_id
+        for item in pending_suggestions(manager_id=manager_id)
+    )
+
+
+def select(
+    suggestion_id: str | None,
+    manager_id: str = DEMO_MANAGER_ID,
+) -> tuple[str, dict]:
     try:
-        items = {str(item.id): item for item in pending_suggestions()}
+        items = {
+            str(item.id): item for item in pending_suggestions(manager_id=manager_id)
+        }
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not load suggestions", exc_info=True)
         return UNAVAILABLE, gr.update(visible=False)
     return _details(items.get(suggestion_id or ""))
 
 
-def accept(suggestion_id: str | None, note: str | None) -> tuple:
+def accept(
+    suggestion_id: str | None,
+    note: str | None,
+    manager_id: str = DEMO_MANAGER_ID,
+) -> tuple:
     if not suggestion_id:
-        return refresh("Choose a suggestion first.")
+        return refresh("Choose a suggestion first.", manager_id=manager_id)
     try:
+        if not _owned(suggestion_id, manager_id):
+            raise LookupError("That suggestion is not one of yours.")
         message = accept_suggestion(UUID(suggestion_id), note)
     except (PreferenceError, LookupError) as exc:
-        return refresh(f"Not applied: {exc}", suggestion_id)
+        return refresh(f"Not applied: {exc}", suggestion_id, manager_id)
     except (SQLAlchemyError, RuntimeError) as exc:
         logger.exception("Could not accept suggestion")
         raise gr.Error(UNAVAILABLE) from exc
-    return refresh(message)
+    return refresh(message, manager_id=manager_id)
 
 
-def dismiss(suggestion_id: str | None) -> tuple:
+def dismiss(suggestion_id: str | None, manager_id: str = DEMO_MANAGER_ID) -> tuple:
     if not suggestion_id:
-        return refresh("Choose a suggestion first.")
+        return refresh("Choose a suggestion first.", manager_id=manager_id)
     try:
+        if not _owned(suggestion_id, manager_id):
+            return refresh(
+                "Not dismissed: that suggestion is not one of yours.",
+                manager_id=manager_id,
+            )
         dismiss_suggestion(UUID(suggestion_id))
     except (SQLAlchemyError, RuntimeError) as exc:
         logger.exception("Could not dismiss suggestion")
         raise gr.Error(UNAVAILABLE) from exc
-    return refresh("Dismissed.")
+    return refresh("Dismissed.", manager_id=manager_id)
 
 
 def build_panel() -> tuple[
@@ -213,9 +247,9 @@ def build_panel() -> tuple[
 # Admin: the answer-issue report ----------------------------------------------
 
 
-def issues_table() -> dict[str, Any]:
+def issues_table(manager_id: str = DEMO_MANAGER_ID) -> dict[str, Any]:
     try:
-        issues = open_answer_issues()
+        issues = open_answer_issues(manager_id=manager_id)
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not load answer issues", exc_info=True)
         issues = []
@@ -235,7 +269,8 @@ def issues_table() -> dict[str, Any]:
     return {"headers": ["When", "Issue", "Chat", "Question", "Answer"], "data": rows}
 
 
-def run_review_now() -> tuple[str, dict[str, Any]]:
+def run_review_now(manager_id: str = DEMO_MANAGER_ID) -> tuple[str, dict[str, Any]]:
+    """Review every manager's chats; then show the selected manager's issues."""
     try:
         report = run_review()
     except (SQLAlchemyError, RuntimeError) as exc:
@@ -243,15 +278,17 @@ def run_review_now() -> tuple[str, dict[str, Any]]:
         raise gr.Error(
             "The review could not run. Check the database connection.",
         ) from exc
-    return report.text(), issues_table()
+    return report.text(), issues_table(manager_id)
 
 
-def mark_issues_reviewed() -> tuple[str, dict[str, Any]]:
+def mark_issues_reviewed(
+    manager_id: str = DEMO_MANAGER_ID,
+) -> tuple[str, dict[str, Any]]:
     try:
-        issues = open_answer_issues()
+        issues = open_answer_issues(manager_id=manager_id)
         for issue in issues:
             resolve_suggestion(issue.id, SuggestionStatus.DISMISSED)
     except (SQLAlchemyError, RuntimeError) as exc:
         logger.exception("Could not mark issues reviewed")
         raise gr.Error(UNAVAILABLE) from exc
-    return f"Marked {len(issues)} issues as reviewed.", issues_table()
+    return f"Marked {len(issues)} issues as reviewed.", issues_table(manager_id)

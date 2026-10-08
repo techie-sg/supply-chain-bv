@@ -12,12 +12,12 @@ ALERTS = len(settings.ALERT_CODES)
 def form() -> settings.SettingsForm:
     """Build the tab outside the app so its fields can be inspected."""
     with gr.Blocks():
-        return settings.build()
+        return settings.build(gr.State("karthik"))
 
 
 def defaults(store) -> tuple:
     """Form input values for the catalogue defaults, as the browser would send."""
-    values = settings.form_values(settings.demo_preferences().effective())
+    values = settings.form_values(settings.manager_preferences().effective())
     inputs = []
     for index in range(ALERTS):
         enabled, threshold, cooldown, days, start, end, _ = values[
@@ -72,7 +72,7 @@ def test_form_shows_defaults_with_limits(preference_store) -> None:
 
 
 def test_saving_unchanged_defaults_stores_nothing(preference_store) -> None:
-    result = settings.save_settings(*defaults(preference_store))
+    result = settings.save_settings("karthik", *defaults(preference_store))
     assert result[-1] == '<p class="settings-status">No changes to save.</p>'
     assert preference_store.rows == []
 
@@ -82,7 +82,7 @@ def test_saving_changes_stores_exactly_what_was_entered(preference_store) -> Non
     values[1:6] = [1.5, 20, ["sat", "sun"], "19:00", ""]
     values[ALERTS * 6] = True
     values[ALERTS * 6 + 1] = 150
-    result = settings.save_settings(*values)
+    result = settings.save_settings("karthik", *values)
     assert (
         "Saved. Rider shortage: on, above 1.5 orders per available rider, Sat, "
         in (result[-1])
@@ -102,7 +102,7 @@ def test_invalid_entries_are_reported_and_not_saved(preference_store) -> None:
     values = list(defaults(preference_store))
     values[1] = 3
     values[4] = "7pm"
-    result = settings.save_settings(*values)
+    result = settings.save_settings("karthik", *values)
     assert "Not saved: Rider shortage" in result[-1]
     assert preference_store.rows == []
 
@@ -110,7 +110,7 @@ def test_invalid_entries_are_reported_and_not_saved(preference_store) -> None:
 def test_unticking_every_view_turns_the_briefing_off(preference_store) -> None:
     values = list(defaults(preference_store))
     values[-1] = []
-    settings.save_settings(*values)
+    settings.save_settings("karthik", *values)
     [row] = preference_store.rows
     assert row.code == PreferenceCode.BRIEFING
     assert (row.enabled, row.value) == (False, ["rider_stats", "order_queue"])
@@ -119,7 +119,7 @@ def test_unticking_every_view_turns_the_briefing_off(preference_store) -> None:
 def test_reset_returns_an_item_to_its_default(preference_store) -> None:
     values = list(defaults(preference_store))
     values[1] = 1
-    settings.save_settings(*values)
+    settings.save_settings("karthik", *values)
     result = settings.reset_setting(PreferenceCode.RIDER_SHORTAGE_ALERT)
     assert "Reset to the default. Rider shortage" in result[-1]
     assert result[1] == gr.update(value=2, minimum=0.5, maximum=2)
@@ -132,18 +132,21 @@ def test_unavailable_storage_is_reported(monkeypatch) -> None:
         raise RuntimeError("database down")
 
     class Broken:
+        def __init__(self, *args) -> None:
+            pass
+
         def effective(self):
             unavailable()
 
         def reset(self, code):
             unavailable()
 
-    monkeypatch.setattr(settings, "demo_preferences", Broken)
+    monkeypatch.setattr(settings, "manager_preferences", Broken)
     values = settings.load_settings()
     assert len(values) == ALERTS * 7 + 9
     assert "Settings are unavailable" in values[-1]
     with pytest.raises(gr.Error, match="Settings are unavailable"):
-        settings.save_settings()
+        settings.save_settings("karthik")
     with pytest.raises(gr.Error, match="Settings are unavailable"):
         settings.reset_setting("sla_dip_alert")
 
@@ -187,7 +190,7 @@ def test_categories_switch_panels_in_the_browser() -> None:
 
 
 def test_summary_lists_what_is_on_and_marks_custom_values(preference_store) -> None:
-    service = settings.demo_preferences()
+    service = settings.manager_preferences()
     service.set(
         "rider_shortage_alert",
         True,
@@ -220,10 +223,13 @@ def test_summary_with_defaults_lists_off_items_once(preference_store) -> None:
 
 def test_summary_reports_unavailable_storage(monkeypatch) -> None:
     class Broken:
+        def __init__(self, *args) -> None:
+            pass
+
         def effective(self):
             raise RuntimeError("database down")
 
-    monkeypatch.setattr(settings, "demo_preferences", Broken)
+    monkeypatch.setattr(settings, "manager_preferences", Broken)
     assert settings.load_summary() == '<p class="summary-off">Settings unavailable.</p>'
 
 
@@ -239,9 +245,9 @@ def test_summary_is_shown_in_the_sidebar_and_refreshed_after_changes() -> None:
         if callback.fn is settings.load_summary
     ]
     assert all(callback.outputs == [summary] for callback in refreshers)
-    # Page load, Save settings, one reset per configurable item, accepting a
-    # suggestion, and confirming a change proposed in chat.
-    assert len(refreshers) == 1 + 1 + len(settings.ALERT_CODES) + 3 + 1 + 1
+    # Page load, switching manager, Save settings, one reset per configurable
+    # item, accepting a suggestion, and confirming a change proposed in chat.
+    assert len(refreshers) == 1 + 1 + 1 + len(settings.ALERT_CODES) + 3 + 1 + 1
     edit = next(
         item
         for item in gradio_app.app.blocks.values()
@@ -260,14 +266,30 @@ def test_summary_is_shown_in_the_sidebar_and_refreshed_after_changes() -> None:
 def test_entering_an_amount_turns_the_incentive_cap_on(preference_store) -> None:
     values = list(defaults(preference_store))
     values[ALERTS * 6 + 1] = 200
-    result = settings.save_settings(*values)
+    result = settings.save_settings("karthik", *values)
     assert "Saved. Surge incentive cap per shift: ₹200." in result[-1]
     assert result[ALERTS * 7 + 4]["value"] == 200
     assert "Incentive cap ₹200" in settings.load_summary()
     values[ALERTS * 6 + 1] = None
-    result = settings.save_settings(*values)
+    result = settings.save_settings("karthik", *values)
     assert "Surge incentive cap per shift: not set" in result[-1]
     assert (
         "Off: frozen order waiting, sla dip, batch only when short, incentive cap"
         in (settings.load_summary())
     )
+
+
+def test_each_manager_saves_and_sees_only_their_own_settings(preference_store) -> None:
+    values = list(defaults(preference_store))
+    # The first alert's threshold, for the morning manager only.
+    values[1] = 1.5
+    settings.save_settings("ananya", *values)
+    ananya = settings.load_settings("ananya")
+    karthik = settings.load_settings("karthik")
+    assert ananya[1]["value"] == 1.5
+    assert karthik[1]["value"] == 2
+    assert "yours" in settings.load_summary("ananya")
+    assert "yours" not in settings.load_summary("karthik")
+    assert {row.manager_id for row in preference_store.rows} == {"ananya"}
+    settings.reset_setting(PreferenceCode.RIDER_SHORTAGE_ALERT, "karthik")
+    assert preference_store.statuses(PreferenceCode.RIDER_SHORTAGE_ALERT) == ["active"]

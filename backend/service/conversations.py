@@ -25,7 +25,7 @@ from queries.conversations import (
 from service.dreaming import handover_block
 from service.factory import create_llm_service
 from service.llm_service import Tool
-from service.preferences import PreferenceService, demo_preferences
+from service.preferences import PreferenceService, manager_preferences
 from service.rag import answer_question
 from service.scenarios import TIMEZONE
 from service.setting_changes import SettingChange, SettingChanges, tidy_reply
@@ -233,7 +233,7 @@ def _answer(
     return answer_question(
         question,
         history=history,
-        preferences=preferences or demo_preferences(),
+        preferences=preferences or manager_preferences(),
         summary=summary,
         handover=handover,
         tools=tools,
@@ -248,26 +248,29 @@ def _title(question: str, answer: str) -> str:
     )
 
 
-def _service() -> ConversationService:
+def _service(manager_id: str = DEMO_MANAGER_ID) -> ConversationService:
     return ConversationService(
         DEMO_STORE_ID,
-        DEMO_MANAGER_ID,
+        manager_id,
         answer=_answer,
         titler=_title,
     )
 
 
-def ask_question(question: str) -> tuple[str, list[SettingChange]]:
+def ask_question(
+    question: str,
+    manager_id: str = DEMO_MANAGER_ID,
+) -> tuple[str, list[SettingChange]]:
     """UI entry point: answer using the stored history of the latest chat.
 
     Also returns the setting changes the assistant proposed in this answer;
     none is saved until the manager confirms it.
     """
-    preferences = demo_preferences()
+    preferences = manager_preferences(manager_id)
     changes = SettingChanges(preferences)
     service = ConversationService(
         DEMO_STORE_ID,
-        DEMO_MANAGER_ID,
+        manager_id,
         answer=lambda question, **kwargs: tidy_reply(
             _answer(
                 question,
@@ -282,42 +285,45 @@ def ask_question(question: str) -> tuple[str, list[SettingChange]]:
     return service.ask(question), changes.proposals
 
 
-def add_note(text: str) -> dict[str, str] | None:
+def add_note(text: str, manager_id: str = DEMO_MANAGER_ID) -> dict[str, str] | None:
     """UI entry point: record an assistant note in the open chat."""
-    return _service().note(text)
+    return _service(manager_id).note(text)
 
 
-def conversation_history() -> list[dict[str, str]]:
+def conversation_history(manager_id: str = DEMO_MANAGER_ID) -> list[dict[str, str]]:
     """UI entry point: stored messages to show when the page loads."""
-    return _service().history()
+    return _service(manager_id).history()
 
 
-def start_new_conversation() -> None:
+def start_new_conversation(manager_id: str = DEMO_MANAGER_ID) -> None:
     """UI entry point for Clear chat and scenario loads."""
-    _service().start_new()
+    _service(manager_id).start_new()
 
 
-def past_conversations() -> list[dict[str, Any]]:
+def past_conversations(manager_id: str = DEMO_MANAGER_ID) -> list[dict[str, Any]]:
     """UI entry point: conversations the manager can browse and reopen."""
-    return _service().past()
+    return _service(manager_id).past()
 
 
-def resume_past_conversation(conversation_id: str) -> list[dict[str, str]]:
+def resume_past_conversation(
+    conversation_id: str,
+    manager_id: str = DEMO_MANAGER_ID,
+) -> list[dict[str, str]]:
     """UI entry point: reopen a past conversation and continue it."""
-    return _service().resume(UUID(conversation_id))
+    return _service(manager_id).resume(UUID(conversation_id))
 
 
-def current_conversation_id() -> str | None:
+def current_conversation_id(manager_id: str = DEMO_MANAGER_ID) -> str | None:
     """UI entry point: which chat the sidebar marks as open."""
-    conversation_id = _service().current_id()
+    conversation_id = _service(manager_id).current_id()
     return str(conversation_id) if conversation_id else None
 
 
-def title_latest_conversation() -> str | None:
+def title_latest_conversation(manager_id: str = DEMO_MANAGER_ID) -> str | None:
     """UI entry point: title the open chat after its first answer, if untitled."""
-    return _service().title_latest()
+    return _service(manager_id).title_latest()
 
 
-def conversation_summary() -> dict[str, Any] | None:
+def conversation_summary(manager_id: str = DEMO_MANAGER_ID) -> dict[str, Any] | None:
     """UI entry point: the open chat's summary card, or None if not summarized."""
-    return _service().summary_view()
+    return _service(manager_id).summary_view()

@@ -14,6 +14,7 @@ from typing import Any
 
 import structlog
 
+from constants import DEMO_MANAGER_ID
 from domain.memory import AlertOptions, PreferenceCode, ValueType, Weekday
 from service.llm_service import Tool
 from service.preferences import (
@@ -21,8 +22,8 @@ from service.preferences import (
     PreferenceError,
     PreferenceService,
     default_setting,
-    demo_preferences,
     describe,
+    manager_preferences,
     validate,
 )
 
@@ -115,6 +116,8 @@ class SettingChange:
     # The setting when proposed; a different setting at confirm time means it
     # changed in the meantime, so the proposal is stale.
     proposed_over: list[Any]
+    # Whose setting this is; only that manager can confirm it.
+    manager_id: str = DEMO_MANAGER_ID
 
     def to_state(self) -> dict[str, Any]:
         return asdict(self)
@@ -256,6 +259,7 @@ class SettingChanges:
                 before=before,
                 after=f"{_state_text(default)} (default)",
                 proposed_over=_snapshot(current),
+                manager_id=self.preferences.manager_id,
             )
 
         enabled, value, options = _merge(current, action, args)
@@ -281,6 +285,7 @@ class SettingChanges:
             before=before,
             after=_state_text(proposed),
             proposed_over=_snapshot(current),
+            manager_id=self.preferences.manager_id,
         )
 
 
@@ -346,7 +351,20 @@ def confirm(
     return messages
 
 
-def confirm_proposals(states: list[dict[str, Any]]) -> list[str]:
-    """UI entry point: save the demo manager's confirmed proposals."""
+def confirm_proposals(
+    states: list[dict[str, Any]],
+    manager_id: str = DEMO_MANAGER_ID,
+) -> list[str]:
+    """UI entry point: save one manager's confirmed proposals.
+
+    A proposal made for another manager is never saved; the UI discards
+    proposals on a manager switch, so this only guards against a stale card.
+    """
     changes = [SettingChange.from_state(state) for state in states]
-    return confirm(changes, demo_preferences())
+    own = [change for change in changes if change.manager_id == manager_id]
+    skipped = [
+        f"Not saved: {change.name} was proposed for another manager."
+        for change in changes
+        if change.manager_id != manager_id
+    ]
+    return confirm(own, manager_preferences(manager_id)) + skipped

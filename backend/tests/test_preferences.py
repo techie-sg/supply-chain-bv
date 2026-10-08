@@ -220,6 +220,16 @@ def test_validate_rejects_a_boolean_where_a_number_is_needed() -> None:
         validate(definition, True, True, None)
 
 
-def test_demo_preferences_use_the_demo_store_and_manager() -> None:
-    demo = preferences.demo_preferences()
+def test_manager_preferences_default_to_the_demo_manager() -> None:
+    demo = preferences.manager_preferences()
     assert (demo.store_id, demo.manager_id) == ("DS-BLR-014", "karthik")
+    other = preferences.manager_preferences("imran")
+    assert (other.store_id, other.manager_id) == ("DS-BLR-014", "imran")
+
+
+def test_managers_settings_are_independent(store) -> None:
+    PreferenceService("DS-1", "ananya").set("sla_dip_alert", True, 85)
+    mine = PreferenceService("DS-1", "ananya").current("sla_dip_alert")
+    theirs = PreferenceService("DS-1", "karthik").current("sla_dip_alert")
+    assert (mine.enabled, mine.value, mine.customized) == (True, 85, True)
+    assert (theirs.enabled, theirs.value, theirs.customized) == (False, 80, False)

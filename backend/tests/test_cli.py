@@ -97,7 +97,6 @@ def test_review_command_runs_the_daily_review_once(monkeypatch) -> None:
         return report
 
     monkeypatch.setattr(dreaming, "run_review", run_review)
-    monkeypatch.setattr(logging_config, "configure_logging", lambda: None)
     cli.main(["review"])
     assert calls == [True]
 
@@ -109,6 +108,6 @@ def test_review_failure_propagates_to_fail_the_cron_run(monkeypatch) -> None:
         raise RuntimeError("database unavailable")
 
     monkeypatch.setattr(dreaming, "run_review", failing)
-    monkeypatch.setattr(logging_config, "configure_logging", lambda: None)
-    with pytest.raises(RuntimeError, match="database unavailable"):
+    with pytest.raises(SystemExit) as error:
         cli.main(["review"])
+    assert error.value.code == 1
