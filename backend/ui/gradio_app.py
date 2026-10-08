@@ -1204,6 +1204,7 @@ def build_app() -> gr.Blocks:
             dismiss_suggestion,
             suggestion_status,
         ) = settings_form.suggestions
+        memory_view = settings_form.memory
         suggestion_outputs = [
             suggestions_entry,
             suggestions_entry_text,
@@ -1259,7 +1260,7 @@ def build_app() -> gr.Blocks:
             suggestions_ui.refresh_for,
             inputs=manager,
             outputs=suggestion_outputs,
-        )
+        ).then(settings.load_memory, inputs=manager, outputs=memory_view)
         mark_reviewed_button.click(
             suggestions_ui.mark_issues_reviewed,
             inputs=manager,
@@ -1329,6 +1330,7 @@ def build_app() -> gr.Blocks:
                     inputs=manager,
                     outputs=answer_issues,
                 )
+                .then(settings.load_memory, inputs=manager, outputs=memory_view)
             )
 
         show_manager(

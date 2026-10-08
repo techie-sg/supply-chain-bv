@@ -1,12 +1,19 @@
-"""Read chats for the daily review; store suggestions and handover notes."""
+"""Read chats for the daily review; store suggestions, handover notes and digests."""
 
 from datetime import date
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import Engine, func, insert, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from database.models import Conversation, HandoverNote, Suggestion
+from database.models import (
+    Conversation,
+    HandoverNote,
+    Manager,
+    MemoryDigest,
+    Suggestion,
+)
 from database.session import get_session
 from domain.memory import SuggestionKind, SuggestionStatus
 
@@ -190,3 +197,33 @@ def latest_handover_notes(
     )
     with get_session(engine) as session:
         return list(session.scalars(statement))
+
+
+def all_managers(engine: Engine | None = None) -> list[Manager]:
+    """Every store's managers; the review rebuilds a digest for each."""
+    statement = select(Manager).order_by(Manager.store_id, Manager.manager_id)
+    with get_session(engine) as session:
+        return list(session.scalars(statement))
+
+
+def get_digest(manager_id: str, engine: Engine | None = None) -> MemoryDigest | None:
+    with get_session(engine) as session:
+        return session.get(MemoryDigest, manager_id)
+
+
+def save_digest(
+    store_id: str,
+    manager_id: str,
+    digest: str | None,
+    sources: list[dict[str, Any]],
+    engine: Engine | None = None,
+) -> None:
+    """Replace the manager's digest; there is one row per manager."""
+    values = {"digest": digest, "sources": sources, "built_at": func.now()}
+    statement = (
+        pg_insert(MemoryDigest)
+        .values(store_id=store_id, manager_id=manager_id, **values)
+        .on_conflict_do_update(index_elements=[MemoryDigest.manager_id], set_=values)
+    )
+    with get_session(engine) as session:
+        session.execute(statement)

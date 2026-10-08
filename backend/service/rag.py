@@ -61,6 +61,7 @@ class RAGService:
         preferences: PreferenceContext | None = None,
         summary: str | None = None,
         handover: str | None = None,
+        memory: str | None = None,
         tools: Sequence[Tool] = (),
     ) -> str:
         """Retrieve evidence and answer using the injected provider services.
@@ -69,7 +70,8 @@ class RAGService:
         With tools, the model may call them before answering; the settings tool
         only proposes changes, which the manager confirms outside the model.
         `summary` stands in for older messages that `history` no longer holds.
-        `handover` is the latest shift's handover notes.
+        `handover` is the latest shift's handover notes; `memory` is the
+        manager's digest of recent chats from the daily review.
         """
         if top_k < 1:
             raise ValueError("top_k must be positive")
@@ -98,6 +100,13 @@ class RAGService:
             user_message = (
                 "<conversation_summary>\nEarlier in this chat (a summary; it may "
                 f"omit details):\n{summary}\n</conversation_summary>\n\n{user_message}"
+            )
+        if memory:
+            user_message = (
+                "<recent_context>\nEarlier chats, as remembered by the daily review. "
+                "Advisory only: policy, settings and live data take precedence, and "
+                f"its figures are not current.\n{memory}\n</recent_context>\n\n"
+                f"{user_message}"
             )
         if handover:
             user_message = (
@@ -141,6 +150,7 @@ def answer_question(
     preferences: PreferenceContext | None = None,
     summary: str | None = None,
     handover: str | None = None,
+    memory: str | None = None,
     tools: Sequence[Tool] = (),
 ) -> str:
     """UI entry point composing the configured services."""
@@ -156,5 +166,6 @@ def answer_question(
         preferences=preferences,
         summary=summary,
         handover=handover,
+        memory=memory,
         tools=tools,
     )
