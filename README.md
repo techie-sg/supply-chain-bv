@@ -110,6 +110,8 @@ The daily review (dreaming) runs from cron once a day; admins can also run it fr
 | Variables | `DATABASE_URL`, `GROQ_API_KEY` |
 | Healthcheck and public domain | None |
 
+Each run also rebuilds every manager's memory digest (shown in Settings → Memory) from the last 7 days of chat summaries; see [memory.md](docs/memory.md), section 6.
+
 Locally: `uv run python cli.py review`.
 
 ## Code layout

@@ -172,6 +172,7 @@ def test_categories_switch_panels_in_the_browser() -> None:
         "incentive",
         "greeting",
         "suggestions",
+        "memory",
     ]
     assert nav.value == "alerts"
     [callback] = [
@@ -181,10 +182,10 @@ def test_categories_switch_panels_in_the_browser() -> None:
     ]
     assert callback.fn is None and not callback.queue
     *panels, save_row = callback.outputs
-    assert len(panels) == 5
-    assert [panel.visible for panel in panels] == [True, False, False, False, False]
+    assert len(panels) == 6
+    assert [panel.visible for panel in panels] == [True] + [False] * 5
     assert save_row.elem_id == "settings-actions"
-    assert "category !== 'suggestions'" in settings.SHOW_CATEGORY_JS
+    assert "!['suggestions', 'memory'].includes(category)" in settings.SHOW_CATEGORY_JS
     for key, _, _ in settings.CATEGORIES:
         assert f"category === '{key}'" in settings.SHOW_CATEGORY_JS
 
@@ -293,3 +294,31 @@ def test_each_manager_saves_and_sees_only_their_own_settings(preference_store) -
     assert {row.manager_id for row in preference_store.rows} == {"ananya"}
     settings.reset_setting(PreferenceCode.RIDER_SHORTAGE_ALERT, "karthik")
     assert preference_store.statuses(PreferenceCode.RIDER_SHORTAGE_ALERT) == ["active"]
+
+
+def test_memory_view_shows_the_digest_read_only(monkeypatch) -> None:
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from service.scenarios import TIMEZONE
+
+    built = datetime(2026, 10, 8, 23, 30, tzinfo=TIMEZONE)
+    digest = SimpleNamespace(
+        digest="- Radius shrink deferred on 7 Oct.",
+        sources=[{"conversation_id": "a"}, {"conversation_id": "b"}],
+        built_at=built,
+    )
+    monkeypatch.setattr(settings, "memory_digest", lambda manager_id: digest)
+    text = settings.load_memory("karthik")
+    assert text.startswith("- Radius shrink deferred on 7 Oct.")
+    assert "From 2 chats in the last 7 days · built 8 Oct, 23:30." in text
+    monkeypatch.setattr(settings, "memory_digest", lambda manager_id: None)
+    assert settings.load_memory().startswith("Nothing remembered yet.")
+
+    def unavailable(manager_id):
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(settings, "memory_digest", unavailable)
+    assert "unavailable" in settings.load_memory()
+    *panels, save_row = settings.show_category("memory")
+    assert save_row["visible"] is False and panels[-1]["visible"] is True
