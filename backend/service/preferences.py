@@ -353,6 +353,6 @@ def default_setting(definition: PreferenceDefinition) -> EffectiveSetting:
     )
 
 
-def demo_preferences() -> PreferenceService:
-    """The demo manager's settings, used by the UI and the assistant."""
-    return PreferenceService(DEMO_STORE_ID, DEMO_MANAGER_ID)
+def manager_preferences(manager_id: str = DEMO_MANAGER_ID) -> PreferenceService:
+    """One manager's settings at the demo store, used by the UI and the assistant."""
+    return PreferenceService(DEMO_STORE_ID, manager_id)

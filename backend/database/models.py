@@ -1,4 +1,4 @@
-"""The four workbook sheets, the two RAG document tables, conversations and preferences."""
+"""The four workbook sheets, the two RAG document tables, managers, conversations and preferences."""
 
 from datetime import date, datetime
 from uuid import UUID, uuid4
@@ -197,6 +197,33 @@ class DocumentChunk(Base):
     embedding: Mapped[list[float]] = mapped_column(Vector())
 
 
+class Manager(Base):
+    """A store's shift manager; each runs one shift with its own unique id."""
+
+    __tablename__ = "managers"
+    __table_args__ = (
+        UniqueConstraint("shift_id", name="uq_managers_shift_id"),
+        CheckConstraint(
+            "shift_start ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'",
+            name="ck_managers_shift_start",
+        ),
+        CheckConstraint(
+            "shift_end ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'",
+            name="ck_managers_shift_end",
+        ),
+        Index("ix_managers_store", "store_id"),
+        {"schema": "app"},
+    )
+
+    manager_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    store_id: Mapped[str] = mapped_column(String(32))
+    name: Mapped[str] = mapped_column(Text)
+    shift_id: Mapped[str] = mapped_column(String(32))
+    shift_name: Mapped[str] = mapped_column(Text)
+    shift_start: Mapped[str] = mapped_column(String(5))
+    shift_end: Mapped[str] = mapped_column(String(5))
+
+
 class Conversation(Base):
     """One chat; `messages` is an append-only list of who, what and when."""
 
@@ -221,7 +248,10 @@ class Conversation(Base):
         server_default=func.gen_random_uuid(),
     )
     store_id: Mapped[str] = mapped_column(String(32))
-    manager_id: Mapped[str] = mapped_column(String(32))
+    manager_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("app.managers.manager_id", ondelete="RESTRICT"),
+    )
     messages: Mapped[list[dict[str, str]]] = mapped_column(
         JSONB,
         default=list,
@@ -322,7 +352,10 @@ class StorePreference(Base):
         server_default=func.gen_random_uuid(),
     )
     store_id: Mapped[str] = mapped_column(String(32))
-    manager_id: Mapped[str] = mapped_column(String(32))
+    manager_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("app.managers.manager_id", ondelete="RESTRICT"),
+    )
     code: Mapped[str] = mapped_column(
         String(48),
         ForeignKey("app.preference_definitions.code", ondelete="RESTRICT"),

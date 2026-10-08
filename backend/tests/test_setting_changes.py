@@ -238,8 +238,33 @@ def test_a_setting_changed_since_the_proposal_is_not_saved(store) -> None:
 def test_proposals_survive_the_browser_state_round_trip(store, monkeypatch) -> None:
     change = propose(code="sla_dip_alert", action="set", value=85)
     assert SettingChange.from_state(change.to_state()) == change
-    monkeypatch.setattr(setting_changes, "demo_preferences", prefs)
+    monkeypatch.setattr(
+        setting_changes,
+        "manager_preferences",
+        lambda manager_id: prefs(),
+    )
     assert confirm_proposals([change.to_state()])[0].startswith("Saved. SLA dip")
+
+
+def test_a_proposal_is_saved_only_for_the_manager_it_was_made_for(
+    store,
+    monkeypatch,
+) -> None:
+    change = SettingChanges(PreferenceService("DS-1", "ananya")).propose(
+        {"code": "sla_dip_alert", "action": "set", "value": 85},
+    )
+    assert change.manager_id == "ananya"
+    monkeypatch.setattr(
+        setting_changes,
+        "manager_preferences",
+        lambda manager_id: PreferenceService("DS-1", manager_id),
+    )
+    [skipped] = confirm_proposals([change.to_state()], "karthik")
+    assert skipped == "Not saved: SLA dip was proposed for another manager."
+    assert store.rows == []
+    [saved] = confirm_proposals([change.to_state()], "ananya")
+    assert saved.startswith("Saved. SLA dip")
+    assert {row.manager_id for row in store.rows} == {"ananya"}
 
 
 def test_an_echoed_tool_result_or_empty_reply_is_replaced(store) -> None:

@@ -1,6 +1,7 @@
 """Settings tab: the manager sets alerts, batching rules, incentive cap and greeting.
 
-Values are saved exactly as entered in the form; the assistant only reads them.
+Each manager has their own settings. Values are saved exactly as entered in the
+form; the assistant only proposes changes, which the manager confirms.
 """
 
 from dataclasses import dataclass
@@ -11,13 +12,14 @@ import gradio as gr
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
+from constants import DEMO_MANAGER_ID
 from database.models import PreferenceDefinition
 from domain.memory import BriefingView, PreferenceCode, Weekday
 from service.preferences import (
     EffectiveSetting,
     PreferenceError,
-    demo_preferences,
     limits,
+    manager_preferences,
 )
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -218,9 +220,9 @@ def _status(messages: list[str]) -> str:
     return f'<ul class="settings-status">{items}</ul>'
 
 
-def load_settings() -> list[Any]:
+def load_settings(manager_id: str = DEMO_MANAGER_ID) -> list[Any]:
     try:
-        return form_values(demo_preferences().effective())
+        return form_values(manager_preferences(manager_id).effective())
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not load settings", exc_info=True)
         return [gr.skip()] * (len(ALERT_CODES) * 7 + 8) + [
@@ -228,9 +230,9 @@ def load_settings() -> list[Any]:
         ]
 
 
-def save_settings(*values: Any) -> list[Any]:
-    """Save what changed; report each saved or rejected item."""
-    service = demo_preferences()
+def save_settings(manager_id: str, *values: Any) -> list[Any]:
+    """Save what changed for one manager; report each saved or rejected item."""
+    service = manager_preferences(manager_id)
     try:
         definitions = {
             setting.definition.code: setting.definition
@@ -243,8 +245,8 @@ def save_settings(*values: Any) -> list[Any]:
         raise gr.Error(UNAVAILABLE) from exc
 
 
-def reset_setting(code: str) -> list[Any]:
-    service = demo_preferences()
+def reset_setting(code: str, manager_id: str = DEMO_MANAGER_ID) -> list[Any]:
+    service = manager_preferences(manager_id)
     try:
         message = service.reset(code)
         return form_values(service.effective(), _status([message]))
@@ -355,9 +357,9 @@ def summary_html(settings: list[EffectiveSetting]) -> str:
     return f'<ul class="settings-summary">{"".join(items)}</ul>{off_line}'
 
 
-def load_summary() -> str:
+def load_summary(manager_id: str = DEMO_MANAGER_ID) -> str:
     try:
-        return summary_html(demo_preferences().effective())
+        return summary_html(manager_preferences(manager_id).effective())
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not load the settings summary", exc_info=True)
         return '<p class="summary-off">Settings unavailable.</p>'
@@ -400,10 +402,12 @@ def _panel_heading(title: str, description: str) -> None:
     )
 
 
-def build(summary: gr.HTML | None = None) -> SettingsForm:
+def build(manager: gr.State, summary: gr.HTML | None = None) -> SettingsForm:
     """Lay out the tab and its events; call inside its gr.Tab.
 
-    `summary`, when given, is the sidebar quick view refreshed after each change.
+    `manager` holds the selected manager's id; every save and reset applies to
+    that manager. `summary`, when given, is the sidebar quick view refreshed
+    after each change.
     """
     resets: list[tuple[gr.Button, str]] = []
     gr.HTML(
@@ -544,7 +548,7 @@ def build(summary: gr.HTML | None = None) -> SettingsForm:
     events = [
         save.click(
             save_settings,
-            inputs=form.inputs(),
+            inputs=[manager, *form.inputs()],
             outputs=form.outputs(),
             concurrency_id="settings",
             concurrency_limit=1,
@@ -553,7 +557,11 @@ def build(summary: gr.HTML | None = None) -> SettingsForm:
     for button, reset_code in resets:
         events.append(
             button.click(
-                lambda reset_code=reset_code: reset_setting(reset_code),
+                lambda manager_id, reset_code=reset_code: reset_setting(
+                    reset_code,
+                    manager_id,
+                ),
+                inputs=manager,
                 outputs=form.outputs(),
                 concurrency_id="settings",
                 concurrency_limit=1,
@@ -561,5 +569,5 @@ def build(summary: gr.HTML | None = None) -> SettingsForm:
         )
     if summary is not None:
         for event in events:
-            event.success(load_summary, outputs=summary)
+            event.success(load_summary, inputs=manager, outputs=summary)
     return form

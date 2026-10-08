@@ -13,6 +13,7 @@ import requests
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
+from constants import DEMO_MANAGER_ID
 from logging_config import configure_logging
 from service.conversations import (
     add_note,
@@ -25,6 +26,7 @@ from service.conversations import (
     start_new_conversation,
     title_latest_conversation,
 )
+from service.managers import ShiftManager, choose_manager, store_managers
 from service.scenarios import (
     TIMEZONE,
     current_scenario,
@@ -289,6 +291,7 @@ def prepare_scenario(
 
 def load_selected_scenario(
     key: str,
+    manager_id: str = DEMO_MANAGER_ID,
 ) -> tuple[dict[str, Any], list[dict], str, str, dict, dict, dict, dict]:
     """Load through the existing service, starting a new conversation on success."""
     try:
@@ -299,7 +302,7 @@ def load_selected_scenario(
             "Scenario could not be loaded. Check the database connection and migrations.",
         ) from exc
     try:
-        start_new_conversation()
+        start_new_conversation(manager_id=manager_id)
     except (SQLAlchemyError, RuntimeError):
         # The scenario is loaded; the next question continues the previous chat.
         logger.exception("Could not start a conversation after loading %s", key)
@@ -366,10 +369,10 @@ def to_display(messages: Sequence[dict[str, str]]) -> list[dict]:
     ]
 
 
-def restore_chat() -> list[dict]:
-    """Show the latest stored conversation when the page loads."""
+def restore_chat(manager_id: str = DEMO_MANAGER_ID) -> list[dict]:
+    """Show the manager's latest stored conversation."""
     try:
-        return to_display(conversation_history())
+        return to_display(conversation_history(manager_id=manager_id))
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not restore the conversation", exc_info=True)
         return []
@@ -381,11 +384,11 @@ def _conversation_title(item: dict[str, Any]) -> str:
     return label if len(label) <= 40 else label[:39] + "…"
 
 
-def conversation_choices() -> dict:
-    """Sidebar list of past chats, highlighting the open one; empty if unavailable."""
+def conversation_choices(manager_id: str = DEMO_MANAGER_ID) -> dict:
+    """Sidebar list of the manager's past chats, highlighting the open one."""
     try:
-        items = past_conversations()
-        current = current_conversation_id()
+        items = past_conversations(manager_id=manager_id)
+        current = current_conversation_id(manager_id=manager_id)
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not list past conversations", exc_info=True)
         items, current = [], None
@@ -396,25 +399,28 @@ def conversation_choices() -> dict:
     )
 
 
-def open_conversation(conversation_id: str | None) -> tuple[list[dict], str]:
+def open_conversation(
+    conversation_id: str | None,
+    manager_id: str = DEMO_MANAGER_ID,
+) -> tuple[list[dict], str]:
     """Show a past conversation and make it the one new questions continue."""
     if not conversation_id:
         return gr.skip(), gr.skip()
     try:
-        messages = resume_past_conversation(conversation_id)
+        messages = resume_past_conversation(conversation_id, manager_id=manager_id)
     except (SQLAlchemyError, RuntimeError, LookupError, ValueError) as exc:
         logger.exception("Could not open conversation %s", conversation_id)
         raise gr.Error("Could not open that conversation. Please try again.") from exc
     return to_display(messages), ""
 
 
-def title_conversation() -> dict:
+def title_conversation(manager_id: str = DEMO_MANAGER_ID) -> dict:
     """Title the open chat after its first answer, then refresh the sidebar."""
     try:
-        title_latest_conversation()
+        title_latest_conversation(manager_id=manager_id)
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not title the conversation", exc_info=True)
-    return conversation_choices()
+    return conversation_choices(manager_id=manager_id)
 
 
 SUMMARY_NOTE = (
@@ -423,11 +429,11 @@ SUMMARY_NOTE = (
 )
 
 
-def summary_card() -> tuple[dict, dict, str, dict]:
+def summary_card(manager_id: str = DEMO_MANAGER_ID) -> tuple[dict, dict, str, dict]:
     """The pinned summary row: hidden for an empty chat, otherwise its state."""
     hidden = (gr.update(visible=False), gr.skip(), "", gr.skip())
     try:
-        view = conversation_summary()
+        view = conversation_summary(manager_id=manager_id)
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not load the conversation summary", exc_info=True)
         return hidden
@@ -453,10 +459,10 @@ def summary_card() -> tuple[dict, dict, str, dict]:
     )
 
 
-def summarize_now() -> tuple[dict, dict, str, dict]:
+def summarize_now(manager_id: str = DEMO_MANAGER_ID) -> tuple[dict, dict, str, dict]:
     """Fold every message of the open chat into its summary, then show it open."""
     try:
-        updated = summarize_open_conversation()
+        updated = summarize_open_conversation(manager_id=manager_id)
     except (
         SQLAlchemyError,
         RuntimeError,
@@ -467,24 +473,24 @@ def summarize_now() -> tuple[dict, dict, str, dict]:
         raise gr.Error("Could not summarize this chat. Please try again.") from exc
     if not updated:
         gr.Info("The summary already covers every message.")
-    bar, box, text, button = summary_card()
+    bar, box, text, button = summary_card(manager_id=manager_id)
     if updated:
         box = gr.update(label=box["label"], open=True)
     return bar, box, text, button
 
 
-def summarize_conversation() -> None:
+def summarize_conversation(manager_id: str = DEMO_MANAGER_ID) -> None:
     """After an answer, fold older messages into the summary if over a limit."""
     try:
-        summarize_latest_conversation()
+        summarize_latest_conversation(manager_id=manager_id)
     except (SQLAlchemyError, RuntimeError, ValueError, requests.RequestException):
         logger.warning("Could not summarize the conversation", exc_info=True)
 
 
-def clear_chat() -> tuple[list[dict], str]:
+def clear_chat(manager_id: str = DEMO_MANAGER_ID) -> tuple[list[dict], str]:
     """Start a new stored conversation; the previous one is kept."""
     try:
-        start_new_conversation()
+        start_new_conversation(manager_id=manager_id)
     except (SQLAlchemyError, RuntimeError) as exc:
         logger.exception("Could not start a new conversation")
         raise gr.Error("Could not start a new chat. Please try again.") from exc
@@ -494,6 +500,7 @@ def clear_chat() -> tuple[list[dict], str]:
 def chat(
     message: str,
     history: list[dict] | None,
+    manager_id: str = DEMO_MANAGER_ID,
 ) -> tuple[list[dict], str, Any]:
     """Answer from stored history; keep the draft and display intact on failure.
 
@@ -506,7 +513,7 @@ def chat(
     request_id = uuid4().hex
     try:
         with structlog.contextvars.bound_contextvars(request_id=request_id):
-            answer, proposals = ask_question(message)
+            answer, proposals = ask_question(message, manager_id=manager_id)
     except (
         requests.RequestException,
         SQLAlchemyError,
@@ -534,6 +541,7 @@ def chat(
 def respond_to_pending(
     message: str,
     history: list[dict] | None,
+    manager_id: str = DEMO_MANAGER_ID,
 ) -> Iterator[tuple[list[dict], str, Any]]:
     """Answer the message already displayed by the browser without duplicating it."""
     history = history or []
@@ -544,7 +552,7 @@ def respond_to_pending(
         history[:-1] if history and history[-1].get("role") == "user" else history
     )
     try:
-        yield chat(message, previous)
+        yield chat(message, previous, manager_id)
     except gr.Error:
         yield previous, message, gr.skip()
         raise
@@ -574,11 +582,15 @@ def pending_card(pending: list[dict] | None) -> tuple[str, dict]:
     return card, gr.update(visible=True)
 
 
-def _with_note(history: list[dict] | None, text: str) -> list[dict]:
-    """Store an assistant note in the open chat and show it."""
+def _with_note(
+    history: list[dict] | None,
+    text: str,
+    manager_id: str = DEMO_MANAGER_ID,
+) -> list[dict]:
+    """Store an assistant note in the manager's open chat and show it."""
     now = datetime.now(TIMEZONE)
     try:
-        stored = add_note(text)
+        stored = add_note(text, manager_id=manager_id)
     except (SQLAlchemyError, RuntimeError, LookupError):
         logger.warning("Could not store the note in the conversation", exc_info=True)
         stored = None
@@ -591,27 +603,92 @@ def _with_note(history: list[dict] | None, text: str) -> list[dict]:
 def confirm_pending(
     pending: list[dict] | None,
     history: list[dict] | None,
+    manager_id: str = DEMO_MANAGER_ID,
 ) -> tuple[list[dict], list]:
     """Save the proposed setting changes the manager confirmed."""
     if not pending:
         return history or [], []
     try:
-        results = confirm_proposals(pending)
+        results = confirm_proposals(pending, manager_id=manager_id)
     except (SQLAlchemyError, RuntimeError) as exc:
         logger.exception("Could not save confirmed setting changes")
         raise gr.Error("Could not save the settings. Please try again.") from exc
-    return _with_note(history, "\n\n".join(results)), []
+    return _with_note(history, "\n\n".join(results), manager_id), []
 
 
 def cancel_pending(
     pending: list[dict] | None,
     history: list[dict] | None,
+    manager_id: str = DEMO_MANAGER_ID,
 ) -> tuple[list[dict], list]:
     """Discard the proposed setting changes; nothing is saved."""
     if not pending:
         return history or [], []
     names = ", ".join(change["name"] for change in pending)
-    return _with_note(history, f"Cancelled. Nothing was changed ({names})."), []
+    return (
+        _with_note(history, f"Cancelled. Nothing was changed ({names}).", manager_id),
+        [],
+    )
+
+
+def _manager_label(manager: ShiftManager) -> str:
+    return f"{manager.name} · {manager.shift_name} {manager.shift_start}–{manager.shift_end}"
+
+
+def manager_badge(manager: ShiftManager | None) -> str:
+    """Who is signed in to the workspace, and their shift."""
+    if manager is None:
+        return '<div class="manager-badge"><span>No manager available</span></div>'
+    return (
+        '<div class="manager-badge"><span>Manager</span>'
+        f"<strong>{escape(manager.name)}</strong>"
+        f"<em>{escape(manager.shift_name)} shift · {escape(manager.shift_start)}–"
+        f"{escape(manager.shift_end)} · {escape(manager.shift_id)}</em></div>"
+    )
+
+
+def _managers() -> list[ShiftManager]:
+    try:
+        return store_managers()
+    except (SQLAlchemyError, RuntimeError):
+        logger.warning("Could not list managers", exc_info=True)
+        return []
+
+
+def restore_manager(request: gr.Request) -> tuple[str, dict, str]:
+    """Pick the manager from the URL (?manager=), else the demo manager."""
+    managers = _managers()
+    manager = choose_manager(request.query_params.get("manager"), managers)
+    manager_id = manager.manager_id if manager else DEMO_MANAGER_ID
+    return (
+        manager_id,
+        gr.update(
+            choices=[(_manager_label(item), item.manager_id) for item in managers],
+            value=manager.manager_id if manager else None,
+        ),
+        manager_badge(manager),
+    )
+
+
+def select_manager(requested: str | None) -> tuple[str, str]:
+    """Switch the workspace to another manager of the store."""
+    managers = _managers()
+    manager = choose_manager(requested, managers)
+    if manager is None or manager.manager_id != requested:
+        raise gr.Error("That manager is not available. Please choose another.")
+    logger.info("Manager selected", manager_id=manager.manager_id)
+    return manager.manager_id, manager_badge(manager)
+
+
+# Reads the picker, not the manager state: state values never reach the browser.
+MANAGER_URL_JS = """
+(manager) => {
+    if (!manager) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('manager', manager);
+    window.history.replaceState(null, '', url);
+}
+"""
 
 
 def _assistant_context(context: dict[str, Any] | None) -> str:
@@ -692,9 +769,23 @@ def build_app() -> gr.Blocks:
             elem_id="brand-home",
         )
         current = gr.State(None)
+        # The selected manager's id; chats, settings and proposals follow it.
+        manager = gr.State(DEMO_MANAGER_ID)
         # Setting changes proposed in chat, waiting for Confirm or Cancel.
         pending_changes = gr.State([])
         with gr.Sidebar(label="Chats", width=272, elem_id="chat-sidebar"):
+            gr.HTML(
+                '<p class="sidebar-heading">Shift manager</p>',
+                apply_default_css=False,
+            )
+            manager_picker = gr.Radio(
+                choices=[],
+                value=None,
+                label="Shift manager",
+                show_label=False,
+                container=False,
+                elem_id="manager-picker",
+            )
             new_chat = gr.Button(
                 "New chat",
                 size="sm",
@@ -737,6 +828,13 @@ def build_app() -> gr.Blocks:
                 gr.Column(elem_id="assistant-panel", min_width=0),
             ):
                 with gr.Row(elem_id="assistant-heading"):
+                    badge = gr.HTML(
+                        manager_badge(None),
+                        apply_default_css=False,
+                        elem_id="assistant-manager",
+                        scale=0,
+                        min_width=0,
+                    )
                     context_banner = gr.HTML(
                         '<div class="current-scenario"><span>Checking scenario…</span></div>'
                         if choices
@@ -834,7 +932,7 @@ def build_app() -> gr.Blocks:
                 gr.Tab("Settings", id="settings"),
                 gr.Column(elem_id="settings-workspace", min_width=0),
             ):
-                settings_form = settings.build(summary=settings_summary)
+                settings_form = settings.build(manager, summary=settings_summary)
             with (
                 gr.Tab("Demo tools", id="demo"),
                 gr.Column(elem_id="demo-workspace", min_width=0),
@@ -929,13 +1027,6 @@ def build_app() -> gr.Blocks:
                             elem_classes="panel-note",
                         )
         app.load(_restore_tab, outputs=workspace, queue=False)
-        app.load(
-            settings.load_settings,
-            outputs=settings_form.outputs(),
-            concurrency_id="settings",
-            concurrency_limit=1,
-        )
-        app.load(settings.load_summary, outputs=settings_summary)
         # Selecting the tab from the server works even when narrow screens fold
         # the tab into the "More tabs" menu.
         edit_settings.click(
@@ -948,28 +1039,62 @@ def build_app() -> gr.Blocks:
         summary_outputs = [summary_bar, summary_box, summary_text, summarize_button]
         summarize_button.click(
             summarize_now,
+            inputs=manager,
             outputs=summary_outputs,
             concurrency_id="summaries",
             concurrency_limit=1,
         )
-        app.load(
-            restore_chat,
-            outputs=chatbot,
-            concurrency_id="workspace",
-            concurrency_limit=1,
-        ).then(conversation_choices, outputs=history_list).then(
-            summary_card,
-            outputs=summary_outputs,
+
+        def show_manager(event):
+            """After the manager is set: their chat, chats, summary and settings."""
+            return (
+                event.then(
+                    restore_chat,
+                    inputs=manager,
+                    outputs=chatbot,
+                    concurrency_id="workspace",
+                    concurrency_limit=1,
+                )
+                .then(conversation_choices, inputs=manager, outputs=history_list)
+                .then(summary_card, inputs=manager, outputs=summary_outputs)
+                .then(
+                    settings.load_settings,
+                    inputs=manager,
+                    outputs=settings_form.outputs(),
+                    concurrency_id="settings",
+                    concurrency_limit=1,
+                )
+                .then(settings.load_summary, inputs=manager, outputs=settings_summary)
+            )
+
+        show_manager(
+            app.load(
+                restore_manager,
+                outputs=[manager, manager_picker, badge],
+                queue=False,
+            ),
         )
+        # A proposal belongs to the manager it was made for.
+        show_manager(
+            manager_picker.input(
+                select_manager,
+                inputs=manager_picker,
+                outputs=[manager, badge],
+                queue=False,
+            )
+            .then(list, outputs=pending_changes, queue=False)
+            .then(fn=None, js=MANAGER_URL_JS, inputs=manager_picker),
+        ).then(fn=None, js=CLOSE_SIDEBAR_ON_PHONE_JS)
         app.load(fn=None, js=CLOSE_SIDEBAR_ON_PHONE_JS)
         history_list.input(
             open_conversation,
-            inputs=history_list,
+            inputs=[history_list, manager],
             outputs=[chatbot, message],
             concurrency_id="workspace",
             concurrency_limit=1,
-        ).then(conversation_choices, outputs=history_list).then(
+        ).then(conversation_choices, inputs=manager, outputs=history_list).then(
             summary_card,
+            inputs=manager,
             outputs=summary_outputs,
         ).then(
             fn=None,
@@ -1008,14 +1133,15 @@ def build_app() -> gr.Blocks:
             )
         load.click(
             load_selected_scenario,
-            inputs=scenario,
+            inputs=[scenario, manager],
             outputs=[current, chatbot, message, preview, *tables],
             concurrency_id="workspace",
             concurrency_limit=1,
         ).success(_assistant_context, inputs=current, outputs=context_banner).then(
             conversation_choices,
+            inputs=manager,
             outputs=history_list,
-        ).then(summary_card, outputs=summary_outputs)
+        ).then(summary_card, inputs=manager, outputs=summary_outputs)
         for event in (submit.click, message.submit):
             event(
                 fn=None,
@@ -1026,7 +1152,7 @@ def build_app() -> gr.Blocks:
                 show_progress="hidden",
             ).then(
                 respond_to_pending,
-                inputs=[pending_message, chatbot],
+                inputs=[pending_message, chatbot, manager],
                 outputs=[chatbot, message, pending_changes],
                 show_progress="hidden",
                 concurrency_id="workspace",
@@ -1037,18 +1163,25 @@ def build_app() -> gr.Blocks:
                 outputs=[processing, submit, message],
                 queue=False,
                 show_progress="hidden",
-            ).then(conversation_choices, outputs=history_list).then(
+            ).then(conversation_choices, inputs=manager, outputs=history_list).then(
                 title_conversation,
+                inputs=manager,
                 outputs=history_list,
                 concurrency_id="titles",
                 concurrency_limit=1,
                 show_progress="hidden",
             ).then(
                 summarize_conversation,
+                inputs=manager,
                 concurrency_id="summaries",
                 concurrency_limit=1,
                 show_progress="hidden",
-            ).then(summary_card, outputs=summary_outputs, show_progress="hidden")
+            ).then(
+                summary_card,
+                inputs=manager,
+                outputs=summary_outputs,
+                show_progress="hidden",
+            )
         chatbot.change(
             fn=None,
             js="""(history) => [
@@ -1083,12 +1216,14 @@ def build_app() -> gr.Blocks:
         )
         new_chat.click(
             clear_chat,
+            inputs=manager,
             outputs=[chatbot, message],
             queue=True,
             concurrency_id="workspace",
             concurrency_limit=1,
-        ).then(conversation_choices, outputs=history_list).then(
+        ).then(conversation_choices, inputs=manager, outputs=history_list).then(
             summary_card,
+            inputs=manager,
             outputs=summary_outputs,
         ).then(
             fn=None,
@@ -1103,19 +1238,20 @@ def build_app() -> gr.Blocks:
         )
         confirm_changes.click(
             confirm_pending,
-            inputs=[pending_changes, chatbot],
+            inputs=[pending_changes, chatbot, manager],
             outputs=[chatbot, pending_changes],
             concurrency_id="workspace",
             concurrency_limit=1,
         ).then(
             settings.load_settings,
+            inputs=manager,
             outputs=settings_form.outputs(),
             concurrency_id="settings",
             concurrency_limit=1,
-        ).then(settings.load_summary, outputs=settings_summary)
+        ).then(settings.load_summary, inputs=manager, outputs=settings_summary)
         cancel_changes.click(
             cancel_pending,
-            inputs=[pending_changes, chatbot],
+            inputs=[pending_changes, chatbot, manager],
             outputs=[chatbot, pending_changes],
             concurrency_id="workspace",
             concurrency_limit=1,
