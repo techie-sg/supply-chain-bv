@@ -380,9 +380,8 @@ def restore_chat(manager_id: str = DEMO_MANAGER_ID) -> list[dict]:
 
 
 def _conversation_title(item: dict[str, Any]) -> str:
-    """The chat's title, or its first question until titled; one short line."""
-    label = " ".join((item.get("title") or item["first_question"] or "").split())
-    return label if len(label) <= 40 else label[:39] + "…"
+    """Keep the full title for hover; CSS clips it to one line in the list."""
+    return " ".join((item.get("title") or item["first_question"] or "").split())
 
 
 def _chat_scope(manager_id: str, conversation_id: str | None) -> dict[str, Any]:
@@ -705,7 +704,7 @@ def cancel_pending(
 
 
 def _manager_label(manager: ShiftManager) -> str:
-    return f"{manager.name} · {manager.shift_name} {manager.shift_start}–{manager.shift_end}"
+    return manager.name
 
 
 def manager_badge(manager: ShiftManager | None) -> str:
@@ -831,6 +830,12 @@ CHAT_NAVIGATION_JS = """
     const list = document.querySelector('#history-list');
     if (!list || list.dataset.navigationReady) return;
     list.dataset.navigationReady = 'true';
+    const showTitle = (event) => {
+        const label = event.target.closest('label');
+        if (label) label.title = label.querySelector('span')?.textContent.trim() || '';
+    };
+    list.addEventListener('pointerover', showTitle);
+    list.addEventListener('focusin', showTitle);
     list.addEventListener('click', (event) => {
         if (!event.target.closest('label')) return;
         // Radio input doesn't fire again when the already selected chat is clicked.
@@ -892,37 +897,37 @@ def build_app() -> gr.Blocks:
         manager = gr.State(DEMO_MANAGER_ID)
         # Setting changes proposed in chat, waiting for Confirm or Cancel.
         pending_changes = gr.State([])
-        with gr.Sidebar(label="Chats", width=272, elem_id="chat-sidebar"):
-            gr.HTML(
-                '<p class="sidebar-heading">Shift manager</p>',
-                apply_default_css=False,
-            )
-            manager_picker = gr.Radio(
-                choices=[],
-                value=None,
-                label="Shift manager",
-                show_label=False,
-                container=False,
-                elem_id="manager-picker",
-            )
-            new_chat = gr.Button(
-                "New chat",
-                size="sm",
-                variant="secondary",
-                elem_id="new-chat",
-            )
-            gr.HTML(
-                '<p class="sidebar-heading">Recent</p>',
-                apply_default_css=False,
-            )
-            history_list = gr.Radio(
-                choices=[],
-                value=None,
-                label="Past conversations",
-                show_label=False,
-                container=False,
-                elem_id="history-list",
-            )
+        with gr.Sidebar(label="Workspace", width=288, elem_id="chat-sidebar"):
+            with gr.Column(elem_id="sidebar-top"):
+                manager_picker = gr.Dropdown(
+                    choices=[],
+                    value=None,
+                    label="Shift manager",
+                    show_label=False,
+                    container=False,
+                    filterable=False,
+                    interactive=True,
+                    elem_id="manager-picker",
+                )
+                new_chat = gr.Button(
+                    "New chat",
+                    size="sm",
+                    variant="secondary",
+                    elem_id="new-chat",
+                )
+            with gr.Column(elem_id="sidebar-history"):
+                gr.HTML(
+                    '<p class="sidebar-heading">Recent chats</p>',
+                    apply_default_css=False,
+                )
+                history_list = gr.Radio(
+                    choices=[],
+                    value=None,
+                    label="Past conversations",
+                    show_label=False,
+                    container=False,
+                    elem_id="history-list",
+                )
             with gr.Column(elem_id="settings-summary-block"):
                 with gr.Row(
                     visible=False,
@@ -939,21 +944,20 @@ def build_app() -> gr.Blocks:
                         min_width=0,
                         elem_id="review-suggestions",
                     )
-                with gr.Row(elem_id="settings-summary-heading"):
+                with gr.Column(elem_id="sidebar-settings"):
                     gr.HTML(
                         '<p class="sidebar-heading">Active settings</p>',
                         apply_default_css=False,
                     )
-                    edit_settings = gr.Button(
-                        "Edit",
-                        size="sm",
-                        scale=0,
-                        min_width=0,
-                        elem_id="edit-settings",
+                    settings_summary = gr.HTML(
+                        apply_default_css=False,
+                        elem_id="settings-summary",
                     )
-                settings_summary = gr.HTML(
-                    apply_default_css=False,
-                    elem_id="settings-summary",
+                edit_settings = gr.Button(
+                    "Settings",
+                    size="sm",
+                    min_width=0,
+                    elem_id="edit-settings",
                 )
         with gr.Tabs(selected="assistant", elem_id="workspace-tabs") as workspace:
             with (

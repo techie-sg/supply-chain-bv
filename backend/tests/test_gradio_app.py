@@ -377,7 +377,9 @@ def test_sidebar_lists_past_chats_and_marks_the_open_one(monkeypatch) -> None:
     update = gradio_app.conversation_choices()
     (title, value), other = update["choices"]
     assert value == str(open_id) and update["value"] == str(open_id)
-    assert title == "Orders are backing up, what should I do…"
+    assert title == (
+        "Orders are backing up, what should I do first and who should I call in?"
+    )
     assert other == ("Rain plan?", str(other_id))
 
     # A new, empty chat is current but not listed, so nothing is marked.
@@ -990,7 +992,7 @@ def test_page_load_picks_the_manager_from_the_url(monkeypatch) -> None:
     manager_id, picker, badge = gradio_app.restore_manager(request(manager="imran"))
     assert manager_id == "imran" and picker["value"] == "imran"
     assert [value for _, value in picker["choices"]] == ["ananya", "karthik", "imran"]
-    assert picker["choices"][2][0] == "Imran Shaikh · Night 22:00–06:00"
+    assert picker["choices"][2][0] == "Imran Shaikh"
     assert "Imran Shaikh" in badge and "SHIFT-NGT" in badge
     # Unknown or missing ids fall back to the demo manager.
     assert gradio_app.restore_manager(request(manager="nobody"))[0] == "karthik"
@@ -1088,7 +1090,7 @@ def test_switching_manager_clears_the_card_and_reloads_their_workspace() -> None
     picker = next(
         block
         for block in gradio_app.app.blocks.values()
-        if isinstance(block, gr.Radio) and block.elem_id == "manager-picker"
+        if isinstance(block, gr.Dropdown) and block.elem_id == "manager-picker"
     )
     [switch] = [
         callback
@@ -1126,7 +1128,7 @@ def test_switching_manager_records_the_choice_in_the_url() -> None:
     picker = next(
         block
         for block in gradio_app.app.blocks.values()
-        if isinstance(block, gr.Radio) and block.elem_id == "manager-picker"
+        if isinstance(block, gr.Dropdown) and block.elem_id == "manager-picker"
     )
     [url] = [
         callback
