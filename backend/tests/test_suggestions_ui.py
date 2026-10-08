@@ -151,8 +151,16 @@ def test_admin_report_runs_the_review_and_lists_issues(monkeypatch) -> None:
         "resolve_suggestion",
         lambda suggestion_id, status: resolved.append((suggestion_id, status)),
     )
+    monkeypatch.setattr(
+        suggestions_ui,
+        "pending_suggestions",
+        lambda manager_id=None: [DRAFT],
+    )
     status, table = suggestions_ui.run_review_now()
-    assert status.startswith("Reviewed 2 chats")
+    assert status.startswith("Reviewed 2 chats with new messages")
+    assert status.endswith(
+        "Waiting: 1 suggestion for the manager, 1 answer issue to look at.",
+    )
     assert table["data"] == [
         [
             "08 Oct, 19:00",
@@ -173,6 +181,9 @@ def test_admin_report_handles_storage_errors(monkeypatch) -> None:
 
     monkeypatch.setattr(suggestions_ui, "open_answer_issues", unavailable)
     assert suggestions_ui.issues_table()["data"] == []
+    monkeypatch.setattr(suggestions_ui, "run_review", ReviewReport)
+    status, _ = suggestions_ui.run_review_now()
+    assert status == "No new messages since the last review."
     monkeypatch.setattr(suggestions_ui, "run_review", unavailable)
     with pytest.raises(gr.Error, match="review could not run"):
         suggestions_ui.run_review_now()
