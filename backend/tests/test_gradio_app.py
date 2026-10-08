@@ -195,7 +195,7 @@ def test_reply_uses_pending_message_once_and_keeps_previous_history(
 
     def answer(question):
         calls.append(question)
-        return "reply"
+        return "reply", []
 
     monkeypatch.setattr(gradio_app, "ask_question", answer)
     previous = [
@@ -203,7 +203,7 @@ def test_reply_uses_pending_message_once_and_keeps_previous_history(
         {"role": "assistant", "content": "Earlier reply"},
     ]
     pending = previous + [{"role": "user", "content": "Follow-up"}]
-    finished, draft = next(gradio_app.respond_to_pending("Follow-up", pending))
+    finished, draft, _ = next(gradio_app.respond_to_pending("Follow-up", pending))
     assert calls == ["Follow-up"]
     assert finished == previous + [
         {"role": "user", "content": timed("Follow-up")},
@@ -223,7 +223,7 @@ def test_failed_generation_restores_draft_without_duplicate_user_message(
     previous = [{"role": "assistant", "content": "Earlier reply"}]
     pending = previous + [{"role": "user", "content": "Try this"}]
     stream = gradio_app.respond_to_pending("Try this", pending)
-    assert next(stream) == (previous, "Try this")
+    assert next(stream)[:2] == (previous, "Try this")
     with pytest.raises(gr.Error, match="assistant is unavailable"):
         next(stream)
 
@@ -236,7 +236,7 @@ def test_chat_passes_only_the_question_without_reading_scenario_data(
 
     def answer(question):
         seen.append(question)
-        return "reply"
+        return "reply", []
 
     def no_scenario(*args, **kwargs):
         raise AssertionError("Chat must not read scenario data")
@@ -247,7 +247,7 @@ def test_chat_passes_only_the_question_without_reading_scenario_data(
         {"role": "user", "content": "Earlier"},
         {"role": "assistant", "content": "Earlier reply"},
     ]
-    history, _ = gradio_app.chat("What should we do?", earlier)
+    history, _, _ = gradio_app.chat("What should we do?", earlier)
     assert seen == ["What should we do?"]
     assert history == earlier + [
         {"role": "user", "content": timed("What should we do?")},
@@ -424,15 +424,15 @@ def test_chat_preserves_nonblank_message_whitespace(monkeypatch) -> None:
 
     def answer(question):
         seen.append(question)
-        return "reply"
+        return "reply", []
 
     monkeypatch.setattr(gradio_app, "ask_question", answer)
     message = "  Should riders speed?\n"
-    history, draft = gradio_app.chat(message, [])
+    history, draft, _ = gradio_app.chat(message, [])
     assert seen == [message]
     assert history[0]["content"].startswith(message)
     assert draft == ""
-    assert gradio_app.chat(" \n\t", history) == (history, "")
+    assert gradio_app.chat(" \n\t", history)[:2] == (history, "")
     assert seen == [message]
 
 
@@ -750,3 +750,117 @@ def test_summary_bar_is_pinned_collapsed_and_refreshed_with_the_chat() -> None:
     ]
     assert click.fn is gradio_app.summarize_now
     assert click.concurrency_id == "summaries"
+
+
+CHANGE = {
+    "code": "sla_dip_alert",
+    "name": "SLA dip",
+    "action": "set",
+    "enabled": True,
+    "value": 85,
+    "options": None,
+    "before": "off",
+    "after": "on, below 85% <b>",
+    "proposed_over": [False, 80, None],
+}
+
+
+def test_chat_hands_proposed_changes_to_the_confirmation_card(
+    monkeypatch,
+    frozen_now,
+) -> None:
+    from service.setting_changes import SettingChange
+
+    change = SettingChange.from_state(CHANGE)
+    monkeypatch.setattr(gradio_app, "ask_question", lambda q: ("Proposed.", [change]))
+    _, _, pending = gradio_app.chat("Alert me below 85", [])
+    assert pending == [CHANGE]
+    monkeypatch.setattr(gradio_app, "ask_question", lambda q: ("No change.", []))
+    assert gradio_app.chat("Thanks", [])[2] == gr.skip()
+
+
+def test_pending_card_shows_old_and_new_values_escaped() -> None:
+    html, box = gradio_app.pending_card([CHANGE])
+    assert "Proposed setting change" in html and "Not saved until you confirm" in html
+    assert "SLA dip" in html and "off" in html
+    assert "on, below 85% &lt;b&gt;" in html
+    assert box["visible"] is True
+    two, _ = gradio_app.pending_card([CHANGE, CHANGE])
+    assert "2 proposed setting changes" in two
+    assert gradio_app.pending_card([]) == ("", gr.update(visible=False))
+
+
+def test_confirm_saves_records_a_note_and_clears_the_card(
+    monkeypatch,
+    frozen_now,
+) -> None:
+    saved: list[dict] = []
+    notes: list[str] = []
+
+    def confirm(states):
+        saved.extend(states)
+        return ["Saved. SLA dip: on, below 85%."]
+
+    def note(text):
+        notes.append(text)
+        return {"when": NOW.isoformat()}
+
+    monkeypatch.setattr(gradio_app, "confirm_proposals", confirm)
+    monkeypatch.setattr(gradio_app, "add_note", note)
+    history, pending = gradio_app.confirm_pending([CHANGE], [])
+    assert saved == [CHANGE] and pending == []
+    assert notes == ["Saved. SLA dip: on, below 85%."]
+    assert history == [
+        {"role": "assistant", "content": timed("Saved. SLA dip: on, below 85%.")},
+    ]
+    assert gradio_app.confirm_pending([], history) == (history, [])
+
+
+def test_confirm_failure_keeps_the_card(monkeypatch) -> None:
+    def fail(states):
+        raise RuntimeError("database password in message")
+
+    monkeypatch.setattr(gradio_app, "confirm_proposals", fail)
+    with pytest.raises(gr.Error, match="Could not save the settings") as error:
+        gradio_app.confirm_pending([CHANGE], [])
+    assert "password" not in str(error.value)
+
+
+def test_cancel_saves_nothing_and_still_shows_a_note_when_storage_fails(
+    monkeypatch,
+    frozen_now,
+) -> None:
+    def unavailable(text):
+        raise RuntimeError("no database")
+
+    monkeypatch.setattr(gradio_app, "add_note", unavailable)
+    monkeypatch.setattr(
+        gradio_app,
+        "confirm_proposals",
+        lambda states: pytest.fail("Cancel must not save"),
+    )
+    history, pending = gradio_app.cancel_pending([CHANGE], [])
+    assert pending == []
+    assert history == [
+        {
+            "role": "assistant",
+            "content": timed("Cancelled. Nothing was changed (SLA dip)."),
+        },
+    ]
+    assert gradio_app.cancel_pending(None, None) == ([], [])
+
+
+def test_confirmation_buttons_and_card_are_wired() -> None:
+    def callbacks(fn):
+        return [c for c in gradio_app.app.fns.values() if c.fn is fn]
+
+    [confirm] = callbacks(gradio_app.confirm_pending)
+    [cancel] = callbacks(gradio_app.cancel_pending)
+    for callback in (confirm, cancel):
+        assert callback.concurrency_id == "workspace"
+        assert isinstance(callback.inputs[0], gr.State)
+        assert isinstance(callback.outputs[1], gr.State)
+    [card] = callbacks(gradio_app.pending_card)
+    assert card.inputs == [confirm.inputs[0]]
+    replies = callbacks(gradio_app.respond_to_pending)
+    assert all(reply.outputs[2] is confirm.inputs[0] for reply in replies)

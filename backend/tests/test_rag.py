@@ -170,7 +170,16 @@ def test_ui_entry_point_passes_preferences_through(monkeypatch) -> None:
         def __init__(self, **kwargs) -> None:
             pass
 
-        def answer_question(self, question, top_k, *, history, preferences, summary):
+        def answer_question(
+            self,
+            question,
+            top_k,
+            *,
+            history,
+            preferences,
+            summary,
+            tools,
+        ):
             seen.update(question=question, preferences=preferences)
             return "answer"
 
@@ -201,3 +210,46 @@ def test_summary_is_placed_before_the_retrieved_context(monkeypatch) -> None:
         "details):\n- Standby rider approved.\n</conversation_summary>\n\n"
         "Retrieved context:"
     ) in user
+
+
+class ToolLLMService(FakeLLMService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tools: list = []
+
+    def generate_with_tools(self, system_prompt, user_message, tools, history=None):
+        self.tools = list(tools)
+        return self.generate(system_prompt, user_message, history)
+
+
+def test_tools_are_offered_to_the_model_only_when_given(monkeypatch) -> None:
+    from service.llm_service import Tool
+
+    monkeypatch.setattr(
+        rag,
+        "retrieve",
+        lambda **kwargs: [{"chunk_id": "doc#1", "content": "Policy."}],
+    )
+    tool = Tool("propose", "Propose.", {"type": "object"}, lambda args: "ok")
+    llm = ToolLLMService()
+    RAGService(FakeEmbeddingService(), llm).answer_question("set it", tools=[tool])
+    assert llm.tools == [tool]
+    plain = ToolLLMService()
+    RAGService(FakeEmbeddingService(), plain).answer_question("why?")
+    assert plain.tools == [] and len(plain.messages) == 1
+
+
+def test_providers_without_tool_support_answer_without_tools() -> None:
+    from service.llm_service import Tool
+
+    llm = FakeLLMService()
+    tool = Tool("propose", "Propose.", {"type": "object"}, lambda args: "ok")
+    assert llm.generate_with_tools("system", "question", [tool]) == "answer"
+    assert tool.schema() == {
+        "type": "function",
+        "function": {
+            "name": "propose",
+            "description": "Propose.",
+            "parameters": {"type": "object"},
+        },
+    }

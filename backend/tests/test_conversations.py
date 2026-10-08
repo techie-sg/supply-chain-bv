@@ -150,12 +150,13 @@ def test_messages_record_who_what_and_an_ist_timestamp() -> None:
 def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> None:
     seen = []
 
-    def answer(question, *, history, preferences, summary=None):
+    def answer(question, *, history, preferences, summary=None, tools=()):
         seen.append(preferences)
+        assert [tool.name for tool in tools] == ["propose_setting_change"]
         return "reply"
 
     monkeypatch.setattr(conversations, "answer_question", answer)
-    assert conversations.ask_question("Hello") == "reply"
+    assert conversations.ask_question("Hello") == ("reply", [])
     assert conversations.conversation_history()[0]["what"] == "Hello"
     conversations.start_new_conversation()
     assert conversations.conversation_history() == []
@@ -203,7 +204,7 @@ def test_ui_browse_entry_points(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None: "reply",
+        lambda question, *, history, preferences, summary=None, tools=(): "reply",
     )
     conversations.ask_question("Earlier")
     earlier_id = conversations.current_conversation_id()
@@ -301,7 +302,7 @@ def test_ui_title_entry_point_uses_the_configured_model(store, monkeypatch) -> N
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None: (
+        lambda question, *, history, preferences, summary=None, tools=(): (
             "Use the standby rider."
         ),
     )
@@ -367,7 +368,7 @@ def test_ui_summary_entry_point_uses_the_open_chat(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None: "reply",
+        lambda question, *, history, preferences, summary=None, tools=(): "reply",
     )
     conversations.ask_question("Rain plan?")
     view = conversations.conversation_summary()
@@ -375,3 +376,36 @@ def test_ui_summary_entry_point_uses_the_open_chat(store, monkeypatch) -> None:
     store.rows[-1].summary, store.rows[-1].summary_covers_to = "- Rain plan.", 1
     view = conversations.conversation_summary()
     assert view is not None and view["covered"] == 2
+
+
+def test_note_is_stored_as_an_assistant_message_in_the_open_chat(store) -> None:
+    chat = service(lambda question, history: "reply")
+    assert chat.note("Saved.") is None
+    chat.ask("Hello")
+    note = chat.note("Saved. SLA dip: on, below 85%.")
+    assert note is not None and note["who"] == "assistant"
+    assert [message["what"] for message in chat.history()] == [
+        "Hello",
+        "reply",
+        "Saved. SLA dip: on, below 85%.",
+    ]
+
+
+def test_ui_ask_returns_the_changes_the_assistant_proposed(
+    store,
+    preference_store,
+    monkeypatch,
+) -> None:
+    def answer(question, *, history, preferences, summary=None, tools=()):
+        [tool] = tools
+        tool.run({"code": "sla_dip_alert", "action": "set", "value": 85})
+        return "Proposed: SLA dip below 85%. Press Confirm to save it."
+
+    monkeypatch.setattr(conversations, "answer_question", answer)
+    reply, [change] = conversations.ask_question("Alert me if SLA drops below 85")
+    assert reply.startswith("Proposed")
+    assert (change.code, change.value) == ("sla_dip_alert", 85)
+    # Nothing is saved until the manager confirms.
+    assert preference_store.rows == []
+    conversations.add_note("Saved.")
+    assert conversations.conversation_history()[-1]["what"] == "Saved."

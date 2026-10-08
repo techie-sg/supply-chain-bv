@@ -10,7 +10,7 @@ from domain.chat import ChatMessage
 from queries.vector_store import retrieve
 from service.embedding_service import EmbeddingService
 from service.factory import create_embedding_service, create_llm_service
-from service.llm_service import LLMService
+from service.llm_service import LLMService, Tool
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -57,11 +57,13 @@ class RAGService:
         history: Sequence[ChatMessage] | None = None,
         preferences: PreferenceContext | None = None,
         summary: str | None = None,
+        tools: Sequence[Tool] = (),
     ) -> str:
         """Retrieve evidence and answer using the injected provider services.
 
         With preferences, the model sees the manager's settings and applies them.
-        It cannot change them; that happens only in the Settings tab.
+        With tools, the model may call them before answering; the settings tool
+        only proposes changes, which the manager confirms outside the model.
         `summary` stands in for older messages that `history` no longer holds.
         """
         if top_k < 1:
@@ -96,10 +98,20 @@ class RAGService:
             )
         if preferences is not None:
             user_message = f"{preferences.prompt_block()}\n\n{user_message}"
-        answer = self.llm_service.generate(
-            system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
-            user_message=user_message,
-            history=history,
+        system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        answer = (
+            self.llm_service.generate_with_tools(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                tools=tools,
+                history=history,
+            )
+            if tools
+            else self.llm_service.generate(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                history=history,
+            )
         )
         logger.info(
             "RAG answer completed",
@@ -121,6 +133,7 @@ def answer_question(
     history: Sequence[ChatMessage] | None = None,
     preferences: PreferenceContext | None = None,
     summary: str | None = None,
+    tools: Sequence[Tool] = (),
 ) -> str:
     """UI entry point composing the configured services."""
     settings = get_settings()
@@ -134,4 +147,5 @@ def answer_question(
         history=history,
         preferences=preferences,
         summary=summary,
+        tools=tools,
     )
