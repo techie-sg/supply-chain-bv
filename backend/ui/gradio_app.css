@@ -116,6 +116,15 @@ body { margin: 0; background: var(--desk-bg); }
 #starter-prompts .prompt-button:hover { background: var(--desk-tint); border-color: var(--desk-accent); box-shadow: 0 4px 14px #5751d90a; }
 #message-composer { background-color: var(--desk-surface); gap: 12px; align-items: center; border: 1px solid var(--desk-line); padding: 14px 16px 14px 22px; border-radius: 18px; box-shadow: 0 4px 20px #00000010; }
 #message-composer:focus-within { border-color: var(--desk-accent); box-shadow: 0 0 0 3px var(--desk-tint); }
+#pending-changes { width: 100% !important; margin: 0 !important; gap: 10px; background-color: var(--desk-surface); border: 1px solid var(--desk-accent); border-radius: 16px; padding: 14px 18px; box-shadow: 0 4px 20px #00000018; }
+#pending-changes .pending-card { margin: 0; }
+#pending-changes .pending-title { margin: 0 0 8px; font-weight: 600; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; }
+#pending-changes .pending-title span { font-weight: 400; font-size: 0.85em; color: var(--desk-muted); }
+#pending-changes ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+#pending-changes li { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; font-size: 0.92em; }
+#pending-changes .change-from { color: var(--desk-muted); text-decoration: line-through; text-decoration-color: #ffffff40; }
+#pending-changes .change-arrow { color: var(--desk-accent); }
+#pending-actions { gap: 8px; justify-content: flex-end; }
 #message-input { background: transparent; border-width: 0 !important; }
 #message-input label { border: none; box-shadow: none; }
 #message-input textarea { background: transparent; box-shadow: none; border: none; font-size: 16px; line-height: 24px; padding: 12px 0; min-height: 48px; }

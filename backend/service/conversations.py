@@ -24,9 +24,11 @@ from queries.conversations import (
 )
 from service.dreaming import handover_block
 from service.factory import create_llm_service
-from service.preferences import demo_preferences
+from service.llm_service import Tool
+from service.preferences import PreferenceService, demo_preferences
 from service.rag import answer_question
 from service.scenarios import TIMEZONE
+from service.setting_changes import SettingChange, SettingChanges, tidy_reply
 from service.summaries import history_start
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -160,6 +162,22 @@ class ConversationService:
         append_message(conversation.id, new_message("assistant", reply), self.engine)
         return reply
 
+    def note(self, text: str) -> dict[str, str] | None:
+        """Add an assistant note to the open chat, such as a confirmed setting.
+
+        Stored like any reply, so later answers know what happened.
+        """
+        conversation = latest_conversation(
+            self.store_id,
+            self.manager_id,
+            self.engine,
+        )
+        if conversation is None:
+            return None
+        message = new_message("assistant", text)
+        append_message(conversation.id, message, self.engine)
+        return message
+
     def title_latest(self) -> str | None:
         """Give the latest conversation a title once it has its first answer.
 
@@ -207,15 +225,18 @@ def _answer(
     *,
     history: Sequence[ChatMessage],
     summary: str | None = None,
+    preferences: PreferenceService | None = None,
+    tools: Sequence[Tool] = (),
 ) -> str:
     """Answer with the settings, the chat's summary and the last handover in view."""
     handover = handover_block(DEMO_STORE_ID)
     return answer_question(
         question,
         history=history,
-        preferences=demo_preferences(),
+        preferences=preferences or demo_preferences(),
         summary=summary,
         handover=handover,
+        tools=tools,
     )
 
 
@@ -236,9 +257,34 @@ def _service() -> ConversationService:
     )
 
 
-def ask_question(question: str) -> str:
-    """UI entry point: answer using the stored history of the latest chat."""
-    return _service().ask(question)
+def ask_question(question: str) -> tuple[str, list[SettingChange]]:
+    """UI entry point: answer using the stored history of the latest chat.
+
+    Also returns the setting changes the assistant proposed in this answer;
+    none is saved until the manager confirms it.
+    """
+    preferences = demo_preferences()
+    changes = SettingChanges(preferences)
+    service = ConversationService(
+        DEMO_STORE_ID,
+        DEMO_MANAGER_ID,
+        answer=lambda question, **kwargs: tidy_reply(
+            _answer(
+                question,
+                preferences=preferences,
+                tools=[changes.tool()],
+                **kwargs,
+            ),
+            changes.proposals,
+        ),
+        titler=_title,
+    )
+    return service.ask(question), changes.proposals
+
+
+def add_note(text: str) -> dict[str, str] | None:
+    """UI entry point: record an assistant note in the open chat."""
+    return _service().note(text)
 
 
 def conversation_history() -> list[dict[str, str]]:

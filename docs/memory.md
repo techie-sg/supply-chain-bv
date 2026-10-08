@@ -18,7 +18,7 @@ Not designed yet: approval log, reminders and snoozed alerts, trace events.
 ## Principles
 
 1. Raw records are append-only. Messages are never edited; settings changes supersede rows; only summaries are rewritten.
-2. Writes are deterministic. The model reads memory but never writes it; settings change only in the Settings tab.
+2. Writes are deterministic. The model reads memory but never writes it. Settings change in the Settings tab, or in chat when the manager confirms a change the model proposed; code validates and saves both.
 3. Settings come from a fixed catalogue with typed values and limits, and can make policy stricter, never looser.
 4. Memory text is user-written data, treated as reference and never as instructions.
 5. Everything is scoped to a store and manager. The demo has one: `DS-BLR-014`, `karthik`.
@@ -99,14 +99,16 @@ Alert `options`, all optional: `{"days": ["sat", "sun"], "start": "19:00", "end"
 - A change inserts a new `active` row and marks the old one `superseded`, in one transaction. Reset marks it `removed`. Saving an unchanged value stores nothing.
 - Validation against the definition: numbers within min and max, booleans only for unlocked items, choices from `allowed_values`, view lists non-empty and without repeats, alert options well formed. A rejected item is explained and doesn't block the others.
 
-**Settings tab** (the only way to change settings)
+**Settings tab**
 - Categories in a left list (Alerts, Batching, Incentive, Greeting), one panel at a time.
 - One Save for all items, and a Reset to default per item.
 - The incentive cap is a single amount field: entering an amount turns it on, clearing it turns it off.
 
 **Active settings:** a block pinned at the bottom of the chat sidebar lists what is on, tags the manager's own values "yours", and puts everything off on one line. Edit opens Settings; it refreshes on load and after each save or reset.
 
-**Read path:** every question includes a `<preferences>` block with each item's effective value, whether it is customized, its limits and its description. The model applies it, cannot change it, and points the manager to the Settings tab.
+**Chat:** the model can propose a change with the `propose_setting_change` tool (`service/setting_changes.py`). Code merges the request into the current setting (unmentioned fields keep their values), validates it like the Settings tab, and shows a card with the current and new value. Only **Confirm** saves it, through the same `PreferenceService` path; **Cancel** discards it. Both add a note to the chat. Details: [alerts.md](alerts.md), section 1.
+
+**Read path:** every question includes a `<preferences>` block with each item's effective value, whether it is customized, its limits and its description. The model applies it and can only propose changes, never save them.
 
 ## 3. Conversation summary
 
@@ -175,7 +177,7 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | 3 | The current chat is the latest by `updated_at`; no status, `ended_at` or idle timeout | stored active or closed flags, which can go stale |
 | 4 | One demo manager per store; everything per manager | store-wide preferences |
 | 5 | Settings are a fixed catalogue with min, max and locked policy items | free-form rules: can't be validated |
-| 6 | Settings change only in the Settings tab; the model only reads them | model tool calls: in testing the model dropped changes and claimed saves it never made |
+| 6 | Settings change in the Settings tab, or in chat as a model proposal that code validates and the manager confirms (revised; was Settings tab only) | the model saving directly: in testing it dropped changes and claimed saves it never made. Now the tool only proposes and returns `saved: false`, code merges unmentioned fields, the card shows exactly what will be saved, and code rewrites a reply that only echoes the tool |
 | 7 | Settings changes supersede rows, never edit them | in-place updates lose history |
 | 8 | Incentive cap is on when an amount is set | a separate on/off switch, which saved amounts that were off |
 | 9 | Titles are model-written after the first answer, set once | first-question titles: less readable |
@@ -215,6 +217,7 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | `queries/conversations.py`, `queries/preferences.py` | database access |
 | `service/conversations.py` | ask, history, titles, sidebar entry points |
 | `service/preferences.py` | effective settings, validation, save and reset, `<preferences>` block |
+| `service/setting_changes.py` | chat setting changes: tool, merge, validate, confirm |
 | `service/summaries.py`, `service/scheduler.py` | summary folding, idle job |
 | `ui/gradio_app.py`, `ui/settings.py` | chat, sidebar, Settings tab |
 | `service/rag_data/prompts/` | system, title and summary prompts |

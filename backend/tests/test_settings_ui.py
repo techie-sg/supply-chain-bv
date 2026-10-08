@@ -239,9 +239,9 @@ def test_summary_is_shown_in_the_sidebar_and_refreshed_after_changes() -> None:
         if callback.fn is settings.load_summary
     ]
     assert all(callback.outputs == [summary] for callback in refreshers)
-    # Page load, Save settings, one reset per configurable item, and accepting
-    # a suggestion.
-    assert len(refreshers) == 1 + 1 + len(settings.ALERT_CODES) + 3 + 1
+    # Page load, Save settings, one reset per configurable item, accepting a
+    # suggestion, and confirming a change proposed in chat.
+    assert len(refreshers) == 1 + 1 + len(settings.ALERT_CODES) + 3 + 1 + 1
     edit = next(
         item
         for item in gradio_app.app.blocks.values()

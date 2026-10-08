@@ -15,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from logging_config import configure_logging
 from service.conversations import (
+    add_note,
     ask_question,
     conversation_history,
     conversation_summary,
@@ -32,6 +33,7 @@ from service.scenarios import (
     scenario_details,
     scenario_names,
 )
+from service.setting_changes import confirm_proposals
 from service.summaries import (
     idle_summary_job,
     summarize_latest_conversation,
@@ -494,15 +496,19 @@ def clear_chat() -> tuple[list[dict], str]:
 def chat(
     message: str,
     history: list[dict] | None,
-) -> tuple[list[dict], str]:
-    """Answer from stored history; keep the draft and display intact on failure."""
+) -> tuple[list[dict], str, Any]:
+    """Answer from stored history; keep the draft and display intact on failure.
+
+    The third value is the setting changes the answer proposed, for the
+    confirmation card; it is left as it was when the answer proposed none.
+    """
     history = history or []
     if not message.strip():
-        return history, ""
+        return history, "", gr.skip()
     request_id = uuid4().hex
     try:
         with structlog.contextvars.bound_contextvars(request_id=request_id):
-            answer = ask_question(message)
+            answer, proposals = ask_question(message)
     except (
         requests.RequestException,
         SQLAlchemyError,
@@ -515,20 +521,26 @@ def chat(
             "The assistant is unavailable right now. Please try again.",
         ) from exc
     now = datetime.now(TIMEZONE)
-    return history + [
-        {"role": "user", "content": _with_time(message, now, now)},
-        {"role": "assistant", "content": _with_time(answer, now, now)},
-    ], ""
+    pending = [change.to_state() for change in proposals] if proposals else gr.skip()
+    return (
+        history
+        + [
+            {"role": "user", "content": _with_time(message, now, now)},
+            {"role": "assistant", "content": _with_time(answer, now, now)},
+        ],
+        "",
+        pending,
+    )
 
 
 def respond_to_pending(
     message: str,
     history: list[dict] | None,
-) -> Iterator[tuple[list[dict], str]]:
+) -> Iterator[tuple[list[dict], str, Any]]:
     """Answer the message already displayed by the browser without duplicating it."""
     history = history or []
     if not message.strip():
-        yield history, ""
+        yield history, "", gr.skip()
         return
     previous = (
         history[:-1] if history and history[-1].get("role") == "user" else history
@@ -536,8 +548,72 @@ def respond_to_pending(
     try:
         yield chat(message, previous)
     except gr.Error:
-        yield previous, message
+        yield previous, message, gr.skip()
         raise
+
+
+def pending_card(pending: list[dict] | None) -> tuple[str, dict]:
+    """The proposed setting changes, old to new, waiting for Confirm or Cancel."""
+    if not pending:
+        return "", gr.update(visible=False)
+    items = "".join(
+        f"<li><strong>{escape(change['name'])}</strong>"
+        f'<span class="change-from">{escape(change["before"])}</span>'
+        '<span class="change-arrow" aria-label="changes to">→</span>'
+        f'<span class="change-to">{escape(change["after"])}</span></li>'
+        for change in pending
+    )
+    title = (
+        "Proposed setting change"
+        if len(pending) == 1
+        else f"{len(pending)} proposed setting changes"
+    )
+    card = (
+        f'<div class="pending-card"><p class="pending-title">{title}'
+        "<span>Not saved until you confirm</span></p>"
+        f"<ul>{items}</ul></div>"
+    )
+    return card, gr.update(visible=True)
+
+
+def _with_note(history: list[dict] | None, text: str) -> list[dict]:
+    """Store an assistant note in the open chat and show it."""
+    now = datetime.now(TIMEZONE)
+    try:
+        stored = add_note(text)
+    except (SQLAlchemyError, RuntimeError, LookupError):
+        logger.warning("Could not store the note in the conversation", exc_info=True)
+        stored = None
+    when = datetime.fromisoformat(stored["when"]) if stored else now
+    return (history or []) + [
+        {"role": "assistant", "content": _with_time(text, when, now)},
+    ]
+
+
+def confirm_pending(
+    pending: list[dict] | None,
+    history: list[dict] | None,
+) -> tuple[list[dict], list]:
+    """Save the proposed setting changes the manager confirmed."""
+    if not pending:
+        return history or [], []
+    try:
+        results = confirm_proposals(pending)
+    except (SQLAlchemyError, RuntimeError) as exc:
+        logger.exception("Could not save confirmed setting changes")
+        raise gr.Error("Could not save the settings. Please try again.") from exc
+    return _with_note(history, "\n\n".join(results)), []
+
+
+def cancel_pending(
+    pending: list[dict] | None,
+    history: list[dict] | None,
+) -> tuple[list[dict], list]:
+    """Discard the proposed setting changes; nothing is saved."""
+    if not pending:
+        return history or [], []
+    names = ", ".join(change["name"] for change in pending)
+    return _with_note(history, f"Cancelled. Nothing was changed ({names})."), []
 
 
 def _assistant_context(context: dict[str, Any] | None) -> str:
@@ -627,6 +703,8 @@ def build_app() -> gr.Blocks:
             elem_id="brand-home",
         )
         current = gr.State(None)
+        # Setting changes proposed in chat, waiting for Confirm or Cancel.
+        pending_changes = gr.State([])
         with gr.Sidebar(label="Chats", width=272, elem_id="chat-sidebar"):
             new_chat = gr.Button(
                 "New chat",
@@ -723,6 +801,28 @@ def build_app() -> gr.Blocks:
                 )
                 pending_message = gr.Textbox(visible="hidden", interactive=False)
                 with gr.Column(elem_id="composer-dock", min_width=0):
+                    with gr.Column(
+                        visible=False,
+                        elem_id="pending-changes",
+                        min_width=0,
+                    ) as pending_box:
+                        pending_html = gr.HTML(apply_default_css=False)
+                        with gr.Row(elem_id="pending-actions"):
+                            confirm_changes = gr.Button(
+                                "Confirm",
+                                variant="primary",
+                                size="sm",
+                                scale=0,
+                                min_width=96,
+                                elem_id="confirm-changes",
+                            )
+                            cancel_changes = gr.Button(
+                                "Cancel",
+                                size="sm",
+                                scale=0,
+                                min_width=96,
+                                elem_id="cancel-changes",
+                            )
                     processing = gr.HTML(
                         PROCESSING_STATUS,
                         visible=False,
@@ -1049,7 +1149,7 @@ def build_app() -> gr.Blocks:
             ).then(
                 respond_to_pending,
                 inputs=[pending_message, chatbot],
-                outputs=[chatbot, message],
+                outputs=[chatbot, message, pending_changes],
                 show_progress="hidden",
                 concurrency_id="workspace",
                 concurrency_limit=1,
@@ -1116,6 +1216,35 @@ def build_app() -> gr.Blocks:
             fn=None,
             js=CLOSE_SIDEBAR_ON_PHONE_JS,
         )
+        pending_changes.change(
+            pending_card,
+            inputs=pending_changes,
+            outputs=[pending_html, pending_box],
+            queue=False,
+            show_progress="hidden",
+        )
+        confirm_changes.click(
+            confirm_pending,
+            inputs=[pending_changes, chatbot],
+            outputs=[chatbot, pending_changes],
+            concurrency_id="workspace",
+            concurrency_limit=1,
+        ).then(
+            settings.load_settings,
+            outputs=settings_form.outputs(),
+            concurrency_id="settings",
+            concurrency_limit=1,
+        ).then(settings.load_summary, outputs=settings_summary)
+        cancel_changes.click(
+            cancel_pending,
+            inputs=[pending_changes, chatbot],
+            outputs=[chatbot, pending_changes],
+            concurrency_id="workspace",
+            concurrency_limit=1,
+        )
+        # A proposal belongs to the chat it was made in.
+        for event in (new_chat.click, history_list.input, load.click):
+            event(list, outputs=pending_changes, queue=False)
     return app
 
 
