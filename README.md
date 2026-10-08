@@ -30,6 +30,14 @@ Set these values in `backend/.env` or the process environment. Environment varia
 
 Example database URL: `postgresql+psycopg://user:password@localhost:5432/dispatchdesk`.
 
+To use an existing local PostgreSQL database without changing `.env`, export its URL before running the CLI:
+
+```bash
+export DATABASE_URL='postgresql+psycopg://user:password@localhost:5432/dispatchdesk'
+```
+
+The local server needs the pgvector extension. The same migrations and commands work with local PostgreSQL.
+
 Run from `backend/`:
 
 ```bash
@@ -88,7 +96,7 @@ Install dependencies during the build. Use the `python` commands above at runtim
 
 ### Scheduled conversation summaries
 
-Idle-conversation summarization runs through the `summaries` CLI command. Gradio keeps the **Summarize now** button and existing after-answer folding, but does not start a scheduler. Create a separate Railway cron service from the same repository with root `/backend`:
+Idle-conversation summarization runs through the `summaries` CLI command. In chat, **Summary** beside the composer opens the saved summary and its **Create summary** or **Update summary** action. Gradio keeps existing after-answer folding, but does not start a scheduler. Create a separate Railway cron service from the same repository with root `/backend`:
 
 | Setting | Value |
 | --- | --- |
