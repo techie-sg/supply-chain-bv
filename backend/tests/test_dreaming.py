@@ -1,4 +1,4 @@
-from datetime import date, datetime, time
+from datetime import date, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
@@ -409,7 +409,7 @@ def test_no_notes_means_no_handover_block(review) -> None:
     assert dreaming.handover_block("DS-1") is None
 
 
-def test_entry_points_use_the_configured_model_and_daily_time(
+def test_run_review_uses_the_configured_model(
     review,
     monkeypatch,
 ) -> None:
@@ -420,5 +420,3 @@ def test_entry_points_use_the_configured_model_and_daily_time(
     monkeypatch.setattr(dreaming, "create_llm_service", lambda: Model())
     report = dreaming.run_review()
     assert report.chats == 0 and report.failures == []
-    job = dreaming.daily_review_job()
-    assert job.at == time(23, 30) and job.tz == TIMEZONE

@@ -86,7 +86,7 @@ Set `DATABASE_URL`, `JINA_API_KEY`, and `GROQ_API_KEY` on the application servic
 
 ### Scheduled conversation summaries
 
-By default, the app checks for idle conversations every five minutes. To use Railway cron instead, create a separate service from the same repository with root `/backend`:
+Idle-conversation summarization runs through the `summaries` CLI command. Gradio keeps the **Summarize now** button and existing after-answer folding, but does not start a scheduler. Create a separate Railway cron service from the same repository with root `/backend`:
 
 | Setting | Value |
 | --- | --- |
@@ -95,11 +95,11 @@ By default, the app checks for idle conversations every five minutes. To use Rai
 | Variables | `DATABASE_URL`, `GROQ_API_KEY` |
 | Healthcheck and public domain | None |
 
-Set the web service's start command to `python cli.py app --no-scheduler` so only cron services run scheduled jobs. Manual and after-answer summaries continue to work. The cron command runs one batch of up to ten conversations idle for at least thirty minutes, then exits. Railway schedules use UTC. Locally, run the same task with `uv run python cli.py summaries`.
+Keep the web service's start command as `python cli.py app`. The cron command runs one batch of up to ten conversations idle for at least thirty minutes, then exits. Railway schedules use UTC. Locally, run the same task with `uv run python cli.py summaries`.
 
 ### Daily review
 
-The app runs the daily review (dreaming) at 23:30 IST; admins can also run it from **Run review now** in Demo tools. With `--no-scheduler`, add a second cron service:
+The daily review (dreaming) runs from cron once a day; admins can also run it from **Run review now** in Demo tools. Create a second cron service from the same repository with root `/backend`:
 
 | Setting | Value |
 | --- | --- |

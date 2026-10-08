@@ -33,34 +33,24 @@ def test_cli_usage_exits_without_starting_services(tmp_path, arguments, code) ->
         )
 
 
-@pytest.mark.parametrize("external_cron", [False, True])
-def test_app_can_delegate_scheduling_to_external_cron(
-    monkeypatch,
-    external_cron,
-) -> None:
-    job = Mock()
-    review = Mock()
+def test_app_launch_never_runs_summarization(monkeypatch) -> None:
+    summary_service = Mock()
     launch = Mock()
-    monkeypatch.setattr(gradio_app, "idle_summary_job", lambda: job)
-    monkeypatch.setattr(gradio_app, "daily_review_job", lambda: review)
+    monkeypatch.setattr(summaries, "summary_service", summary_service)
     monkeypatch.setattr(gradio_app, "configure_logging", lambda: None)
     monkeypatch.setattr(gradio_app.app, "launch", launch)
-    cli.main(["app", "--no-scheduler"] if external_cron else ["app"])
-    assert job.start.call_count == (0 if external_cron else 1)
-    assert review.start.call_count == (0 if external_cron else 1)
+    cli.main(["app"])
+    summary_service.assert_not_called()
     launch.assert_called_once()
 
 
-def test_summary_command_runs_one_batch_without_starting_scheduler(monkeypatch) -> None:
+def test_summary_command_runs_one_batch_and_returns(monkeypatch) -> None:
     service = Mock()
     service.summarize_idle.return_value = 2
-    job = Mock()
     monkeypatch.setattr(summaries, "summary_service", lambda: service)
-    monkeypatch.setattr(summaries, "idle_summary_job", job)
     monkeypatch.setattr(logging_config, "configure_logging", lambda: None)
     cli.main(["summaries"])
     service.summarize_idle.assert_called_once_with()
-    job.assert_not_called()
 
 
 def test_summary_startup_failure_propagates_to_fail_the_cron_run(monkeypatch) -> None:

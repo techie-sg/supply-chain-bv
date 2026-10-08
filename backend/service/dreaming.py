@@ -13,7 +13,7 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date, datetime, time
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -29,7 +29,6 @@ from constants import (
     DEMO_STORE_ID,
     DREAMING_MIN_CHATS,
     DREAMING_RECENT_CHATS,
-    DREAMING_RUN_AT,
 )
 from database.models import Conversation, Suggestion
 from domain.memory import (
@@ -54,7 +53,6 @@ from service.factory import create_llm_service
 from service.preferences import PreferenceError, PreferenceService, validate
 from service.rag import NO_GUIDANCE_ANSWER
 from service.scenarios import TIMEZONE
-from service.scheduler import DailyJob
 from service.summaries import SummaryService, summary_service
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -440,11 +438,6 @@ def dreaming_service() -> DreamingService:
 def run_review() -> ReviewReport:
     """Admin entry point: run the daily review now."""
     return dreaming_service().run()
-
-
-def daily_review_job() -> DailyJob:
-    hour, minute = (int(part) for part in DREAMING_RUN_AT.split(":"))
-    return DailyJob("daily-review", time(hour, minute), TIMEZONE, run_review)
 
 
 # Manager suggestions ---------------------------------------------------------
