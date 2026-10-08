@@ -75,29 +75,34 @@ class ConversationService:
         answer: Answer,
         engine: Engine | None = None,
         titler: Titler | None = None,
+        conversation_id: str | None = None,
     ) -> None:
         self.store_id = store_id
         self.manager_id = manager_id
         self.answer = answer
         self.engine = engine
         self.titler = titler
+        self.conversation_id = UUID(conversation_id) if conversation_id else None
+
+    def selected(self) -> Conversation | None:
+        """Resolve the selected chat independently of message recency."""
+        if self.conversation_id is not None:
+            return resume_conversation(
+                self.conversation_id,
+                self.store_id,
+                self.manager_id,
+                self.engine,
+            )
+        return latest_conversation(self.store_id, self.manager_id, self.engine)
 
     def history(self) -> list[dict[str, str]]:
         """Stored messages of the latest conversation, without creating one."""
-        conversation = latest_conversation(
-            self.store_id,
-            self.manager_id,
-            self.engine,
-        )
+        conversation = self.selected()
         return list(conversation.messages) if conversation else []
 
     def summary_view(self) -> dict[str, Any] | None:
         """The open chat's summary state; None for no chat or an empty one."""
-        conversation = latest_conversation(
-            self.store_id,
-            self.manager_id,
-            self.engine,
-        )
+        conversation = self.selected()
         if conversation is None or not conversation.messages:
             return None
         covers_to = conversation.summary_covers_to
@@ -117,16 +122,13 @@ class ConversationService:
 
     def start_new(self) -> Conversation:
         conversation = start_conversation(self.store_id, self.manager_id, self.engine)
+        self.conversation_id = conversation.id
         logger.info("Conversation started", conversation_id=str(conversation.id))
         return conversation
 
     def current_id(self) -> UUID | None:
         """The conversation new questions go to, if one exists."""
-        conversation = latest_conversation(
-            self.store_id,
-            self.manager_id,
-            self.engine,
-        )
+        conversation = self.selected()
         return conversation.id if conversation else None
 
     def past(self, limit: int = 20) -> list[dict[str, Any]]:
@@ -134,26 +136,20 @@ class ConversationService:
         return list_conversations(self.store_id, self.manager_id, limit, self.engine)
 
     def resume(self, conversation_id: UUID) -> list[dict[str, str]]:
-        """Continue a past conversation: it becomes the latest one."""
+        """Select a past conversation without changing its recency."""
         conversation = resume_conversation(
             conversation_id,
             self.store_id,
             self.manager_id,
             self.engine,
         )
+        self.conversation_id = conversation.id
         logger.info("Conversation resumed", conversation_id=str(conversation.id))
         return list(conversation.messages)
 
     def ask(self, question: str) -> str:
         """Store the question first, so a failed answer never loses it."""
-        conversation = (
-            latest_conversation(
-                self.store_id,
-                self.manager_id,
-                self.engine,
-            )
-            or self.start_new()
-        )
+        conversation = self.selected() or self.start_new()
         # The summary stands in for older messages; recent ones stay word for word.
         history = to_chat_messages(conversation.messages[history_start(conversation) :])
         extra = {"summary": conversation.summary} if conversation.summary else {}
@@ -167,11 +163,7 @@ class ConversationService:
 
         Stored like any reply, so later answers know what happened.
         """
-        conversation = latest_conversation(
-            self.store_id,
-            self.manager_id,
-            self.engine,
-        )
+        conversation = self.selected()
         if conversation is None:
             return None
         message = new_message("assistant", text)
@@ -184,11 +176,7 @@ class ConversationService:
         Runs after the answer is shown. Any failure leaves the title unset, and
         the sidebar keeps showing the first question instead.
         """
-        conversation = latest_conversation(
-            self.store_id,
-            self.manager_id,
-            self.engine,
-        )
+        conversation = self.selected()
         if self.titler is None or conversation is None or conversation.title:
             return None
         question = next(
@@ -248,18 +236,23 @@ def _title(question: str, answer: str) -> str:
     )
 
 
-def _service(manager_id: str = DEMO_MANAGER_ID) -> ConversationService:
+def _service(
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> ConversationService:
     return ConversationService(
         DEMO_STORE_ID,
         manager_id,
         answer=_answer,
         titler=_title,
+        conversation_id=conversation_id,
     )
 
 
 def ask_question(
     question: str,
     manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
 ) -> tuple[str, list[SettingChange]]:
     """UI entry point: answer using the stored history of the latest chat.
 
@@ -281,23 +274,31 @@ def ask_question(
             changes.proposals,
         ),
         titler=_title,
+        conversation_id=conversation_id,
     )
     return service.ask(question), changes.proposals
 
 
-def add_note(text: str, manager_id: str = DEMO_MANAGER_ID) -> dict[str, str] | None:
+def add_note(
+    text: str,
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> dict[str, str] | None:
     """UI entry point: record an assistant note in the open chat."""
-    return _service(manager_id).note(text)
+    return _service(manager_id, conversation_id).note(text)
 
 
-def conversation_history(manager_id: str = DEMO_MANAGER_ID) -> list[dict[str, str]]:
+def conversation_history(
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> list[dict[str, str]]:
     """UI entry point: stored messages to show when the page loads."""
-    return _service(manager_id).history()
+    return _service(manager_id, conversation_id).history()
 
 
-def start_new_conversation(manager_id: str = DEMO_MANAGER_ID) -> None:
+def start_new_conversation(manager_id: str = DEMO_MANAGER_ID) -> str:
     """UI entry point for Clear chat and scenario loads."""
-    _service(manager_id).start_new()
+    return str(_service(manager_id).start_new().id)
 
 
 def past_conversations(manager_id: str = DEMO_MANAGER_ID) -> list[dict[str, Any]]:
@@ -319,11 +320,32 @@ def current_conversation_id(manager_id: str = DEMO_MANAGER_ID) -> str | None:
     return str(conversation_id) if conversation_id else None
 
 
-def title_latest_conversation(manager_id: str = DEMO_MANAGER_ID) -> str | None:
+def title_latest_conversation(
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> str | None:
     """UI entry point: title the open chat after its first answer, if untitled."""
-    return _service(manager_id).title_latest()
+    return _service(manager_id, conversation_id).title_latest()
 
 
-def conversation_summary(manager_id: str = DEMO_MANAGER_ID) -> dict[str, Any] | None:
+def conversation_summary(
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> dict[str, Any] | None:
     """UI entry point: the open chat's summary card, or None if not summarized."""
-    return _service(manager_id).summary_view()
+    return _service(manager_id, conversation_id).summary_view()
+
+
+def conversation_details(
+    conversation_id: str,
+    manager_id: str = DEMO_MANAGER_ID,
+) -> dict[str, str | None]:
+    """Read browser metadata scoped to the manager who owns the selected chat."""
+    conversation = _service(manager_id, conversation_id).selected()
+    if conversation is None:
+        raise LookupError(conversation_id)
+    first_question = next(
+        (item["what"] for item in conversation.messages if item["who"] == "manager"),
+        None,
+    )
+    return {"id": str(conversation.id), "title": conversation.title or first_question}

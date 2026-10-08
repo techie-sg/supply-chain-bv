@@ -84,7 +84,7 @@ def test_empty_or_unavailable_suggestions_hide_the_entry(monkeypatch) -> None:
     assert "unavailable" in suggestions_ui.select("x")[0]
 
 
-def test_accept_and_dismiss_report_their_outcome(monkeypatch) -> None:
+def test_accept_and_dismiss_report_their_outcome(monkeypatch, preference_store) -> None:
     # The suggestion is one of the selected manager's pending ones.
     monkeypatch.setattr(
         suggestions_ui,
@@ -215,7 +215,7 @@ def test_sidebar_review_opens_the_suggestions_category() -> None:
     } <= names
 
 
-def test_suggestions_follow_the_selected_manager(monkeypatch) -> None:
+def test_suggestions_follow_the_selected_manager(monkeypatch, preference_store) -> None:
     owners = {"ananya": [SETTING], "karthik": [DRAFT]}
     seen = []
 

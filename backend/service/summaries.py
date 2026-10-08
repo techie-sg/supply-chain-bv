@@ -12,6 +12,7 @@ the last message folded in) change. Two triggers fold messages:
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 
 import requests
 import structlog
@@ -31,6 +32,7 @@ from database.models import Conversation
 from queries.conversations import (
     idle_unsummarized,
     latest_conversation,
+    resume_conversation,
     save_summary,
 )
 from service.factory import create_llm_service
@@ -128,16 +130,44 @@ class SummaryService:
         )
         return saved
 
-    def after_answer(self, store_id: str, manager_id: str) -> bool:
+    def after_answer(
+        self,
+        store_id: str,
+        manager_id: str,
+        conversation_id: str | None = None,
+    ) -> bool:
         """Fold older messages of the open chat if it exceeds a limit."""
-        conversation = latest_conversation(store_id, manager_id, self.engine)
+        conversation = (
+            resume_conversation(
+                UUID(conversation_id),
+                store_id,
+                manager_id,
+                self.engine,
+            )
+            if conversation_id
+            else latest_conversation(store_id, manager_id, self.engine)
+        )
         if conversation is None or not needs_folding(conversation):
             return False
         return self.fold(conversation, keep_recent=SUMMARY_RECENT_MESSAGES)
 
-    def summarize_now(self, store_id: str, manager_id: str) -> bool:
+    def summarize_now(
+        self,
+        store_id: str,
+        manager_id: str,
+        conversation_id: str | None = None,
+    ) -> bool:
         """Fold every message of the open chat, recent ones included, on request."""
-        conversation = latest_conversation(store_id, manager_id, self.engine)
+        conversation = (
+            resume_conversation(
+                UUID(conversation_id),
+                store_id,
+                manager_id,
+                self.engine,
+            )
+            if conversation_id
+            else latest_conversation(store_id, manager_id, self.engine)
+        )
         if conversation is None:
             return False
         return self.fold(conversation, keep_recent=0)
@@ -179,11 +209,17 @@ def summary_service() -> SummaryService:
     return SummaryService(summarize=_summarize)
 
 
-def summarize_latest_conversation(manager_id: str = DEMO_MANAGER_ID) -> bool:
+def summarize_latest_conversation(
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> bool:
     """UI entry point: fold the open chat after an answer if it is over a limit."""
-    return summary_service().after_answer(DEMO_STORE_ID, manager_id)
+    return summary_service().after_answer(DEMO_STORE_ID, manager_id, conversation_id)
 
 
-def summarize_open_conversation(manager_id: str = DEMO_MANAGER_ID) -> bool:
+def summarize_open_conversation(
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> bool:
     """UI entry point: bring the open chat's summary up to its latest message."""
-    return summary_service().summarize_now(DEMO_STORE_ID, manager_id)
+    return summary_service().summarize_now(DEMO_STORE_ID, manager_id, conversation_id)
