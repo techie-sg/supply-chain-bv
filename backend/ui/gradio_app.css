@@ -432,3 +432,18 @@ p.settings-status { padding-left: 0; color: var(--desk-muted); }
   #chat-summary-bar { top: 67px; }
   #summarize-now { min-width: 0 !important; }
 }
+
+/* Daily review: sidebar entry, Suggestions panel, and the admin report. */
+#suggestions-entry { align-items: center; justify-content: space-between; flex-wrap: nowrap; margin-bottom: 4px; }
+#suggestions-entry .sidebar-heading { margin: 0 0 0 10px; color: var(--desk-accent); }
+#review-suggestions { flex: 0 0 auto !important; min-height: 26px; padding: 2px 10px; font-size: 12px; border: none; background: var(--desk-tint); color: var(--desk-accent); }
+#suggestion-list { background: transparent !important; border: none !important; box-shadow: none !important; padding: 0 !important; }
+#suggestion-list .wrap { display: flex; flex-direction: column; gap: 4px; }
+#suggestion-list label { display: block !important; width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid var(--desk-line) !important; border-radius: 8px; background: var(--desk-surface) !important; color: var(--desk-ink) !important; font-size: 13px; cursor: pointer; }
+#suggestion-list label.selected, #suggestion-list label:has(input:checked) { border-color: var(--desk-accent) !important; background: var(--desk-tint) !important; }
+#suggestion-list input[type="radio"] { display: none; }
+#suggestion-detail { font-size: 13px; line-height: 1.6; }
+.suggestion-evidence { font-size: 12px; color: var(--desk-muted); }
+#suggestion-actions { align-items: center; gap: 12px; }
+#review-admin { width: 100%; gap: 12px; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--desk-line); }
+#review-actions { align-items: center; gap: 12px; }

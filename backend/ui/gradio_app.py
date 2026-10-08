@@ -36,11 +36,11 @@ from service.scenarios import (
 )
 from service.setting_changes import confirm_proposals
 from service.summaries import (
-    idle_summary_job,
     summarize_latest_conversation,
     summarize_open_conversation,
 )
 from ui import settings
+from ui import suggestions as suggestions_ui
 
 logger = structlog.stdlib.get_logger(__name__)
 CSS_PATH = Path(__file__).with_name("gradio_app.css")
@@ -705,6 +705,15 @@ def open_settings() -> dict:
     return gr.update(selected="settings")
 
 
+def show_suggestions() -> tuple[dict, ...]:
+    """Select the Suggestions category and show its panel.
+
+    Runs after the Settings tab is selected: updates sent before the tab first
+    renders would be lost.
+    """
+    return (gr.update(value="suggestions"), *settings.show_category("suggestions"))
+
+
 def _restore_tab(request: gr.Request) -> dict:
     view = request.query_params.get("view", "assistant")
     return gr.update(selected=view if view in ("demo", "settings") else "assistant")
@@ -805,6 +814,21 @@ def build_app() -> gr.Blocks:
                 elem_id="history-list",
             )
             with gr.Column(elem_id="settings-summary-block"):
+                with gr.Row(
+                    visible=False,
+                    elem_id="suggestions-entry",
+                ) as suggestions_entry:
+                    suggestions_entry_text = gr.HTML(
+                        '<p class="sidebar-heading">Suggestions</p>',
+                        apply_default_css=False,
+                    )
+                    review_suggestions = gr.Button(
+                        "Review",
+                        size="sm",
+                        scale=0,
+                        min_width=0,
+                        elem_id="review-suggestions",
+                    )
                 with gr.Row(elem_id="settings-summary-heading"):
                     gr.HTML(
                         '<p class="sidebar-heading">Active settings</p>',
@@ -1026,7 +1050,108 @@ def build_app() -> gr.Blocks:
                             "Synthetic starting snapshots · Refresh to see saved changes",
                             elem_classes="panel-note",
                         )
+                with gr.Column(elem_id="review-admin", min_width=0):
+                    gr.HTML(
+                        '<div class="loader-heading"><h2>Daily review (admin)</h2>'
+                        "<p>Runs every day at 23:30 IST. Drafts the handover note, "
+                        "proposes settings, and lists answers that need a look.</p></div>",
+                        apply_default_css=False,
+                    )
+                    with gr.Row(elem_id="review-actions"):
+                        run_review_button = gr.Button(
+                            "Run review now",
+                            variant="primary",
+                            scale=0,
+                            min_width=160,
+                        )
+                        mark_reviewed_button = gr.Button(
+                            "Mark all reviewed",
+                            scale=0,
+                            min_width=160,
+                        )
+                        review_status = gr.Markdown(elem_id="review-status")
+                    answer_issues = gr.Dataframe(
+                        value={"headers": [], "data": []},
+                        label="Answer issues",
+                        interactive=False,
+                        type="array",
+                        wrap=True,
+                        show_search="filter",
+                        elem_id="answer-issues",
+                    )
         app.load(_restore_tab, outputs=workspace, queue=False)
+        (
+            suggestion_items,
+            suggestion_detail,
+            suggestion_note,
+            suggestion_actions,
+            accept_suggestion,
+            dismiss_suggestion,
+            suggestion_status,
+        ) = settings_form.suggestions
+        suggestion_outputs = [
+            suggestions_entry,
+            suggestions_entry_text,
+            suggestion_items,
+            suggestion_detail,
+            suggestion_note,
+            suggestion_actions,
+            suggestion_status,
+        ]
+        assert settings_form.nav is not None
+        review_suggestions.click(
+            open_settings,
+            outputs=workspace,
+            js=CLOSE_SIDEBAR_ON_PHONE_JS,
+            queue=False,
+            show_progress="hidden",
+        ).then(
+            show_suggestions,
+            outputs=[settings_form.nav, *settings_form.category_outputs],
+            queue=False,
+            show_progress="hidden",
+        )
+        suggestion_items.input(
+            suggestions_ui.select,
+            inputs=[suggestion_items, manager],
+            outputs=[suggestion_detail, suggestion_note],
+        )
+        accept_suggestion.click(
+            suggestions_ui.accept,
+            inputs=[suggestion_items, suggestion_note, manager],
+            outputs=suggestion_outputs,
+            concurrency_id="settings",
+            concurrency_limit=1,
+        ).then(
+            settings.load_settings,
+            inputs=manager,
+            outputs=settings_form.outputs(),
+        ).then(settings.load_summary, inputs=manager, outputs=settings_summary)
+        dismiss_suggestion.click(
+            suggestions_ui.dismiss,
+            inputs=[suggestion_items, manager],
+            outputs=suggestion_outputs,
+            concurrency_id="settings",
+            concurrency_limit=1,
+        )
+        run_review_button.click(
+            suggestions_ui.run_review_now,
+            inputs=manager,
+            outputs=[review_status, answer_issues],
+            concurrency_id="review",
+            concurrency_limit=1,
+        ).then(
+            suggestions_ui.refresh_for,
+            inputs=manager,
+            outputs=suggestion_outputs,
+        )
+        mark_reviewed_button.click(
+            suggestions_ui.mark_issues_reviewed,
+            inputs=manager,
+            outputs=[review_status, answer_issues],
+            concurrency_id="review",
+            concurrency_limit=1,
+        )
         # Selecting the tab from the server works even when narrow screens fold
         # the tab into the "More tabs" menu.
         edit_settings.click(
@@ -1065,6 +1190,16 @@ def build_app() -> gr.Blocks:
                     concurrency_limit=1,
                 )
                 .then(settings.load_summary, inputs=manager, outputs=settings_summary)
+                .then(
+                    suggestions_ui.refresh_for,
+                    inputs=manager,
+                    outputs=suggestion_outputs,
+                )
+                .then(
+                    suggestions_ui.issues_table,
+                    inputs=manager,
+                    outputs=answer_issues,
+                )
             )
 
         show_manager(
@@ -1270,7 +1405,6 @@ app = build_app()
 
 def main() -> None:
     configure_logging()
-    idle_summary_job().start()
     port = int(os.environ.get("PORT", "7860"))
     logger.info("DispatchDesk starting", host="0.0.0.0", port=port)
     app.launch(

@@ -89,3 +89,21 @@ class AlertOptions(BaseModel):
         if days is not None and len(days) != len(set(days)):
             raise ValueError("days must not repeat")
         return days
+
+
+class SuggestionKind(StrEnum):
+    SETTING = "setting"
+    HANDOVER_DRAFT = "handover_draft"
+    ANSWER_ISSUE = "answer_issue"
+
+
+class SuggestionStatus(StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    DISMISSED = "dismissed"
+
+
+class AnswerIssue(StrEnum):
+    NO_GUIDANCE = "no_guidance"
+    UNANSWERED = "unanswered"
+    PUSHBACK = "pushback"

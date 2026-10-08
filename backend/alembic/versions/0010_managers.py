@@ -6,8 +6,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0009_managers"
-down_revision: str | Sequence[str] | None = "0008_conversation_summarized_at"
+revision: str = "0010_managers"
+down_revision: str | Sequence[str] | None = "0009_dreaming"
 
 MANAGERS = [
     {

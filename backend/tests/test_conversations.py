@@ -62,6 +62,8 @@ def store(monkeypatch) -> FakeStore:
     monkeypatch.setattr(conversations, "latest_conversation", fake.latest)
     monkeypatch.setattr(conversations, "start_conversation", fake.start)
     monkeypatch.setattr(conversations, "append_message", fake.append)
+    # Keep tests off any real database: no handover notes.
+    monkeypatch.setattr(conversations, "handover_block", lambda store_id: None)
     monkeypatch.setattr(conversations, "list_conversations", fake.list)
     monkeypatch.setattr(conversations, "resume_conversation", fake.resume)
     return fake
@@ -150,7 +152,15 @@ def test_messages_record_who_what_and_an_ist_timestamp() -> None:
 def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> None:
     seen = []
 
-    def answer(question, *, history, preferences, summary=None, tools=()):
+    def answer(
+        question,
+        *,
+        history,
+        preferences,
+        summary=None,
+        handover=None,
+        tools=(),
+    ):
         seen.append(preferences)
         assert [tool.name for tool in tools] == ["propose_setting_change"]
         return "reply"
@@ -204,7 +214,9 @@ def test_ui_browse_entry_points(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None, tools=(): "reply",
+        lambda question, *, history, preferences, summary=None, handover=None, tools=(): (
+            "reply"
+        ),
     )
     conversations.ask_question("Earlier")
     earlier_id = conversations.current_conversation_id()
@@ -302,7 +314,7 @@ def test_ui_title_entry_point_uses_the_configured_model(store, monkeypatch) -> N
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None, tools=(): (
+        lambda question, *, history, preferences, summary=None, handover=None, tools=(): (
             "Use the standby rider."
         ),
     )
@@ -368,7 +380,9 @@ def test_ui_summary_entry_point_uses_the_open_chat(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None, tools=(): "reply",
+        lambda question, *, history, preferences, summary=None, handover=None, tools=(): (
+            "reply"
+        ),
     )
     conversations.ask_question("Rain plan?")
     view = conversations.conversation_summary()
@@ -396,7 +410,15 @@ def test_ui_ask_returns_the_changes_the_assistant_proposed(
     preference_store,
     monkeypatch,
 ) -> None:
-    def answer(question, *, history, preferences, summary=None, tools=()):
+    def answer(
+        question,
+        *,
+        history,
+        preferences,
+        summary=None,
+        handover=None,
+        tools=(),
+    ):
         [tool] = tools
         tool.run({"code": "sla_dip_alert", "action": "set", "value": 85})
         return "Proposed: SLA dip below 85%. Press Confirm to save it."

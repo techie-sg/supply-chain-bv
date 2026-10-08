@@ -171,6 +171,7 @@ def test_categories_switch_panels_in_the_browser() -> None:
         "batching",
         "incentive",
         "greeting",
+        "suggestions",
     ]
     assert nav.value == "alerts"
     [callback] = [
@@ -179,9 +180,11 @@ def test_categories_switch_panels_in_the_browser() -> None:
         if callback.js == settings.SHOW_CATEGORY_JS
     ]
     assert callback.fn is None and not callback.queue
-    panels = callback.outputs
-    assert len(panels) == 4
-    assert [panel.visible for panel in panels] == [True, False, False, False]
+    *panels, save_row = callback.outputs
+    assert len(panels) == 5
+    assert [panel.visible for panel in panels] == [True, False, False, False, False]
+    assert save_row.elem_id == "settings-actions"
+    assert "category !== 'suggestions'" in settings.SHOW_CATEGORY_JS
     for key, _, _ in settings.CATEGORIES:
         assert f"category === '{key}'" in settings.SHOW_CATEGORY_JS
 
@@ -243,8 +246,8 @@ def test_summary_is_shown_in_the_sidebar_and_refreshed_after_changes() -> None:
     ]
     assert all(callback.outputs == [summary] for callback in refreshers)
     # Page load, switching manager, Save settings, one reset per configurable
-    # item, and confirming a change proposed in chat.
-    assert len(refreshers) == 1 + 1 + 1 + len(settings.ALERT_CODES) + 3 + 1
+    # item, accepting a suggestion, and confirming a change proposed in chat.
+    assert len(refreshers) == 1 + 1 + 1 + len(settings.ALERT_CODES) + 3 + 1 + 1
     edit = next(
         item
         for item in gradio_app.app.blocks.values()

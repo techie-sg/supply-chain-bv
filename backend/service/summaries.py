@@ -5,7 +5,7 @@ the last message folded in) change. Two triggers fold messages:
 
 - After an answer: when the raw messages (those after `summary_covers_to`)
   exceed the count or size limit, everything except the recent window is folded.
-- Idle: a scheduled job folds every message of chats whose last message is
+- Idle: the CLI cron job folds every message of chats whose last message is
   older than the idle time, so a complete summary exists once a chat goes quiet.
 """
 
@@ -23,7 +23,6 @@ from constants import (
     DEMO_STORE_ID,
     SUMMARY_IDLE_MINUTES,
     SUMMARY_JOB_BATCH,
-    SUMMARY_JOB_INTERVAL_SECONDS,
     SUMMARY_MAX_RAW_MESSAGES,
     SUMMARY_MAX_RAW_TOKENS,
     SUMMARY_RECENT_MESSAGES,
@@ -36,7 +35,6 @@ from queries.conversations import (
 )
 from service.factory import create_llm_service
 from service.scenarios import TIMEZONE
-from service.scheduler import IntervalJob
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -189,12 +187,3 @@ def summarize_latest_conversation(manager_id: str = DEMO_MANAGER_ID) -> bool:
 def summarize_open_conversation(manager_id: str = DEMO_MANAGER_ID) -> bool:
     """UI entry point: bring the open chat's summary up to its latest message."""
     return summary_service().summarize_now(DEMO_STORE_ID, manager_id)
-
-
-def idle_summary_job() -> IntervalJob:
-    """Every few minutes, summarize chats that have gone idle."""
-    return IntervalJob(
-        "idle-conversation-summaries",
-        SUMMARY_JOB_INTERVAL_SECONDS,
-        lambda: summary_service().summarize_idle(),
-    )

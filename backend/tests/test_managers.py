@@ -45,7 +45,7 @@ def test_choose_manager_falls_back_safely() -> None:
 def test_seeded_managers_have_unique_shifts() -> None:
     import importlib.util
 
-    path = Path(__file__).parents[1] / "alembic" / "versions" / "0009_managers.py"
+    path = Path(__file__).parents[1] / "alembic" / "versions" / "0010_managers.py"
     spec = importlib.util.spec_from_file_location("managers_migration", path)
     assert spec is not None and spec.loader is not None
     migration = importlib.util.module_from_spec(spec)

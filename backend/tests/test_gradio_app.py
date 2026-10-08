@@ -655,19 +655,6 @@ def test_summary_runs_after_the_answer_on_its_own_queue(monkeypatch) -> None:
     assert all(callback.concurrency_id == "summaries" for callback in callbacks)
 
 
-def test_launch_starts_the_idle_summary_job(monkeypatch) -> None:
-    started = []
-
-    class Job:
-        def start(self):
-            started.append(True)
-
-    monkeypatch.setattr(gradio_app, "idle_summary_job", Job)
-    monkeypatch.setattr(gradio_app.app, "launch", lambda **kwargs: None)
-    gradio_app.main()
-    assert started == [True]
-
-
 def test_summary_bar_is_hidden_for_an_empty_chat(monkeypatch) -> None:
     monkeypatch.setattr(
         gradio_app,
