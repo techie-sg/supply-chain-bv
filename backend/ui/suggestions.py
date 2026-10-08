@@ -23,6 +23,7 @@ from service.dreaming import (
     dismiss_suggestion,
     open_answer_issues,
     pending_suggestions,
+    plural,
     run_review,
 )
 from service.preferences import (
@@ -278,7 +279,22 @@ def run_review_now(manager_id: str = DEMO_MANAGER_ID) -> tuple[str, dict[str, An
         raise gr.Error(
             "The review could not run. Check the database connection.",
         ) from exc
-    return report.text(), issues_table(manager_id)
+    status = " ".join(part for part in (report.text(), _waiting(manager_id)) if part)
+    return status, issues_table(manager_id)
+
+
+def _waiting(manager_id: str) -> str:
+    """What is still open after the run, including output from earlier runs."""
+    try:
+        pending = len(pending_suggestions(manager_id=manager_id))
+        issues = len(open_answer_issues(manager_id=manager_id))
+    except (SQLAlchemyError, RuntimeError):
+        logger.warning("Could not count open review items", exc_info=True)
+        return ""
+    return (
+        f"Waiting: {plural(pending, 'suggestion')} for the manager, "
+        f"{plural(issues, 'answer issue')} to look at."
+    )
 
 
 def mark_issues_reviewed(

@@ -8,7 +8,7 @@ import pytest
 from database.models import Conversation, Suggestion
 from domain.memory import SuggestionKind, SuggestionStatus
 from service import dreaming
-from service.dreaming import DreamingService, json_array
+from service.dreaming import DreamingService, ReviewReport, json_array
 from service.preferences import PreferenceError, PreferenceService
 from service.rag import NO_GUIDANCE_ANSWER
 from service.scenarios import TIMEZONE
@@ -303,9 +303,10 @@ def test_run_reviews_each_chat_and_isolates_failures(review) -> None:
     assert cast(Any, reviewer.summaries).folded == [(review.chats[0].id, 0)]
     assert review.advanced == [(review.chats[0].id, 1, None)]
     assert report.text() == (
-        "Reviewed 1 chats: 1 answer issues, 0 handover drafts, 0 settings "
-        "suggestions. Failed: handover draft."
+        "Reviewed 1 chat with new messages: found 1 answer issue, drafted "
+        "0 handover notes, suggested 0 settings. Failed: handover draft."
     )
+    assert ReviewReport().text() == "No new messages since the last review."
 
 
 def test_a_failed_answer_review_does_not_advance_the_position(review) -> None:

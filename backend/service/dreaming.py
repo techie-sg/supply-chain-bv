@@ -76,13 +76,23 @@ class ReviewReport:
     failures: list[str] = field(default_factory=list)
 
     def text(self) -> str:
-        line = (
-            f"Reviewed {self.chats} chats: {self.answer_issues} answer issues, "
-            f"{self.handover_drafts} handover drafts, {self.settings} settings suggestions."
-        )
+        """Counts cover only what this run found; earlier runs' output is not included."""
+        if not self.chats:
+            line = "No new messages since the last review."
+        else:
+            line = (
+                f"Reviewed {plural(self.chats, 'chat')} with new messages: found "
+                f"{plural(self.answer_issues, 'answer issue')}, drafted "
+                f"{plural(self.handover_drafts, 'handover note')}, suggested "
+                f"{plural(self.settings, 'setting')}."
+            )
         if self.failures:
             line += f" Failed: {', '.join(self.failures)}."
         return line
+
+
+def plural(count: int, noun: str) -> str:
+    return f"{count} {noun}" if count == 1 else f"{count} {noun}s"
 
 
 class SettingCandidate(BaseModel):
