@@ -88,6 +88,30 @@ class ConversationService:
         )
         return list(conversation.messages) if conversation else []
 
+    def summary_view(self) -> dict[str, Any] | None:
+        """The open chat's summary state; None for no chat or an empty one."""
+        conversation = latest_conversation(
+            self.store_id,
+            self.manager_id,
+            self.engine,
+        )
+        if conversation is None or not conversation.messages:
+            return None
+        covers_to = conversation.summary_covers_to
+        if not conversation.summary or covers_to is None:
+            return {
+                "summary": None,
+                "covered": 0,
+                "total": len(conversation.messages),
+                "summarized_at": None,
+            }
+        return {
+            "summary": conversation.summary,
+            "covered": covers_to + 1,
+            "total": len(conversation.messages),
+            "summarized_at": conversation.summarized_at,
+        }
+
     def start_new(self) -> Conversation:
         conversation = start_conversation(self.store_id, self.manager_id, self.engine)
         logger.info("Conversation started", conversation_id=str(conversation.id))
@@ -243,3 +267,8 @@ def current_conversation_id() -> str | None:
 def title_latest_conversation() -> str | None:
     """UI entry point: title the open chat after its first answer, if untitled."""
     return _service().title_latest()
+
+
+def conversation_summary() -> dict[str, Any] | None:
+    """UI entry point: the open chat's summary card, or None if not summarized."""
+    return _service().summary_view()

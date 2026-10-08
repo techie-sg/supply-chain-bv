@@ -337,3 +337,41 @@ def test_a_summarized_chat_sends_the_summary_and_only_recent_messages(store) -> 
         "reply",
     ]
     assert seen[0][1] is None
+
+
+def test_summary_view_reports_coverage(store) -> None:
+    chat = service(lambda question, *, history, summary=None: "reply")
+    assert chat.summary_view() is None
+    chat.start_new()
+    assert chat.summary_view() is None
+    for index in range(5):
+        chat.ask(f"q{index}")
+    assert chat.summary_view() == {
+        "summary": None,
+        "covered": 0,
+        "total": 10,
+        "summarized_at": None,
+    }
+    row = store.rows[-1]
+    when = datetime(2026, 10, 7, 19, 42, tzinfo=conversations.TIMEZONE)
+    row.summary, row.summary_covers_to, row.summarized_at = "- Rain plan.", 5, when
+    assert chat.summary_view() == {
+        "summary": "- Rain plan.",
+        "covered": 6,
+        "total": 10,
+        "summarized_at": when,
+    }
+
+
+def test_ui_summary_entry_point_uses_the_open_chat(store, monkeypatch) -> None:
+    monkeypatch.setattr(
+        conversations,
+        "answer_question",
+        lambda question, *, history, preferences, summary=None: "reply",
+    )
+    conversations.ask_question("Rain plan?")
+    view = conversations.conversation_summary()
+    assert view is not None and view["summary"] is None and view["total"] == 2
+    store.rows[-1].summary, store.rows[-1].summary_covers_to = "- Rain plan.", 1
+    view = conversations.conversation_summary()
+    assert view is not None and view["covered"] == 2

@@ -149,3 +149,33 @@ def test_entry_points_use_the_configured_model_and_demo_manager(
     assert job.interval_seconds == SUMMARY_JOB_INTERVAL_SECONDS
     monkeypatch.setattr(summaries, "idle_unsummarized", lambda *args, **kwargs: [])
     assert job.run() == 0
+
+
+def test_summarize_now_folds_every_message_of_the_open_chat(saved, monkeypatch) -> None:
+    service = SummaryService(lambda system_prompt, user_message: "Summary")
+    monkeypatch.setattr(summaries, "latest_conversation", lambda *args: None)
+    assert not service.summarize_now("DS-1", "karthik")
+    open_chat = chat(8, covers_to=3)
+    monkeypatch.setattr(summaries, "latest_conversation", lambda *args: open_chat)
+    assert service.summarize_now("DS-1", "karthik")
+    assert saved[-1] == (open_chat.id, "Summary", 7, 3)
+    fully = chat(8, covers_to=7)
+    monkeypatch.setattr(summaries, "latest_conversation", lambda *args: fully)
+    assert not service.summarize_now("DS-1", "karthik")
+
+
+def test_ui_summarize_now_entry_point_uses_the_demo_manager(saved, monkeypatch) -> None:
+    class Model:
+        def generate(self, system_prompt, user_message):
+            return "Summary"
+
+    asked = []
+
+    def latest(store_id, manager_id, engine=None):
+        asked.append((store_id, manager_id))
+        return chat(2)
+
+    monkeypatch.setattr(summaries, "create_llm_service", lambda: Model())
+    monkeypatch.setattr(summaries, "latest_conversation", latest)
+    assert summaries.summarize_open_conversation()
+    assert asked == [("DS-BLR-014", "karthik")]

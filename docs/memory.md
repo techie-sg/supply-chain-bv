@@ -122,11 +122,17 @@ Alert `options`, all optional: `{"days": ["sat", "sun"], "start": "19:00", "end"
 
 **Triggers**
 - After an answer, on its own queue: if raw messages exceed either limit, fold all but the recent window.
+- On demand: **Summarize now** folds every message, the recent window included.
 - A scheduler thread started with the app (`service/scheduler.py`) folds every message of chats idle for 30 minutes that the summary doesn't fully cover. Selection uses positions and the last message's time, not `updated_at`.
 
 **Folding:** the previous summary plus the new slice go to `prompts/conversation_summary.md`, which keeps questions, diagnoses, proposals with their approval state, earlier figures marked as earlier, and open follow-ups, and forbids new facts. The save applies only if `summary_covers_to` is unchanged since the run started, sets `summarized_at`, and leaves `updated_at` alone.
 
-**Read path:** a `<conversation_summary>` block, then the raw messages, but always at least the recent window. On failure the full raw history is sent. The summary is model-only; the chat UI shows stored messages.
+**Read path:** a `<conversation_summary>` block, then the raw messages, but always at least the recent window. On failure the full raw history is sent.
+
+**UI:** a row pinned under the header while the chat scrolls, shown for any chat with messages:
+- A collapsed card, "Summary of earlier messages · covers 12 of 30 · updated 19:42", or "Not summarized yet · 4 messages". Expanded, it shows the summary in a capped, scrollable area, with a note that the assistant wrote it for its own context. All messages stay visible below.
+- **Summarize now** (or **Update summary** once one exists) folds every message so far, the latest included, into the summary and opens the card. If nothing is new, a notice says so.
+- The row refreshes on page load, opening a chat, New chat, a scenario load, and after each answer's summarization step. Idle-job summaries appear the next time the chat is loaded or opened. The sidebar has no summary marker.
 
 Example: at 18 messages, 0 to 11 are folded (`summary_covers_to` = 11); at 30, 12 to 23 (= 23).
 
@@ -166,6 +172,8 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | 11 | Summaries trigger on count and size limits, plus an idle scheduler | lazy checks on page load: summaries not ready until a chat is reopened |
 | 12 | Summary saves are conditional on the previous position | last write wins: overlapping runs would overwrite each other |
 | 13 | The scheduler is an in-process thread with no new dependency | APScheduler or Railway cron: not needed yet |
+| 14 | The summary is shown as a collapsed card above the chat, with all messages kept visible | hiding folded messages behind the card, or a separate panel: confusing or easy to miss |
+| 15 | The manager can summarize on demand, folding everything including recent messages; the card is pinned under the header | waiting for the limits or the idle job only |
 
 ## Deferred
 
@@ -184,7 +192,6 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 4. Briefing trigger: greeting only, or also at the start of a new chat?
 5. Handover notes: shift definition, and where notes are written.
 6. Where dreaming suggestions appear: a panel, or raised by the assistant.
-7. Whether to show the summary in the chat ("Earlier in this chat").
 
 ## Code
 
