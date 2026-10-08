@@ -202,7 +202,7 @@ def test_prompt_block_lists_every_item_with_state_and_limits(store) -> None:
     service().set("sla_dip_alert", True, 85)
     block = service().prompt_block()
     assert block.startswith("<preferences>") and block.endswith("</preferences>")
-    assert "changed only in the Settings tab" in block
+    assert "confirms a change proposed in chat" in block
     for code in PreferenceCode:
         assert f"- {code} (" in block
     assert "- sla_dip_alert (customized): SLA dip: on, below 85%" in block
