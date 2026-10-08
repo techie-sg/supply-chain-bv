@@ -5,7 +5,6 @@ import pytest
 
 from constants import (
     SUMMARY_IDLE_MINUTES,
-    SUMMARY_JOB_INTERVAL_SECONDS,
     SUMMARY_MAX_RAW_MESSAGES,
 )
 from database.models import Conversation
@@ -145,10 +144,8 @@ def test_entry_points_use_the_configured_model_and_demo_manager(
     monkeypatch.setattr(summaries, "latest_conversation", latest)
     assert summaries.summarize_latest_conversation()
     assert asked == [("DS-BLR-014", "karthik")]
-    job = summaries.idle_summary_job()
-    assert job.interval_seconds == SUMMARY_JOB_INTERVAL_SECONDS
     monkeypatch.setattr(summaries, "idle_unsummarized", lambda *args, **kwargs: [])
-    assert job.run() == 0
+    assert summaries.summary_service().summarize_idle() == 0
 
 
 def test_summarize_now_folds_every_message_of_the_open_chat(saved, monkeypatch) -> None:
