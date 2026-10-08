@@ -7,9 +7,14 @@ from unittest.mock import Mock
 import pytest
 
 import cli
-import logging_config
 from service import summaries
 from ui import gradio_app
+
+
+@pytest.fixture(autouse=True)
+def isolate_logging(monkeypatch):
+    monkeypatch.setattr(cli, "configure_logging", lambda: None)
+    monkeypatch.setattr(gradio_app, "configure_uvicorn_logging", lambda: None)
 
 
 @pytest.mark.parametrize(
@@ -48,7 +53,6 @@ def test_summary_command_runs_one_batch_and_returns(monkeypatch) -> None:
     service = Mock()
     service.summarize_idle.return_value = 2
     monkeypatch.setattr(summaries, "summary_service", lambda: service)
-    monkeypatch.setattr(logging_config, "configure_logging", lambda: None)
     cli.main(["summaries"])
     service.summarize_idle.assert_called_once_with()
 
@@ -57,9 +61,9 @@ def test_summary_startup_failure_propagates_to_fail_the_cron_run(monkeypatch) ->
     service = Mock()
     service.summarize_idle.side_effect = RuntimeError("database unavailable")
     monkeypatch.setattr(summaries, "summary_service", lambda: service)
-    monkeypatch.setattr(logging_config, "configure_logging", lambda: None)
-    with pytest.raises(RuntimeError, match="database unavailable"):
+    with pytest.raises(SystemExit) as error:
         cli.main(["summaries"])
+    assert error.value.code == 1
 
 
 def test_migration_resolves_config_even_outside_backend(monkeypatch, tmp_path) -> None:

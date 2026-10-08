@@ -14,7 +14,7 @@ DEMO_MANAGER_ID = "karthik"
 SUMMARY_RECENT_MESSAGES = 6  # always sent raw, never folded after an answer
 SUMMARY_MAX_RAW_MESSAGES = 16  # fold when raw messages exceed this count
 SUMMARY_MAX_RAW_TOKENS = 3000  # or when raw text exceeds this (characters / 4)
-SUMMARY_IDLE_MINUTES = 30  # an idle chat is summarized in full
+SUMMARY_IDLE_MINUTES = 15  # an idle chat is summarized in full
 SUMMARY_JOB_BATCH = 10  # idle chats summarized per run at most
 
 # Dreaming: a daily review of chats that proposes, never applies.

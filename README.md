@@ -84,6 +84,8 @@ Retrieval metrics: `hit@k` (any relevant chunk in top k), `recall@k` (share of e
 
 Set `DATABASE_URL`, `JINA_API_KEY`, and `GROQ_API_KEY` on the application service in its production environment, then deploy the variable changes. Gradio binds to `0.0.0.0:$PORT`. The `/` healthcheck verifies that the homepage responds; it does not check database connectivity or AI credentials. The pre-deploy command applies pending migrations before the app starts; migrations can also be run locally with `uv run python cli.py migrate`.
 
+Install dependencies during the build. Use the `python` commands above at runtime so app startup and cron runs do not trigger `uv run` dependency synchronization. Installer progress is written to stderr, which Railway can display as errors even when installation succeeds. Application logs use JSON on stdout with an explicit severity; failed CLI jobs log an error and exit with status 1.
+
 ### Scheduled conversation summaries
 
 Idle-conversation summarization runs through the `summaries` CLI command. Gradio keeps the **Summarize now** button and existing after-answer folding, but does not start a scheduler. Create a separate Railway cron service from the same repository with root `/backend`:
@@ -95,7 +97,7 @@ Idle-conversation summarization runs through the `summaries` CLI command. Gradio
 | Variables | `DATABASE_URL`, `GROQ_API_KEY` |
 | Healthcheck and public domain | None |
 
-Keep the web service's start command as `python cli.py app`. The cron command runs one batch of up to ten conversations idle for at least thirty minutes, then exits. Railway schedules use UTC. Locally, run the same task with `uv run python cli.py summaries`.
+Keep the web service's start command as `python cli.py app`. The cron command runs one batch of up to ten conversations idle for at least fifteen minutes, then exits. Railway schedules use UTC. Locally, run the same task with `uv run python cli.py summaries`.
 
 ### Daily review
 
