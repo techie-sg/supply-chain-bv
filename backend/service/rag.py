@@ -62,6 +62,7 @@ class RAGService:
         summary: str | None = None,
         handover: str | None = None,
         tools: Sequence[Tool] = (),
+        alerts: str | None = None,
     ) -> str:
         """Retrieve evidence and answer using the injected provider services.
 
@@ -69,7 +70,8 @@ class RAGService:
         With tools, the model may call them before answering; the settings tool
         only proposes changes, which the manager confirms outside the model.
         `summary` stands in for older messages that `history` no longer holds.
-        `handover` is the latest shift's handover notes.
+        `handover` is the latest shift's handover notes. `alerts` lists the
+        manager's alerts firing now, computed in code from live data.
         """
         if top_k < 1:
             raise ValueError("top_k must be positive")
@@ -103,6 +105,8 @@ class RAGService:
             user_message = (
                 f"<handover_notes>\n{handover}\n</handover_notes>\n\n{user_message}"
             )
+        if alerts:
+            user_message = f"{alerts}\n\n{user_message}"
         if preferences is not None:
             user_message = f"{preferences.prompt_block()}\n\n{user_message}"
         system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
@@ -142,6 +146,7 @@ def answer_question(
     summary: str | None = None,
     handover: str | None = None,
     tools: Sequence[Tool] = (),
+    alerts: str | None = None,
 ) -> str:
     """UI entry point composing the configured services."""
     settings = get_settings()
@@ -157,4 +162,5 @@ def answer_question(
         summary=summary,
         handover=handover,
         tools=tools,
+        alerts=alerts,
     )

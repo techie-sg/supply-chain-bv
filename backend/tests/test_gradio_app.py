@@ -841,8 +841,8 @@ def test_summary_bar_is_pinned_collapsed_and_refreshed_with_the_chat() -> None:
         if callback.fn is gradio_app.summary_card
     ]
     # Page load, switching manager, opening a chat, a scenario load, New chat,
-    # and after each answer.
-    assert len(refreshers) == 7
+    # starting a chat from an alert, and after each answer.
+    assert len(refreshers) == 8
     assert all(bar in callback.outputs for callback in refreshers)
     [click] = [
         callback

@@ -40,6 +40,7 @@ from service.summaries import (
     summarize_latest_conversation,
     summarize_open_conversation,
 )
+from ui import alerts as alerts_ui
 from ui import settings
 from ui import suggestions as suggestions_ui
 
@@ -540,6 +541,23 @@ def clear_chat(manager_id: str = DEMO_MANAGER_ID) -> tuple[list[dict], str, str,
     return [], "", conversation_id, gr.update(selected="assistant")
 
 
+def start_alert_chat(
+    queue: list[dict[str, Any]] | None,
+    manager_id: str = DEMO_MANAGER_ID,
+) -> tuple[Any, Any, Any, Any, Any]:
+    """Start a new chat about the shown alert; its question is sent next."""
+    if not queue:
+        return gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip()
+    history, _, conversation_id, tab = clear_chat(manager_id)
+    return history, alerts_ui.question(queue[0]), conversation_id, tab, queue[1:]
+
+
+# Sends the alert question through the normal send path, once it is in the box.
+SEND_ALERT_QUESTION_JS = """
+() => { setTimeout(() => document.querySelector('#send-message')?.click(), 80); }
+"""
+
+
 def chat(
     message: str,
     history: list[dict] | None,
@@ -884,6 +902,11 @@ def build_app() -> gr.Blocks:
         manager = gr.State(DEMO_MANAGER_ID)
         # Setting changes proposed in chat, waiting for Confirm or Cancel.
         pending_changes = gr.State([])
+        # Alert pop-ups waiting to be shown, the ones already shown on this
+        # page, and whether the shown alert's diagnosis is open.
+        alert_queue = gr.State([])
+        alert_seen = gr.State([])
+        alert_open = gr.State(False)
         with gr.Sidebar(label="Workspace", width=288, elem_id="chat-sidebar"):
             with gr.Column(elem_id="sidebar-top"):
                 gr.HTML(
@@ -1194,6 +1217,32 @@ def build_app() -> gr.Blocks:
                         show_search="filter",
                         elem_id="answer-issues",
                     )
+        with gr.Column(visible=False, elem_id="alert-popup") as alert_popup:
+            alert_close = gr.Button(
+                "✕",
+                size="sm",
+                elem_id="alert-dismiss",
+                min_width=0,
+            )
+            alert_html = gr.HTML(apply_default_css=False, elem_id="alert-card")
+            alert_details = gr.HTML(
+                visible=False,
+                apply_default_css=False,
+                elem_id="alert-details",
+            )
+            with gr.Row(elem_id="alert-actions"):
+                alert_diagnose = gr.Button(
+                    "Diagnose",
+                    size="sm",
+                    elem_id="alert-diagnose",
+                )
+                alert_chat = gr.Button(
+                    "Start new chat",
+                    variant="primary",
+                    size="sm",
+                    elem_id="alert-chat",
+                )
+        alert_timer = gr.Timer(alerts_ui.CHECK_SECONDS)
         app.load(_restore_tab, outputs=workspace, queue=False)
         (
             suggestion_items,
@@ -1329,6 +1378,12 @@ def build_app() -> gr.Blocks:
                     inputs=manager,
                     outputs=answer_issues,
                 )
+                .then(
+                    alerts_ui.queue_new,
+                    inputs=[manager, alert_queue, alert_seen],
+                    outputs=[alert_queue, alert_seen],
+                    show_progress="hidden",
+                )
             )
 
         show_manager(
@@ -1348,6 +1403,8 @@ def build_app() -> gr.Blocks:
                 queue=False,
             )
             .then(list, outputs=pending_changes, queue=False)
+            # Alerts belong to the manager too: start the new one's afresh.
+            .then(lambda: ([], []), outputs=[alert_queue, alert_seen], queue=False)
             .then(fn=None, js=MANAGER_URL_JS, inputs=manager_picker),
         ).then(fn=None, js=CLOSE_SIDEBAR_ON_PHONE_JS)
         app.load(fn=None, js=CLOSE_SIDEBAR_ON_PHONE_JS)
@@ -1418,7 +1475,16 @@ def build_app() -> gr.Blocks:
             conversation_choices,
             inputs=[manager, active_chat],
             outputs=history_list,
-        ).then(summary_card, inputs=[manager, active_chat], outputs=summary_outputs)
+        ).then(
+            summary_card,
+            inputs=[manager, active_chat],
+            outputs=summary_outputs,
+        ).then(
+            alerts_ui.queue_new,
+            inputs=[manager, alert_queue, alert_seen],
+            outputs=[alert_queue, alert_seen],
+            show_progress="hidden",
+        )
         for event in (submit.click, message.submit):
             event(
                 fn=None,
@@ -1556,6 +1622,54 @@ def build_app() -> gr.Blocks:
         # A proposal belongs to the chat it was made in.
         for event in (new_chat.click, history_list.input, load.click):
             event(list, outputs=pending_changes, queue=False)
+        alert_timer.tick(
+            alerts_ui.queue_new,
+            inputs=[manager, alert_queue, alert_seen],
+            outputs=[alert_queue, alert_seen],
+            show_progress="hidden",
+            concurrency_id="alerts",
+            concurrency_limit=1,
+        )
+        alert_queue.change(
+            alerts_ui.card,
+            inputs=alert_queue,
+            outputs=[
+                alert_popup,
+                alert_html,
+                alert_details,
+                alert_open,
+                alert_diagnose,
+            ],
+            queue=False,
+            show_progress="hidden",
+        )
+        alert_close.click(
+            alerts_ui.dismiss,
+            inputs=alert_queue,
+            outputs=alert_queue,
+            show_progress="hidden",
+        )
+        alert_diagnose.click(
+            alerts_ui.diagnosis,
+            inputs=[alert_queue, alert_open, manager],
+            outputs=[alert_details, alert_open, alert_diagnose],
+            show_progress="hidden",
+        )
+        alert_chat.click(
+            start_alert_chat,
+            inputs=[alert_queue, manager],
+            outputs=[chatbot, message, active_chat, workspace, alert_queue],
+            concurrency_id="workspace",
+            concurrency_limit=1,
+        ).then(list, outputs=pending_changes, queue=False).then(
+            conversation_choices,
+            inputs=[manager, active_chat],
+            outputs=history_list,
+        ).then(
+            summary_card,
+            inputs=[manager, active_chat],
+            outputs=summary_outputs,
+        ).then(fn=None, js=SEND_ALERT_QUESTION_JS)
     return app
 
 

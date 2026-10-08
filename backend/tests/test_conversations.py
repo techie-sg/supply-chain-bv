@@ -170,6 +170,7 @@ def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> N
         summary=None,
         handover=None,
         tools=(),
+        alerts=None,
     ):
         seen.append(preferences)
         assert [tool.name for tool in tools] == ["propose_setting_change"]
@@ -251,7 +252,7 @@ def test_ui_browse_entry_points(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None, handover=None, tools=(): (
+        lambda question, *, history, preferences, summary=None, handover=None, tools=(), alerts=None: (
             "reply"
         ),
     )
@@ -351,7 +352,7 @@ def test_ui_title_entry_point_uses_the_configured_model(store, monkeypatch) -> N
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None, handover=None, tools=(): (
+        lambda question, *, history, preferences, summary=None, handover=None, tools=(), alerts=None: (
             "Use the standby rider."
         ),
     )
@@ -417,7 +418,7 @@ def test_ui_summary_entry_point_uses_the_open_chat(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None, handover=None, tools=(): (
+        lambda question, *, history, preferences, summary=None, handover=None, tools=(), alerts=None: (
             "reply"
         ),
     )
@@ -455,6 +456,7 @@ def test_ui_ask_returns_the_changes_the_assistant_proposed(
         summary=None,
         handover=None,
         tools=(),
+        alerts=None,
     ):
         [tool] = tools
         tool.run({"code": "sla_dip_alert", "action": "set", "value": 85})

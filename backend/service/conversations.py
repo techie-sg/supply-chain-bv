@@ -10,6 +10,7 @@ from uuid import UUID
 import requests
 import structlog
 from sqlalchemy import Engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from constants import DEMO_MANAGER_ID, DEMO_STORE_ID
 from database.models import Conversation
@@ -22,6 +23,7 @@ from queries.conversations import (
     set_title,
     start_conversation,
 )
+from service.alerts import alerts_block
 from service.dreaming import handover_block
 from service.factory import create_llm_service
 from service.llm_service import Tool
@@ -216,16 +218,28 @@ def _answer(
     preferences: PreferenceService | None = None,
     tools: Sequence[Tool] = (),
 ) -> str:
-    """Answer with the settings, the chat's summary and the last handover in view."""
+    """Answer with the settings, alerts, summary and last handover in view."""
     handover = handover_block(DEMO_STORE_ID)
+    preferences = preferences or manager_preferences()
+    alerts = _alerts(preferences.manager_id)
     return answer_question(
         question,
         history=history,
-        preferences=preferences or manager_preferences(),
+        preferences=preferences,
         summary=summary,
         handover=handover,
         tools=tools,
+        alerts=alerts,
     )
+
+
+def _alerts(manager_id: str) -> str | None:
+    """The manager's firing alerts; an answer never waits on or fails for them."""
+    try:
+        return alerts_block(manager_id)
+    except (SQLAlchemyError, RuntimeError, ValueError):
+        logger.warning("Could not read alerts for the answer", exc_info=True)
+        return None
 
 
 def _title(question: str, answer: str) -> str:
