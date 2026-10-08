@@ -14,6 +14,9 @@ from service.llm_service import LLMService
 
 logger = structlog.stdlib.get_logger(__name__)
 
+NO_GUIDANCE_ANSWER = (
+    "I could not find relevant guidance in the DispatchDesk knowledge base."
+)
 PROMPT_PATH = (
     Path(__file__).resolve().parent
     / "rag_data"
@@ -57,12 +60,14 @@ class RAGService:
         history: Sequence[ChatMessage] | None = None,
         preferences: PreferenceContext | None = None,
         summary: str | None = None,
+        handover: str | None = None,
     ) -> str:
         """Retrieve evidence and answer using the injected provider services.
 
         With preferences, the model sees the manager's settings and applies them.
         It cannot change them; that happens only in the Settings tab.
         `summary` stands in for older messages that `history` no longer holds.
+        `handover` is the latest shift's handover notes.
         """
         if top_k < 1:
             raise ValueError("top_k must be positive")
@@ -73,9 +78,7 @@ class RAGService:
         results = retrieve(query_embedding=query_embedding, match_count=top_k)
         if not results:
             logger.warning("No guidance retrieved", top_k=top_k)
-            return (
-                "I could not find relevant guidance in the DispatchDesk knowledge base."
-            )
+            return NO_GUIDANCE_ANSWER
 
         context = self._build_context(results)
         user_message = f"Retrieved context:\n\n{context}\n\nQuestion: {question}"
@@ -93,6 +96,10 @@ class RAGService:
             user_message = (
                 "<conversation_summary>\nEarlier in this chat (a summary; it may "
                 f"omit details):\n{summary}\n</conversation_summary>\n\n{user_message}"
+            )
+        if handover:
+            user_message = (
+                f"<handover_notes>\n{handover}\n</handover_notes>\n\n{user_message}"
             )
         if preferences is not None:
             user_message = f"{preferences.prompt_block()}\n\n{user_message}"
@@ -121,6 +128,7 @@ def answer_question(
     history: Sequence[ChatMessage] | None = None,
     preferences: PreferenceContext | None = None,
     summary: str | None = None,
+    handover: str | None = None,
 ) -> str:
     """UI entry point composing the configured services."""
     settings = get_settings()
@@ -134,4 +142,5 @@ def answer_question(
         history=history,
         preferences=preferences,
         summary=summary,
+        handover=handover,
     )

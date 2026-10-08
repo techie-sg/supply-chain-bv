@@ -231,6 +231,7 @@ class Conversation(Base):
     summary_covers_to: Mapped[int | None] = mapped_column(Integer)
     title: Mapped[str | None] = mapped_column(String(120))
     summarized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dreamed_to: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -334,6 +335,73 @@ class StorePreference(Base):
         String(16),
         default="active",
         server_default="active",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
+class HandoverNote(Base):
+    """A note for the next shift; a shift is a calendar day for now."""
+
+    __tablename__ = "handover_notes"
+    __table_args__ = (
+        Index("ix_handover_notes_store_shift", "store_id", "shift"),
+        {"schema": "app"},
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        primary_key=True,
+        default=uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    store_id: Mapped[str] = mapped_column(String(32))
+    manager_id: Mapped[str] = mapped_column(String(32))
+    shift: Mapped[date] = mapped_column(Date)
+    note: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+
+
+class Suggestion(Base):
+    """A proposal from the daily review; it changes nothing until accepted."""
+
+    __tablename__ = "suggestions"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('setting', 'handover_draft', 'answer_issue')",
+            name="ck_suggestions_kind",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'accepted', 'dismissed')",
+            name="ck_suggestions_status",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(payload) = 'object' AND jsonb_typeof(evidence) = 'array'",
+            name="ck_suggestions_json",
+        ),
+        Index("ix_suggestions_manager_status", "store_id", "manager_id", "status"),
+        {"schema": "app"},
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        primary_key=True,
+        default=uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    store_id: Mapped[str] = mapped_column(String(32))
+    manager_id: Mapped[str] = mapped_column(String(32))
+    kind: Mapped[str] = mapped_column(String(24))
+    payload: Mapped[dict] = mapped_column(JSONB)
+    reason: Mapped[str] = mapped_column(Text)
+    evidence: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")
+    status: Mapped[str] = mapped_column(
+        String(16),
+        default="pending",
+        server_default="pending",
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

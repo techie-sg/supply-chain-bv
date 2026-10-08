@@ -62,6 +62,8 @@ def store(monkeypatch) -> FakeStore:
     monkeypatch.setattr(conversations, "latest_conversation", fake.latest)
     monkeypatch.setattr(conversations, "start_conversation", fake.start)
     monkeypatch.setattr(conversations, "append_message", fake.append)
+    # Keep tests off any real database: no handover notes.
+    monkeypatch.setattr(conversations, "handover_block", lambda store_id: None)
     monkeypatch.setattr(conversations, "list_conversations", fake.list)
     monkeypatch.setattr(conversations, "resume_conversation", fake.resume)
     return fake
@@ -150,7 +152,7 @@ def test_messages_record_who_what_and_an_ist_timestamp() -> None:
 def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> None:
     seen = []
 
-    def answer(question, *, history, preferences, summary=None):
+    def answer(question, *, history, preferences, summary=None, handover=None):
         seen.append(preferences)
         return "reply"
 
@@ -203,7 +205,7 @@ def test_ui_browse_entry_points(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None: "reply",
+        lambda question, *, history, preferences, summary=None, handover=None: "reply",
     )
     conversations.ask_question("Earlier")
     earlier_id = conversations.current_conversation_id()
@@ -301,7 +303,7 @@ def test_ui_title_entry_point_uses_the_configured_model(store, monkeypatch) -> N
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None: (
+        lambda question, *, history, preferences, summary=None, handover=None: (
             "Use the standby rider."
         ),
     )
@@ -367,7 +369,7 @@ def test_ui_summary_entry_point_uses_the_open_chat(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None: "reply",
+        lambda question, *, history, preferences, summary=None, handover=None: "reply",
     )
     conversations.ask_question("Rain plan?")
     view = conversations.conversation_summary()

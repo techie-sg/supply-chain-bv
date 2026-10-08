@@ -1,5 +1,6 @@
 """Shared fixtures."""
 
+import sys
 from uuid import uuid4
 
 import pytest
@@ -65,3 +66,17 @@ def preference_store(monkeypatch) -> FakeStore:
     monkeypatch.setattr(preferences, "save_preference", fake.save)
     monkeypatch.setattr(preferences, "remove_preference", fake.remove)
     return fake
+
+
+class _IdleJob:
+    def start(self) -> None:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def no_background_jobs(monkeypatch) -> None:
+    """Tests that call the app's `main()` must not start real scheduler threads."""
+    app_module = sys.modules.get("ui.gradio_app")
+    if app_module is not None:
+        monkeypatch.setattr(app_module, "idle_summary_job", _IdleJob)
+        monkeypatch.setattr(app_module, "daily_review_job", _IdleJob)

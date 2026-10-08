@@ -170,7 +170,16 @@ def test_ui_entry_point_passes_preferences_through(monkeypatch) -> None:
         def __init__(self, **kwargs) -> None:
             pass
 
-        def answer_question(self, question, top_k, *, history, preferences, summary):
+        def answer_question(
+            self,
+            question,
+            top_k,
+            *,
+            history,
+            preferences,
+            summary,
+            handover,
+        ):
             seen.update(question=question, preferences=preferences)
             return "answer"
 

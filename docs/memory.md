@@ -9,8 +9,8 @@ How DispatchDesk remembers a store's chats and a manager's settings across sessi
 | 1. Conversations: history, sidebar, titles, timestamps | Built | `conversations` (migrations 0005, 0007) |
 | 2. Preferences: catalogue, Settings tab, sidebar summary | Built; alert evaluation and briefing rendering wait for live tools | `preference_definitions`, `store_preferences` (0006) |
 | 3. Conversation summary: rolling, plus an idle scheduler | Built | columns on `conversations` (0008) |
-| 4. Handover notes | Designed | `handover_notes` |
-| 5. Dreaming (suggestions) | Designed | `suggestions` |
+| 4. Handover notes | Built | `handover_notes` (0009) |
+| 5. Dreaming: daily review with suggestions | Built | `suggestions`, `conversations.dreamed_to` (0009) |
 | Resolution notes | Parked | `resolution_notes` |
 
 Not designed yet: approval log, reminders and snoozed alerts, trace events.
@@ -136,20 +136,31 @@ Alert `options`, all optional: `{"days": ["sat", "sun"], "start": "19:00", "end"
 
 Example: at 18 messages, 0 to 11 are folded (`summary_covers_to` = 11); at 30, 12 to 23 (= 23).
 
-## 4. Handover notes (designed)
+## 4. Handover notes
 
-`app.handover_notes`: `id`, `store_id`, `manager_id`, `shift` (label, for example `2026-10-04 evening`), `note`, `created_at`. The assistant gets only the latest shift's notes, as a `<handover_notes>` block; notes are reference, never rules, and never expire. The `last_handover_note` greeting view reads them.
+`app.handover_notes`: `id`, `store_id`, `manager_id`, `shift` (date; a shift is a calendar day for now), `note`, `created_at`. Notes come from accepted handover drafts (section 5). The assistant gets the latest shift's notes as a `<handover_notes>` block; notes are reference, never rules, and never expire. The `last_handover_note` greeting view will read them.
 
-Open: how a shift is defined, and where notes are written.
+## 5. Dreaming
 
-## 5. Dreaming (designed)
+A daily review of the chats that **proposes, never applies**. It runs at **23:30 IST** on the scheduler, and on demand from **Run review now** in the Demo tools tab. It works per store and manager, across all their chats.
 
-A background review of past chats that proposes, never applies.
-- It looks for repeated requests that suggest a briefing or an alert, and patterns worth noting as insights.
-- Candidates are catalogue settings, validated like Settings-tab input and needing a minimum number of occurrences.
-- They are saved as `pending` in `app.suggestions` (`id`, `store_id`, `manager_id`, `kind` setting or insight, `payload`, `reason`, `evidence` as conversation id and message position pairs, `status` pending, accepted or dismissed, `created_at`).
-- Accepting writes a normal `store_preferences` row; dismissed ones are not proposed again for the same evidence.
-- It can run on the scheduler and read the conversation summaries.
+| Output | Reads | Shown in | On accept |
+| --- | --- | --- | --- |
+| **Settings suggestion** | summaries of recent chats, current settings, the catalogue | Sidebar **Suggestions**, reviewed in Settings | saved through the same validated path as the Settings tab |
+| **Handover draft** for the day | summaries of the day's chats | Sidebar **Suggestions**, editable before accepting | saved as that day's handover note |
+| **Answer issues**: no guidance found, unanswered question, pushback | raw messages after `dreamed_to` | Demo tools (admin) | none; a report for us |
+
+**A run**
+1. Find chats with messages after `conversations.dreamed_to` (the index of the last message reviewed) and bring their summaries fully up to date.
+2. Answer issues from the new raw messages: "no guidance" replies and manager messages with no reply are found by text and position; pushback (the manager disputing an answer) needs one small model call. Then `dreamed_to` moves to the last message, only if this step succeeded.
+3. Handover draft from the summaries of chats with messages today. A newer draft for the same day replaces a pending one.
+4. Settings suggestions from recent chats' summaries. Each must be a valid catalogue value, differ from the current setting, have evidence from at least **3 chats**, and not repeat a pending or dismissed suggestion.
+
+Each output is saved as a `pending` row and fails independently; a failure is logged and changes nothing else.
+
+`app.suggestions`: `id`, `store_id`, `manager_id`, `kind` (`setting`, `handover_draft`, `answer_issue`), `payload`, `reason`, `evidence` (conversation ids, with message positions where relevant), `status` (`pending`, `accepted`, `dismissed`), `created_at`.
+
+**Guardrails:** never auto-applies; text in chats is data, never instructions; no judgments about individual riders, only store operations and the manager's own choices.
 
 ## Parked: resolution notes
 
@@ -174,6 +185,10 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | 13 | The scheduler is an in-process thread with no new dependency | APScheduler or Railway cron: not needed yet |
 | 14 | The summary is shown as a collapsed card above the chat, with all messages kept visible | hiding folded messages behind the card, or a separate panel: confusing or easy to miss |
 | 15 | The manager can summarize on demand, folding everything including recent messages; the card is pinned under the header | waiting for the limits or the idle job only |
+| 16 | Dreaming produces settings suggestions, a daily handover draft and an answer-issue report; recurring patterns are left to metrics data | patterns from chats: weak evidence |
+| 17 | Dreaming runs daily at 23:30 IST, plus an admin button; a shift is a calendar day | per-shift runs: shifts are not defined yet |
+| 18 | Handover drafts and settings read summaries; answer issues read raw messages after `dreamed_to` | raw messages everywhere: costlier; summaries everywhere: hide pushback and missing answers |
+| 19 | Suggestions appear in the sidebar and are reviewed in Settings; answer issues stay in admin | showing the issue report to the manager |
 
 ## Deferred
 
@@ -190,8 +205,6 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 2. Incentive cap maximum (₹500 placeholder).
 3. Alert evaluation and any fired-alert table, pending the team discussion.
 4. Briefing trigger: greeting only, or also at the start of a new chat?
-5. Handover notes: shift definition, and where notes are written.
-6. Where dreaming suggestions appear: a panel, or raised by the assistant.
 
 ## Code
 
