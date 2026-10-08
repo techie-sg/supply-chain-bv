@@ -8,7 +8,7 @@ How DispatchDesk remembers a store's chats and a manager's settings across sessi
 | --- | --- | --- |
 | 1. Conversations: history, sidebar, titles, timestamps | Built | `conversations` (migrations 0005, 0007) |
 | 2. Preferences: catalogue, Settings tab, sidebar summary | Built; alert evaluation and briefing rendering wait for live tools | `preference_definitions`, `store_preferences` (0006) |
-| 3. Conversation summary: rolling, plus an idle scheduler | Built | columns on `conversations` (0008) |
+| 3. Conversation summary: rolling, plus an idle cron job | Built | columns on `conversations` (0008) |
 | 4. Handover notes | Designed | `handover_notes` |
 | 5. Dreaming (suggestions) | Designed | `suggestions` |
 | Resolution notes | Parked | `resolution_notes` |
@@ -120,12 +120,12 @@ Alert `options`, all optional: `{"days": ["sat", "sun"], "start": "19:00", "end"
 | Count limit on raw messages | 16 |
 | Size limit on raw text (characters ÷ 4) | 3,000 tokens |
 | Idle time, from the last message's `when` | 30 minutes |
-| Scheduler interval, and chats per run | 5 minutes, 10 |
+| Chats per CLI job run | 10 |
 
 **Triggers**
 - After an answer, on its own queue: if raw messages exceed either limit, fold all but the recent window.
 - On demand: **Summarize now** folds every message, the recent window included.
-- A scheduler thread started with the app (`service/scheduler.py`) folds every message of chats idle for 30 minutes that the summary doesn't fully cover. Selection uses positions and the last message's time, not `updated_at`.
+- The `uv run python cli.py summaries` command folds every message of chats idle for 30 minutes that the summary doesn't fully cover, then exits. Railway cron runs it every five minutes. Gradio starts no scheduler. Selection uses positions and the last message's time, not `updated_at`.
 
 **Folding:** the previous summary plus the new slice go to `prompts/conversation_summary.md`, which keeps questions, diagnoses, proposals with their approval state, earlier figures marked as earlier, and open follow-ups, and forbids new facts. The save applies only if `summary_covers_to` is unchanged since the run started, sets `summarized_at`, and leaves `updated_at` alone.
 
@@ -173,7 +173,7 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | 10 | Summaries roll forward on the conversation row, with `summary_covers_to` as an index | a summaries table, or editing messages |
 | 11 | Summaries trigger on count and size limits, plus an idle scheduler | lazy checks on page load: summaries not ready until a chat is reopened |
 | 12 | Summary saves are conditional on the previous position | last write wins: overlapping runs would overwrite each other |
-| 13 | The scheduler is an in-process thread with no new dependency | APScheduler or Railway cron: not needed yet |
+| 13 | Railway cron runs the one-shot CLI summary job; no scheduler runs inside Gradio | an in-process scheduler thread |
 | 14 | The summary is shown as a collapsed card above the chat, with all messages kept visible | hiding folded messages behind the card, or a separate panel: confusing or easy to miss |
 | 15 | The manager can summarize on demand, folding everything including recent messages; the card is pinned under the header | waiting for the limits or the idle job only |
 
@@ -205,6 +205,6 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | `service/conversations.py` | ask, history, titles, sidebar entry points |
 | `service/preferences.py` | effective settings, validation, save and reset, `<preferences>` block |
 | `service/setting_changes.py` | chat setting changes: tool, merge, validate, confirm |
-| `service/summaries.py`, `service/scheduler.py` | summary folding, idle job |
+| `service/summaries.py`, `cli.py` | summary folding, one-shot idle job |
 | `ui/gradio_app.py`, `ui/settings.py` | chat, sidebar, Settings tab |
 | `service/rag_data/prompts/` | system, title and summary prompts |
