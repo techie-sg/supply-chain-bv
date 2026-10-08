@@ -13,7 +13,7 @@ import requests
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
-from logging_config import configure_logging
+from logging_config import configure_logging, configure_uvicorn_logging
 from service.conversations import (
     add_note,
     ask_question,
@@ -1133,6 +1133,7 @@ app = build_app()
 
 def main() -> None:
     configure_logging()
+    configure_uvicorn_logging()
     port = int(os.environ.get("PORT", "7860"))
     logger.info("DispatchDesk starting", host="0.0.0.0", port=port)
     app.launch(
