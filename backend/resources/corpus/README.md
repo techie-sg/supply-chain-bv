@@ -20,7 +20,7 @@ Run `uv run --group ingestion python cli.py ingest` from `backend/`. `DoclingPdf
 
 `CorpusService` attaches document ID, title, version, section, source path, and the PDF's file hash. Jina embeds the text; SQLAlchemy queries upsert it into `app.documents` and `app.document_chunks`. Stored chunk numbers are zero-based, and retrieved citations use the policy `doc_id#chunk_number`, such as `DD-BATCH-001#0`.
 
-The assistant retrieves the nearest three passages by default using pgvector cosine distance. Follow-up retrieval includes the recent exchange, and Groq receives the stored conversation history, retrieved passages, and the [system prompt](../prompts/dispatch_manager_system.md).
+The assistant retrieves the nearest three passages by default using pgvector cosine distance. Follow-up retrieval includes the recent exchange, and the configured LLM provider (OpenRouter by default) receives the stored conversation history, retrieved passages, and the [system prompt](../prompts/dispatch_manager_system.md).
 
 ## Scope and sources
 

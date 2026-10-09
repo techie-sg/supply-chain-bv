@@ -121,4 +121,4 @@ def run_summary_job_now() -> str:
     )
     if failures:
         status += f"{failures} conversations could not finish; run again to retry. "
-    return status + "Suggested preferences require approval."
+    return status + "Verified personalization preferences are saved automatically."

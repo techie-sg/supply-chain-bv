@@ -46,6 +46,7 @@ PROCESSING_STATUS = """
 
 
 SEND_MESSAGE_JS = browser_script("send_message.js")
+COMPOSER_LAYOUT_JS = browser_script("composer_layout.js")
 
 
 FINISH_CHAT_JS = browser_script("finish_chat.js")
@@ -170,6 +171,15 @@ def chat(
         RuntimeError,
         ValueError,
     ) as exc:
+        if (
+            isinstance(exc, requests.HTTPError)
+            and exc.response is not None
+            and exc.response.status_code == 429
+        ):
+            logger.warning("Assistant rate-limited", request_id=request_id)
+            raise gr.Error(
+                "The model provider is rate-limiting requests. Please wait before trying again.",
+            ) from exc
         logger.exception("Assistant request failed", request_id=request_id)
         raise gr.Error(
             "The assistant is unavailable right now. Please try again.",
@@ -429,8 +439,8 @@ def build_chat() -> ChatComponents:
                     "I focus on first?"
                 ),
                 (
-                    "Which waiting orders can\n"
-                    "I batch together, and which\n"
+                    "Check waiting orders first.\n"
+                    "Which can I batch, and which\n"
                     "need a separate delivery?"
                 ),
                 (

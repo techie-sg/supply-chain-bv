@@ -8,6 +8,7 @@ through the same `PreferenceService` path as the Settings tab.
 """
 
 import json
+import re
 from enum import StrEnum
 from typing import Any
 
@@ -175,6 +176,24 @@ class SettingChanges:
 
     def tool(self) -> Tool:
         return Tool(TOOL_NAME, TOOL_DESCRIPTION, TOOL_PARAMETERS, self.run)
+
+    @staticmethod
+    def direct_request(question: str) -> dict[str, Any] | None:
+        """Recognize a simple cap request; existing validation still owns limits."""
+        match = re.fullmatch(
+            r"\s*(?:please\s+)?(?:set|change|update)\s+(?:my\s+|the\s+)?"
+            r"incentive\s+cap\s+(?:to\s+|at\s+)?(?:₹\s*)?"
+            r"(\d+(?:\.\d+)?)\s*(?:rupees|INR)?[.!]?\s*",
+            question,
+            flags=re.IGNORECASE,
+        )
+        if match is None:
+            return None
+        return {
+            "code": PreferenceCode.INCENTIVE_CAP,
+            "action": Action.SET,
+            "value": float(match[1]),
+        }
 
     def run(self, args: dict[str, Any]) -> str:
         """Tool entry point: the result tells the model what to say."""

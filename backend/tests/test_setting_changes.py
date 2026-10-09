@@ -31,6 +31,40 @@ def current(code: PreferenceCode):
     return prefs().current(code)
 
 
+@pytest.mark.parametrize(
+    "question,value",
+    [
+        ("Change my incentive cap to 300.", 300),
+        ("Please set the incentive cap to ₹250", 250),
+        ("Update incentive cap to 600", 600),
+    ],
+)
+def test_simple_cap_requests_are_parsed_without_bypassing_validation(
+    store,
+    question,
+    value,
+):
+    changes = SettingChanges(prefs())
+    arguments = changes.direct_request(question)
+    assert arguments["value"] == value
+    result = json.loads(changes.run(arguments))
+    assert result["saved"] is False
+    assert result["status"] == ("proposed" if value <= 500 else "rejected")
+    assert not current(PreferenceCode.INCENTIVE_CAP).customized
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Should I set my incentive cap to 300?",
+        "Set incentive cap to 300 and dispatch a rider",
+        "Set rider shortage to 300",
+    ],
+)
+def test_cap_parser_leaves_questions_and_mixed_actions_to_the_assistant(question):
+    assert SettingChanges.direct_request(question) is None
+
+
 def test_tool_is_offered_with_every_catalogue_code(store) -> None:
     tool = SettingChanges(prefs()).tool()
     assert tool.name == TOOL_NAME

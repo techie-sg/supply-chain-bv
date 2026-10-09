@@ -10,6 +10,7 @@ from service.embedding_service import EmbeddingService
 from service.groq_service import GroqService
 from service.jina_embedding_service import JinaEmbeddingService
 from service.llm_service import LLMService
+from service.openrouter_service import OpenRouterService
 
 
 def create_embedding_service(settings: Settings | None = None) -> EmbeddingService:
@@ -25,6 +26,11 @@ def create_embedding_service(settings: Settings | None = None) -> EmbeddingServi
 
 def create_llm_service(settings: Settings | None = None) -> LLMService:
     settings = settings or get_settings()
+    if settings.llm_provider == "openrouter":
+        return OpenRouterService(
+            model=settings.llm_model,
+            api_key=settings.openrouter_api_key,
+        )
     if settings.llm_provider == "groq":
         return GroqService(model=settings.llm_model, api_key=settings.groq_api_key)
     raise ValueError(f"Unsupported LLM provider: {settings.llm_provider}")

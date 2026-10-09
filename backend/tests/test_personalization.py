@@ -48,7 +48,25 @@ def store(monkeypatch):
 
     def finish(chat_id, store_id, manager_id, expected, end, rows, engine=None):
         proposals.extend(rows)
-        return len(rows)
+        profile = profiles.setdefault((store_id, manager_id), {})
+        changes = {
+            row["payload"]["code"]: {
+                **item(
+                    row["payload"]["value"],
+                    "dreaming",
+                    conversation_id=str(chat_id),
+                    quote=row["evidence"][0]["quote"],
+                ),
+                "evidence": row["evidence"],
+                "reason": row["reason"],
+            }
+            for row in rows
+            if row["payload"]["code"] not in profile
+        }
+        if changes:
+            profile.update(changes)
+            writes.append(deepcopy(changes))
+        return len(changes)
 
     monkeypatch.setattr(module, "finish_review", finish)
     monkeypatch.setattr(module, "evidence_chats", lambda *args: [])
@@ -279,7 +297,42 @@ def candidate(conversation, evidence=None):
     ]
 
 
-def test_summary_explicit_preference_only_proposes_and_has_exact_raw_evidence(store):
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Keep answers short for me.", {"answer_length": "brief"}),
+        ("I prefer detailed explanations.", {"answer_length": "detailed"}),
+        ("Forget my preference for concise answers.", {"answer_length": None}),
+        ("I prefer alternatives and trade-offs.", {"comparisons": "alternatives"}),
+        (
+            "Always start with the recommendation first.",
+            {"answer_order": "recommendation_first"},
+        ),
+        ("I prefer lower cost options.", {"decision_priority": "lower_cost"}),
+        ("Keep answers short for this chat.", {}),
+        ("Keep answers short. Which orders can I batch?", {}),
+        ("Keep answers short and tell me which orders are waiting", {}),
+        ("I prefer brief and detailed answers.", {}),
+        ("I don't prefer short answers.", {}),
+        ("Change my incentive cap to 300.", {}),
+    ],
+)
+def test_preference_only_requests_are_recognized_without_a_provider(
+    store,
+    text,
+    expected,
+):
+    changes = PersonalizationChanges(
+        PersonalizationService("DS-1", "karthik"),
+        text,
+        uuid4,
+    )
+    actual = {row["code"]: row["value"] for row in changes.direct_requests()}
+    assert actual == expected
+    assert not store[1]  # recognition alone never writes
+
+
+def test_summary_explicit_preference_saves_automatically_with_raw_evidence(store):
     conversation = chat("I prefer concise answers.")
     seen = []
 
@@ -288,10 +341,13 @@ def test_summary_explicit_preference_only_proposes_and_has_exact_raw_evidence(st
         return json.dumps(candidate(conversation))
 
     assert PersonalizationService("DS-1", "karthik").review(conversation, generate) == 1
-    assert store[1] == [] and store[2][0]["payload"] == {
+    assert len(store[1]) == 1 and store[2][0]["payload"] == {
         "code": "answer_length",
         "value": "brief",
     }
+    saved = store[0][("DS-1", "karthik")]["answer_length"]
+    assert saved["source"] == "dreaming" and saved["value"] == "brief"
+    assert saved["evidence"][0]["quote"] == conversation.messages[0]["what"]
     assert seen[0]["manager_messages"][0]["text"] == conversation.messages[0]["what"]
 
 
@@ -323,7 +379,7 @@ def test_inferred_preference_requires_three_distinct_chats_and_new_evidence(
         )
         == 1
     )
-    assert store[1] == []
+    assert len(store[1]) == 1
     # Three repetitions inside one chat do not count as three conversations.
     conversations[-1].personalization_covers_to = None
     evidence = [evidence[-1]] * 3

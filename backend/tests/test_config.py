@@ -16,6 +16,7 @@ def test_default_test_settings_do_not_load_the_local_env(monkeypatch) -> None:
     assert settings.database_url is None
     assert settings.jina_api_key is None
     assert settings.groq_api_key is None
+    assert settings.openrouter_api_key is None
 
 
 def test_unmocked_database_access_is_blocked_before_connecting() -> None:
@@ -35,6 +36,21 @@ def test_require_rejects_missing_values_without_leaking(monkeypatch) -> None:
     with pytest.raises(RuntimeError, match="Set JINA_API_KEY") as exc:
         require("  ", "JINA_API_KEY")
     assert "secret" not in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["OPENROUTER_KEY", "OPEN_ROUTER_KEY", "OPENROUTER_API_KEY"],
+)
+def test_openrouter_key_aliases_are_loaded_as_secrets(monkeypatch, name) -> None:
+    monkeypatch.setenv(name, "fake-openrouter-key")
+    settings = Settings()
+    assert (
+        require(settings.openrouter_api_key, "OPENROUTER_KEY") == "fake-openrouter-key"
+    )
+    assert "fake-openrouter-key" not in repr(settings)
+    assert settings.llm_provider == "openrouter"
+    assert settings.llm_model == "nvidia/nemotron-3-super-120b-a12b:free"
 
 
 def test_database_url_alias_and_secret_are_loaded_from_environment(monkeypatch) -> None:

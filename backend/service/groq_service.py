@@ -18,7 +18,7 @@ from langchain_groq import ChatGroq
 from pydantic import SecretStr
 
 from config import get_settings, require
-from constants import GROQ_MODEL
+from constants import GROQ_MODEL, LLM_MAX_TOOL_ROUNDS
 from domain.chat import ChatMessage
 from domain.tools import Tool
 from service.llm_service import LLMService
@@ -26,7 +26,7 @@ from service.llm_service import LLMService
 logger = structlog.stdlib.get_logger(__name__)
 
 # Tool rounds before the model must answer in text.
-MAX_TOOL_ROUNDS = 3
+MAX_TOOL_ROUNDS = LLM_MAX_TOOL_ROUNDS
 # Requests per answer when Groq rejects a malformed tool call.
 TOOL_ATTEMPTS = 2
 TOOLS_UNAVAILABLE = (

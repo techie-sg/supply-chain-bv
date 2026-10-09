@@ -68,29 +68,28 @@ def engine():
         engine.dispose()
 
 
-def proposal(value="brief"):
+def proposal(value="brief", chat=None, index=0):
     return {
         "store_id": "DS-1",
         "manager_id": "karthik",
         "kind": "personalization",
         "payload": {"code": "answer_length", "value": value},
         "reason": "Explicit preference",
-        "evidence": [],
+        "evidence": [
+            {
+                "conversation_id": str(chat.id if chat else uuid4()),
+                "message_index": index,
+                "quote": "I prefer concise answers.",
+            },
+        ],
     }
 
 
 def queue_proposal(row, engine):
-    chat = summarized_chat(engine)
-    count = finish_review(
-        chat.id,
-        row["store_id"],
-        row["manager_id"],
-        None,
-        chat.summary_covers_to,
-        [row],
-        engine,
-    )
-    return bool(count)
+    """Seed a legacy suggestion, created before automatic dreaming saves."""
+    with get_session(engine) as session:
+        session.add(Suggestion(**row))
+    return True
 
 
 def test_profile_noop_merges_removals_and_isolates_managers(engine):
@@ -122,7 +121,19 @@ def test_profile_noop_merges_removals_and_isolates_managers(engine):
         == "alternatives"
     )
     assert read_profile("DS-1", "karthik", engine)["answer_length"]["value"] is None
-    assert not queue_proposal(proposal(), engine)
+    chat = summarized_chat(engine)
+    assert (
+        finish_review(
+            chat.id,
+            "DS-1",
+            "karthik",
+            None,
+            3,
+            [proposal(chat=chat)],
+            engine,
+        )
+        == 0
+    )
     with pytest.raises(LookupError):
         save_profile("OTHER", "karthik", {"answer_length": original}, engine=engine)
 
@@ -141,7 +152,19 @@ def test_blank_explicit_removal_blocks_old_proposals_without_repeated_writes(eng
         {"answer_length": item(None, "chat")},
         engine=engine,
     )
-    assert not queue_proposal(proposal(), engine)
+    chat = summarized_chat(engine)
+    assert (
+        finish_review(
+            chat.id,
+            "DS-1",
+            "karthik",
+            None,
+            3,
+            [proposal(chat=chat)],
+            engine,
+        )
+        == 0
+    )
     with engine.connect() as connection:
         assert connection.execute(select(Suggestion.status)).scalar_one() == "dismissed"
 
@@ -167,7 +190,6 @@ def test_stale_profile_edit_preserves_newer_value(engine):
 def test_proposal_duplicate_dismiss_and_accept_are_atomic_and_scoped(engine):
     row = proposal()
     assert queue_proposal(row, engine)
-    assert not queue_proposal(row, engine)
     with engine.connect() as connection:
         suggestion_id = connection.execute(select(Suggestion.id)).scalar_one()
     with pytest.raises(LookupError):
@@ -212,7 +234,7 @@ def test_proposal_duplicate_dismiss_and_accept_are_atomic_and_scoped(engine):
         "karthik",
         engine,
     )
-    assert not queue_proposal(other, engine)
+    assert get_suggestion(other_id, "DS-1", "karthik", engine).status == "dismissed"
 
 
 def test_evidence_query_clips_short_chats_and_limits_large_histories(engine):
@@ -281,9 +303,24 @@ def test_invalid_personalization_proposal_is_not_applied(engine):
     assert get_suggestion(suggestion_id, "DS-1", "karthik", engine).status == "pending"
 
 
-def test_progress_and_proposals_commit_together_without_changing_chat_recency(engine):
+def test_progress_and_preferences_commit_together_without_changing_chat_recency(engine):
     chat = summarized_chat(engine)
-    assert finish_review(chat.id, "DS-1", "karthik", None, 1, [proposal()], engine) == 1
+    assert (
+        finish_review(
+            chat.id,
+            "DS-1",
+            "karthik",
+            None,
+            1,
+            [proposal(chat=chat)],
+            engine,
+        )
+        == 1
+    )
+    saved = read_profile("DS-1", "karthik", engine)["answer_length"]
+    assert saved["value"] == "brief" and saved["source"] == "dreaming"
+    assert saved["conversation_id"] == str(chat.id)
+    assert saved["evidence"][0]["quote"] == "I prefer concise answers."
     with get_session(engine) as session:
         row = session.get(Conversation, chat.id)
         assert row.personalization_covers_to == 1 and row.personalized_at is not None
@@ -308,26 +345,25 @@ def test_progress_and_proposals_commit_together_without_changing_chat_recency(en
     with get_session(engine) as session:
         row = session.get(Conversation, chat.id)
         assert row.personalization_covers_to == 1 and row.personalized_at == reviewed_at
-        assert len(list(session.scalars(select(Suggestion)))) == 1
+        assert list(session.scalars(select(Suggestion))) == []
     assert finish_review(chat.id, "DS-1", "karthik", 1, 3, [], engine) == 0
     assert pending_reviews(10, engine=engine) == []
 
 
-def test_failed_proposal_transaction_rolls_back_progress_and_other_proposals(engine):
+def test_failed_preference_transaction_rolls_back_profile_and_progress(engine):
     chat = summarized_chat(engine)
     invalid = {
-        **proposal(),
-        "payload": {"code": "comparisons", "value": "alternatives"},
-        "unexpected": True,
+        **proposal(chat=chat),
+        "payload": {"code": "comparisons", "value": "invalid"},
     }
-    with pytest.raises(TypeError):
+    with pytest.raises(ValueError):
         finish_review(
             chat.id,
             "DS-1",
             "karthik",
             None,
             3,
-            [proposal(), invalid],
+            [proposal(chat=chat), invalid],
             engine,
         )
     with get_session(engine) as session:
@@ -335,13 +371,22 @@ def test_failed_proposal_transaction_rolls_back_progress_and_other_proposals(eng
         assert row.personalization_covers_to is None and row.personalized_at is None
         assert list(session.scalars(select(Suggestion))) == []
     assert [row.id for row in pending_reviews(10, engine=engine)] == [chat.id]
+    assert read_profile("DS-1", "karthik", engine) == {}
 
 
 def test_concurrent_personalization_workers_complete_a_batch_once(engine):
     chat = summarized_chat(engine)
 
     def finish():
-        return finish_review(chat.id, "DS-1", "karthik", None, 3, [proposal()], engine)
+        return finish_review(
+            chat.id,
+            "DS-1",
+            "karthik",
+            None,
+            3,
+            [proposal(chat=chat)],
+            engine,
+        )
 
     with ThreadPoolExecutor(max_workers=2) as workers:
         results = list(workers.map(lambda _: finish(), range(2)))
@@ -349,7 +394,8 @@ def test_concurrent_personalization_workers_complete_a_batch_once(engine):
     assert results.count(None) == 1
     with get_session(engine) as session:
         assert session.get(Conversation, chat.id).personalization_covers_to == 3
-        assert len(list(session.scalars(select(Suggestion)))) == 1
+        assert list(session.scalars(select(Suggestion))) == []
+    assert read_profile("DS-1", "karthik", engine)["answer_length"]["value"] == "brief"
 
 
 def test_review_progress_is_scoped_and_cannot_pass_saved_summary_coverage(engine):

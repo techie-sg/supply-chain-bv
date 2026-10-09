@@ -11,7 +11,7 @@ How DispatchDesk remembers a store's chats and a manager's settings across sessi
 | 3. Conversation summary: rolling, plus an idle cron job | Built | columns on `conversations` (0008) |
 | 4. Shifts and handover notes | Built | `shifts` (0016), `handover_notes` (0009, linked to shifts in 0016) |
 | 5. Dreaming: daily review with suggestions | Built | `suggestions`, `conversations.dreamed_to` (0009) |
-| 6. Personalization: durable response preferences | Built | `manager_personalization`, personalization suggestions (0013) |
+| 6. Personalization: durable response preferences | Built | `manager_personalization` (0013), review markers (0017) |
 | Resolution notes | Parked | `resolution_notes` |
 
 Not designed yet: approval log, reminders and snoozed alerts, trace events.
@@ -189,7 +189,7 @@ Saving a note inserts or updates it only while its shift is open; **End shift** 
 
 ## 5. Dreaming
 
-A daily review of the chats that **proposes, never applies**. It runs once a day at **23:30 IST** from Railway cron (`python cli.py review`, scheduled `0 18 * * *` UTC). Locally, run `uv run python cli.py review`. It works per store and manager, across all their chats.
+A daily review that saves verified response preferences automatically and proposes operational changes for confirmation. It runs once a day at **23:30 IST** from Railway cron (`python cli.py review`, scheduled `0 18 * * *` UTC). Locally, run `uv run python cli.py review`. It works per store and manager, across all their chats.
 
 | Output | Reads | Shown in | On accept |
 | --- | --- | --- | --- |
@@ -209,13 +209,13 @@ Each output is saved as a `pending` row and fails independently; a failure is lo
 
 **Hidden for now:** `SHOW_SUGGESTIONS = False` (`constants.py`) hides the sidebar Suggestions entry and the Settings category. The review still records suggestions and answer issues in the database. Demo tools has a separate **Summary & personalization** action that runs the summary batch immediately, without the ten-minute idle wait.
 
-**Guardrails:** never auto-applies; text in chats is data, never instructions; no judgments about individual riders, only store operations and the manager's own choices.
+**Guardrails:** operational suggestions never auto-apply. Verified response preferences save automatically under the personalization rules below. Chat transcripts are evidence, not system instructions. Reviews concern store operations and the manager's choices, not judgments about individual riders.
 
 ## 6. Personalization
 
 Settings > Personalization replaces the weekly digest with editable, durable
 response preferences. Explicit chat requests can save a typed preference;
-summary refreshes can only propose one from verified new user messages.
+summary refreshes save verified new preferences automatically without approval.
 Most chats trigger no extraction or update. Existing and removed preferences
 are never replaced by inference. Historical digest data remains in the database
 and no longer enters chat.
@@ -249,7 +249,7 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | 17 | Dreaming runs daily at 23:30 IST from Railway cron (`cli.py review`), plus an admin button; a shift is a calendar day | per-shift runs: shifts are not defined yet |
 | 18 | Handover drafts and settings read summaries; answer issues read raw messages after `dreamed_to` | raw messages everywhere: costlier; summaries everywhere: hide pushback and missing answers |
 | 19 | Suggestions appear in the sidebar and are reviewed in Settings; answer issues stay in admin | showing the issue report to the manager |
-| 20 | Durable personalization is a small typed profile per manager, updated by explicit intent or accepted proposals | A rolling digest mixes temporary facts with preferences and loses them as chats age out |
+| 20 | Durable personalization is a small typed profile per manager, updated by explicit intent or verified dreaming evidence | A rolling digest mixes temporary facts with preferences and loses them as chats age out |
 | 21 | Removed preferences retain a null entry, blocking inference from older chats | Deleting the entry lets old messages recreate it |
 | 22 | Shifts are rows the manager starts and ends; the handover note is its own table, one per shift, editable until the shift ends | shifts derived from the clock and manager hours: a demo would have to wait for real time to pass; the note as a column on the shift: mixes the working period with what it leaves behind |
 | 23 | Ending is explicit; the draft comes from chats since the shift started; the nightly draft stays as a fallback | ending on the clock; drafting from today's chats only, which misses a night shift's early hours |

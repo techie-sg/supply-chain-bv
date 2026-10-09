@@ -543,7 +543,6 @@ def test_a_summarized_chat_sends_the_summary_and_only_recent_messages(store) -> 
 def test_dispatch_tools_share_the_rag_path_and_record_their_results(
     monkeypatch,
 ) -> None:
-    import json
 
     import service.tools as tools_service
 
@@ -654,18 +653,7 @@ def test_general_response_request_saves_and_refreshes_personalization(
 
     def answer(question, **kwargs):
         if question == "keep answers short for me":
-            tool = next(
-                tool
-                for tool in kwargs["tools"]
-                if tool.name == "change_personalization"
-            )
-            result = json.loads(
-                tool.run(
-                    {"code": "answer_length", "value": "brief", "quote": question},
-                ),
-            )
-            assert result["saved"]
-            return "Saved. I'll keep answers brief."
+            pytest.fail("An unambiguous preference-only request needs no provider")
         assert kwargs["personalization"] == "Answer length: Brief"
         assert all(tool.name != "change_personalization" for tool in kwargs["tools"])
         return "Brief follow-up."
@@ -682,6 +670,12 @@ def test_general_response_request_saves_and_refreshes_personalization(
     assert conversations.ask_question("What should I do first?", "ananya")[0] == (
         "Brief follow-up."
     )
+
+
+def test_a_model_cannot_offer_a_missing_confirm_button():
+    changes = conversations.SettingChanges(SimpleNamespace())
+    result = conversations._tidied(AnswerResult("Press **Confirm** to save."), changes)
+    assert "Nothing was saved" in result.text and "Press" not in result.text
 
 
 def test_shared_conversation_factory_binds_the_selected_manager(store, monkeypatch):

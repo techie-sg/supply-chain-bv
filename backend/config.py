@@ -6,7 +6,12 @@ from typing import Literal
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE, GROQ_MODEL, JINA_MODEL
+from constants import (
+    DEFAULT_CHUNK_OVERLAP,
+    DEFAULT_CHUNK_SIZE,
+    JINA_MODEL,
+    OPENROUTER_MODEL,
+)
 
 
 class Settings(BaseSettings):
@@ -21,13 +26,21 @@ class Settings(BaseSettings):
     )
     jina_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
+    openrouter_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "OPENROUTER_KEY",
+            "OPEN_ROUTER_KEY",
+            "OPENROUTER_API_KEY",
+        ),
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     embedding_provider: str = "jina"
     embedding_model: str = JINA_MODEL
     # Changing this changes stored vectors: re-run ingestion after toggling it.
     embedding_task_adapters: bool = False
-    llm_provider: str = "groq"
-    llm_model: str = GROQ_MODEL
+    llm_provider: str = "openrouter"
+    llm_model: str = OPENROUTER_MODEL
     chunking_strategy: str = "markdown_sections"
     chunk_size: int = Field(default=DEFAULT_CHUNK_SIZE, gt=0)
     chunk_overlap: int = Field(default=DEFAULT_CHUNK_OVERLAP, ge=0)

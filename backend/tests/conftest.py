@@ -21,7 +21,17 @@ _test_environment = pytest.MonkeyPatch()
 def pytest_configure() -> None:
     """Disable local dotenv loading before test modules are collected."""
     _test_environment.setitem(Settings.model_config, "env_file", None)
-    for name in ("DATABASE_URL", "DB_URL", "JINA_API_KEY", "GROQ_API_KEY"):
+    for name in (
+        "DATABASE_URL",
+        "DB_URL",
+        "JINA_API_KEY",
+        "GROQ_API_KEY",
+        "OPENROUTER_KEY",
+        "OPEN_ROUTER_KEY",
+        "OPENROUTER_API_KEY",
+        "LLM_PROVIDER",
+        "LLM_MODEL",
+    ):
         _test_environment.delenv(name, raising=False)
 
 

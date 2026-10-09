@@ -216,12 +216,16 @@ def test_ask_uses_the_briefing_only_for_greetings(monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "SettingChanges",
-        lambda preferences: SimpleNamespace(proposals=[], tool=lambda: None),
+        lambda preferences: SimpleNamespace(
+            proposals=[],
+            tool=lambda: None,
+            direct_request=lambda question: None,
+        ),
     )
     monkeypatch.setattr(
         conversations,
         "PersonalizationChanges",
-        lambda *args: SimpleNamespace(tool=lambda: None),
+        lambda *args: SimpleNamespace(tool=lambda: None, direct_requests=list),
     )
     monkeypatch.setattr(
         conversations,

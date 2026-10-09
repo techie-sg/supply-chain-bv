@@ -261,7 +261,7 @@ One row per firing episode. New migration `0009_alert_events`.
 | `docs/memory.md`, Decisions 8 and Open decision 5 | Alert evaluation is defined here |
 | `docs/memory.md`, Deferred | `source` and `source_message` on `store_preferences` are now built |
 | `dispatch_manager_system.md`, "Settings" | Alerts can be changed through chat by proposing a change for confirmation. Other settings still point to the Settings tab. Never claim a change before it is confirmed |
-| `service/groq_service.py` | Support tool calls (`ChatGroq.bind_tools`) |
+| `service/openrouter_service.py`, `service/groq_service.py` | Support local tool calls through the configured provider |
 | `service/rag.py` | Offer the tool, handle tool calls, add the `<alerts>` block |
 
 ## Code layout
@@ -271,7 +271,7 @@ One row per firing episode. New migration `0009_alert_events`.
 | `backend/service/alerts.py` | `evaluate_alerts`, `AlertResult`, firing, repeating and clearing |
 | `backend/queries/alerts.py` | `live_snapshot()`, alert event reads and writes |
 | `backend/service/setting_changes.py` | Implemented: tool schema, merge, validate, confirm, reply tidy-up |
-| `backend/service/llm_service.py`, `groq_service.py` | Implemented: `Tool` and `generate_with_tools` (Groq tool calling, at most 3 rounds) |
+| `backend/service/llm_service.py`, `openrouter_service.py`, `groq_service.py` | Implemented: `Tool` and `generate_with_tools` (at most 3 tool rounds) |
 | `backend/alembic/versions/0009_alert_events.py` | `alert_events`, plus `source` and `source_message` on `store_preferences` |
 | `backend/ui/gradio_app.py` | Timer, pop-up, Alerts block, pending-change cards, demo time |
 | `backend/tests/` | Tests for each of the above |
