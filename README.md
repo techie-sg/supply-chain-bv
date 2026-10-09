@@ -77,7 +77,7 @@ Two read-only tools use the existing Groq tool-calling loop and run in the appli
 | `get_live_dispatch_status(store_id)` | Open queue (counts by status, oldest ages, orders), riders with hours and breaks, zones, rain flag, and the snapshot's `as_of` time with a `stale` flag (older than 5 minutes) |
 | `get_delivery_metrics(store_id, date, start_hour, end_hour)` | Hourly orders, 10-minute SLA, pick-pack, rider-wait and ride minutes, riders online, rain flag, and an order-weighted period summary |
 
-`service/tools.py` validates tool arguments and computes results; `queries/tools.py` performs the database reads, filtering by store and the requested period. The configured `LLM_MODEL` and normal Groq retry and fallback behavior apply to all chat requests. MCP integration is deferred.
+`service/tools.py` validates tool arguments and computes results; `queries/tools.py` performs the database reads, filtering by store and the requested period. The configured `LLM_MODEL` and normal Groq retry and fallback behavior apply to all chat requests.
 
 To see it in the chat, load a scenario, ask "Orders are backing up right now, what's going on and what should I do first?", and open the **Agent trace** under the answer. It records executed dispatch and setting tools, their data timestamps and errors, and the manager's customized settings. The trace is saved with the answer and survives a refresh. If no snapshot is loaded, the tool returns `NO_SNAPSHOT`.
 
