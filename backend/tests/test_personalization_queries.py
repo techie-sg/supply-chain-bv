@@ -416,3 +416,44 @@ def test_review_progress_is_scoped_and_cannot_pass_saved_summary_coverage(engine
         )
     with get_session(engine) as session:
         assert session.get(Conversation, chat.id).personalization_covers_to is None
+
+
+@pytest.mark.parametrize("concurrent_edit", [False, True])
+def test_dreaming_context_saves_atomically_and_rejects_stale_profile(
+    engine,
+    concurrent_edit,
+):
+    chat = summarized_chat(engine)
+    original = {"additional_instructions": item("Name: Sunny.", "settings")}
+    save_profile("DS-1", "karthik", original, engine=engine)
+    learned = {
+        **proposal(chat=chat),
+        "payload": {
+            "code": "additional_instructions",
+            "value": "Name: Sunny. Keep answers short.",
+        },
+        "expected_profile": original,
+    }
+    if concurrent_edit:
+        save_profile(
+            "DS-1",
+            "karthik",
+            {"additional_instructions": item("Name: Priya.", "settings")},
+            engine=engine,
+        )
+        with pytest.raises(ValueError, match="changed"):
+            finish_review(chat.id, "DS-1", "karthik", None, 3, [learned], engine)
+        assert (
+            read_profile("DS-1", "karthik", engine)["additional_instructions"]["value"]
+            == "Name: Priya."
+        )
+    else:
+        assert (
+            finish_review(chat.id, "DS-1", "karthik", None, 3, [learned], engine) == 1
+        )
+        saved = read_profile("DS-1", "karthik", engine)["additional_instructions"]
+        assert saved["source"] == "dreaming" and "short" in saved["value"]
+    with get_session(engine) as session:
+        assert session.get(Conversation, chat.id).personalization_covers_to == (
+            None if concurrent_edit else 3
+        )

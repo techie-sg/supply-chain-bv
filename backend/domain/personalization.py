@@ -58,7 +58,7 @@ def validate_value(code: str, value: str | None) -> str | None:
     if code == NOTES:
         value = value.strip()
         if len(value) > PERSONALIZATION_MAX_INSTRUCTIONS:
-            raise ValueError("Additional instructions must be at most 600 characters.")
+            raise ValueError("Personal context exceeds its character limit.")
         return value or None
     if value not in FIELDS[code].choices:
         raise ValueError(f"Invalid value for {FIELDS[code].name}.")
