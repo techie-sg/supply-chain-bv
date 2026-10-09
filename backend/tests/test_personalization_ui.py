@@ -29,7 +29,7 @@ def test_load_values_and_source_link_preserve_manager(monkeypatch):
         lambda manager_id: Service(),
     )
     values = personalization.load("ananya")
-    assert values[0] == "brief" and values[1:4] == ("", "", "")
+    assert "Answer length: Brief" in values[0]
     assert values[-3] == {"manager_id": "ananya", "profile": profile}
     assert "manager=ananya" in values[-2] and "View conversation" in values[-2]
 
@@ -69,6 +69,7 @@ def test_settings_show_personalization_controls_and_no_memory_digest(ui_app):
         if hasattr(component, "elem_id")
     }
     assert (
-        "personalization-answer_length" in ids and "personalization-instructions" in ids
+        "personalization-answer_length" not in ids
+        and "personalization-instructions" in ids
     )
     assert "memory-digest" not in ids

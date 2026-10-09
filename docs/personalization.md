@@ -1,103 +1,50 @@
-# Personalization
+# Personalization through dreaming
 
-Personalization stores how each manager wants advice presented and which eligible
-options to consider first. It is separate from incentive caps, alert thresholds,
-batching rules, conversation summaries, handover notes and live store data.
+DispatchDesk remembers personal context for each store manager: a name or email,
+working preferences, and instructions the manager wants followed across chats.
+It is a small editable context, not a catalogue of predefined response settings.
 
-Settings > Personalization provides answer length, answer order, comparisons,
-decision priority and optional additional instructions. Preferences persist
-across chats until explicitly changed. Select Use default or clear additional
-instructions to remove them. Each saved item shows how it was saved and, when
-available, links to its source conversation.
+## When it updates
 
-## Exactly when a saved profile changes
+Chat reads saved context on every answer. It never writes personalization or
+calls a personalization tool. Requests and personal details remain in the raw
+conversation until the background review examines them.
 
-| Trigger | Requirement | Result |
-| --- | --- | --- |
-| Save personalization | A validated field actually differs from the loaded profile | Save only changed fields; stale edits are rejected |
-| Latest chat message | A direct lasting request such as "Keep answers short for me", "Always keep your answers short", "I prefer detailed explanations", or "Forget my preference for short answers" | A turn-scoped tool validates the exact user quote and supported value, then saves or removes that field |
-| Dreaming after summary | Verified clear intent or matching requests in three distinct chats; the field is unset | Save the preference and evidence with the review marker, without approval |
-| Accept a legacy suggestion | An older pending suggestion belongs to this manager and the field remains unset | Retained for existing records; new reviews do not create personalization suggestions |
+The summary cron runs every five minutes and summarizes conversations idle for
+at least ten minutes. After a summary, it reviews manager messages after that
+conversation's `personalization_covers_to` marker, up to `summary_covers_to`.
+The daily dreaming job and Demo tools' **Summary & personalization** action also
+run this review. Failed or unfinished reviews are retried by the summary job.
 
-Repeating a saved value changes nothing, including its source and save time.
-Page loads and scenario loads do not infer preferences. Summary and daily review can save verified new preferences automatically.
-A removed field retains a null entry so old conversations cannot restore it.
-An explicit new request or a Settings save can set that field again.
+Most batches return no update. The model saves context only when a manager
+message states a durable personal detail or instruction. It excludes temporary
+store conditions, questions, other people's details, quoted text, and secrets.
+Existing context is preserved unless the manager explicitly corrects it or asks
+to forget it. Assistant messages and summaries are not extraction evidence.
 
-## Batched dreaming saves preferences automatically
+## Storage and limits
 
-Review runs after a **successful summary save**, on all existing summary paths:
-Summarize Now, folding older messages after an answer, and the idle summary job
-(chats idle at least 10 minutes when the job runs). Daily review also refreshes
-summaries using this same path. The same cron command retries unfinished reviews
-even when no new summary is needed. Manual summarization can also retry pending
-review of an existing summary. There is no new scheduler.
+The existing `app.manager_personalization.preferences` JSON stores the context
+under `additional_instructions`, with its source, timestamp, and message evidence.
+No schema migration is needed. Legacy structured preferences remain readable.
 
-1. Start after the conversation's own `personalization_covers_to`, and process
-   only messages up to its saved `summary_covers_to`. Only qualifying **manager
-   messages** are fresh evidence. Assistant text, earlier summaries and messages
-   beyond summary coverage are excluded.
-2. Apply conservative English request patterns. Routine dispatch questions,
-   operational settings, facts, quoted examples, negations and temporary requests
-   such as "make this answer shorter" or "for this shift" are ignored. With no
-   eligible request, skip profile/evidence reads, extraction and preference writes,
-   and mark the batch reviewed.
-3. Exclude fields already saved or deliberately removed. Review never replaces
-   them. If no unset field is supported by the new messages, stop.
-4. A new explicit lasting request can save a preference. A request without
-   lasting intent requires the same preference in **three distinct chats**.
-   Repetition within one chat does not count. Evidence lookup is bounded to the
-   last 20 summarized chats and their last 60 messages, scoped to this manager.
-5. Only then call the extractor. The usual output is `[]`. Each candidate must
-   use an allowed code/value and exact user quotes at verified message positions.
-   At least one supporting message must belong to the current review batch.
-6. Save verified preferences, exact evidence and the batch's progress marker in one transaction, with source `dreaming`. No approval is required and no new personalization suggestion is created. Already saved or removed fields are checked again under the manager lock. A successful no-op also advances progress. Provider errors,
-   malformed output and transaction failures leave that batch pending. Earlier
-   successful batches remain complete. Summary and saved preferences stay intact.
+Each model call receives up to 60 message positions and 24 KB of fresh text,
+with a 48 KB total input budget. A run processes at most five batches per chat.
+Saved context is limited to 4,000 characters. Every learned update must cite an
+exact quote and message position from the current batch.
 
-Each batch covers at most 60 message positions, with at most 24 KB of fresh
-serialized message text. The entire extraction input, including system prompt,
-supporting messages and optional summary context, is capped at 48 KB of UTF-8
-bytes. This is a conservative bound comfortably below the 132k-token context
-limit, leaving room for output and provider formatting. Summary context is capped
-at 2 KB; supporting evidence is included only when it fits. Evidence messages are
-never silently truncated. A single qualifying request that exceeds the batch
-budget remains pending and is logged instead of being sent over budget.
+Context and the review marker save in one transaction. A concurrent context
+edit rejects a stale update and leaves that batch pending for retry. Empty
+results advance the marker without changing the context. Store and manager IDs
+scope all reads and writes.
 
-Each review processes at most five batches per chat. Remaining batches are picked
-up by the next cron run. Progress saves use the expected previous marker so a
-stale or concurrent worker cannot regress progress or duplicate a completed batch.
+## Settings
 
-Example: "Why is the queue growing?" saves nothing. "Make this answer shorter"
-applies to that answer only. "Keep answers short for me" can save a durable
-preference through chat. If its chat tool did not save it, summary review saves it automatically, with the source quote visible in Settings.
+**Settings → Personalization** shows the saved context and its supporting
+conversation. The manager can edit or clear it directly. This manual edit is
+separate from automatic dreaming and uses a snapshot check to avoid overwriting
+a concurrent change.
 
-## Storage and answering
-
-Migration `0013_personalization` adds `app.manager_personalization`: one row per
-manager with store scope and a small JSON object containing typed preferences,
-source, quote, source conversation and save time. Learned items also retain extraction reason and verified evidence. Existing personalization proposals remain readable in `app.suggestions`, but new dreaming runs save directly to the profile. Writes serialize on the manager row; profile changes and review progress share a transaction.
-
-Migration `0015_merge_personalization` joins this migration with the alert
-migrations from `main`. Both existing upgrade paths converge on one head without
-changing revisions that were already applied locally.
-
-Migration `0017_personalization_progress`, directly after `0016_shifts`, adds
-`personalization_covers_to` and `personalized_at` to each conversation, plus a
-partial index for pending reviews.
-The timestamp records the last successful batch, including no-ops. Position is
-the processing boundary; cron-run timestamps do not define the message window.
-Existing chats begin pending because a saved summary alone does not establish
-that personalization review succeeded. Review never changes chat recency.
-
-Every answer, including a new chat's first answer and replies in a resumed chat,
-reads the selected manager's current profile once and supplies active values to
-response generation. The profile is never pinned to an old conversation or
-reused across managers. Personalization does not enter embeddings or retrieval queries.
-The current request overrides default answer style; policy, validated operational
-settings, approvals, live facts, citations and uncertainty requirements remain
-binding. Free-text instructions can be saved only in Settings.
-
-The previous weekly digest no longer runs or enters chat. Historical
-`app.memory_digests` data is retained by the migration and is never automatically
-converted into personalization.
+Examples: “My name is Priya,” “My email is priya@example.com,” or “Keep answers
+short for me.” Routine requests such as “How many orders are waiting?” should
+produce no personalization update. Learning requires no approval button.

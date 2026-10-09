@@ -623,20 +623,18 @@ def test_new_chat_first_answer_and_followups_read_the_selected_managers_fresh_pe
     assert contexts[-1][2] and reads == ["karthik", "ananya", "ananya"]
 
 
-def test_general_response_request_saves_and_refreshes_personalization(
-    store,
-    monkeypatch,
-):
-    from service import personalization
+def test_chat_request_saves_only_through_summary_dreaming(store, monkeypatch):
+    from service import personalization, summaries
     from ui import personalization as personalization_ui
 
     profiles = {}
+    offered = []
 
-    def save(store_id, manager_id, changes, **kwargs):
-        profiles.setdefault((store_id, manager_id), {}).update(changes)
-        return True
-
-    monkeypatch.setattr(personalization, "save_profile", save)
+    monkeypatch.setattr(
+        personalization,
+        "save_profile",
+        lambda *args, **kwargs: pytest.fail("Chat must never write personalization"),
+    )
     monkeypatch.setattr(
         personalization,
         "read_profile",
@@ -652,24 +650,74 @@ def test_general_response_request_saves_and_refreshes_personalization(
     )
 
     def answer(question, **kwargs):
+        offered.append([tool.name for tool in kwargs["tools"]])
         if question == "keep answers short for me":
-            pytest.fail("An unambiguous preference-only request needs no provider")
-        assert kwargs["personalization"] == "Answer length: Brief"
-        assert all(tool.name != "change_personalization" for tool in kwargs["tools"])
+            assert kwargs["personalization"] is None
+            return "I'll keep replies concise."
+        assert "Keep answers short." in kwargs["personalization"]
         return "Brief follow-up."
 
     monkeypatch.setattr(conversations, "answer_question", answer)
-    _, _, trace = conversations.ask_question("keep answers short for me", "ananya")
-    profile = profiles[(conversations.DEMO_STORE_ID, "ananya")]
-    assert profile["answer_length"]["value"] == "brief"
-    assert profile["answer_length"]["quote"] == "keep answers short for me"
-    assert profile["answer_length"]["conversation_id"] == str(store.rows[-1].id)
-    assert trace["tools"][0]["tool"] == "change_personalization"
-    assert personalization_ui.load("ananya")[0] == "brief"
+    text, _, trace = conversations.ask_question("keep answers short for me", "ananya")
+    assert text == "I'll keep replies concise."
+    assert profiles == {} and trace["tools"] == []
+    conversation = store.rows[-1]
+    assert conversation.summary_covers_to is None
+
+    def finish(chat_id, store_id, manager_id, expected, end, updates, engine=None):
+        assert expected is None and end == 1
+        update = updates[0]
+        profiles[(store_id, manager_id)] = {
+            "additional_instructions": {
+                **personalization.item(
+                    "Keep answers short.",
+                    "dreaming",
+                    conversation_id=str(chat_id),
+                    quote=update["evidence"][0]["quote"],
+                ),
+                "evidence": update["evidence"],
+            },
+        }
+        return 1
+
+    monkeypatch.setattr(personalization, "finish_review", finish)
+    monkeypatch.setattr(summaries, "save_summary", lambda *args: True)
+
+    def generate(prompt, message):
+        if "Review new manager messages" not in prompt:
+            return "Manager requested concise answers."
+        evidence = json.loads(message)["manager_messages"][0]
+        return json.dumps(
+            [
+                {
+                    "code": "additional_instructions",
+                    "value": "Keep answers short.",
+                    "reason": "Explicit request.",
+                    "evidence": [
+                        {
+                            "conversation_id": evidence["conversation_id"],
+                            "message_index": evidence["message_index"],
+                            "quote": "keep answers short for me",
+                        },
+                    ],
+                },
+            ],
+        )
+
+    review = summaries.SummaryService(generate, review_personalization=True)
+    assert review.fold(conversation, keep_recent=0)
+    profile = profiles[(conversations.DEMO_STORE_ID, "ananya")][
+        "additional_instructions"
+    ]
+    assert profile["source"] == "dreaming" and profile["value"] == "Keep answers short."
+    assert conversation.personalization_covers_to == 1
+    assert personalization_ui.load("ananya")[0] == "Keep answers short."
     assert personalization_ui.load("karthik")[0] == ""
-    assert conversations.ask_question("What should I do first?", "ananya")[0] == (
-        "Brief follow-up."
+    assert (
+        conversations.ask_question("What should I do first?", "ananya")[0]
+        == "Brief follow-up."
     )
+    assert all("change_personalization" not in tools for tools in offered)
 
 
 def test_a_model_cannot_offer_a_missing_confirm_button():

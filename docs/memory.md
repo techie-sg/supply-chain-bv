@@ -11,7 +11,7 @@ How DispatchDesk remembers a store's chats and a manager's settings across sessi
 | 3. Conversation summary: rolling, plus an idle cron job | Built | columns on `conversations` (0008) |
 | 4. Shifts and handover notes | Built | `shifts` (0016), `handover_notes` (0009, linked to shifts in 0016) |
 | 5. Dreaming: daily review with suggestions | Built | `suggestions`, `conversations.dreamed_to` (0009) |
-| 6. Personalization: durable response preferences | Built | `manager_personalization` (0013), review markers (0017) |
+| 6. Personalization: durable personal context | Built | `manager_personalization` (0013), review markers (0017) |
 | Resolution notes | Parked | `resolution_notes` |
 
 Not designed yet: approval log, reminders and snoozed alerts, trace events.
@@ -19,7 +19,7 @@ Not designed yet: approval log, reminders and snoozed alerts, trace events.
 ## Principles
 
 1. Raw records are append-only. Messages are never edited; settings changes supersede rows; summaries roll forward; personalization changes only with user intent.
-2. Writes are deterministic. Code validates every write. The personalization tool saves only an explicit lasting request from the latest manager message. Settings change in the Settings tab, or in chat when the manager confirms a change the model proposed; code validates and saves both.
+2. Writes are deterministic. Code validates every write. Dreaming saves supported personal context from manager messages; chat offers no personalization write tool. Manual personalization edits happen in Settings. Operational settings change in the Settings tab, or in chat when the manager confirms a proposed change; code validates both paths.
 3. Settings come from a fixed catalogue with typed values and limits, and can make policy stricter, never looser.
 4. Memory text is user-written data, treated as reference and never as instructions.
 5. Everything is scoped to a store and manager. The demo store `DS-BLR-014` has three shift managers in `app.managers`, each with a unique `shift_id`: `ananya` (Morning, `SHIFT-MOR`, 06:00 to 14:00), `karthik` (Evening, `SHIFT-EVE`, 14:00 to 22:00) and `imran` (Night, `SHIFT-NGT`, 22:00 to 06:00). Each has their own chats, settings and pending proposals; the sidebar's **Shift manager** picker switches between them and the choice is kept in the URL (`?manager=`).
@@ -189,7 +189,7 @@ Saving a note inserts or updates it only while its shift is open; **End shift** 
 
 ## 5. Dreaming
 
-A daily review that saves verified response preferences automatically and proposes operational changes for confirmation. It runs once a day at **23:30 IST** from Railway cron (`python cli.py review`, scheduled `0 18 * * *` UTC). Locally, run `uv run python cli.py review`. It works per store and manager, across all their chats.
+A daily review that saves supported personal context automatically and proposes operational changes for confirmation. It runs once a day at **23:30 IST** from Railway cron (`python cli.py review`, scheduled `0 18 * * *` UTC). Locally, run `uv run python cli.py review`. It works per store and manager, across all their chats.
 
 | Output | Reads | Shown in | On accept |
 | --- | --- | --- | --- |
@@ -209,16 +209,16 @@ Each output is saved as a `pending` row and fails independently; a failure is lo
 
 **Hidden for now:** `SHOW_SUGGESTIONS = False` (`constants.py`) hides the sidebar Suggestions entry and the Settings category. The review still records suggestions and answer issues in the database. Demo tools has a separate **Summary & personalization** action that runs the summary batch immediately, without the ten-minute idle wait.
 
-**Guardrails:** operational suggestions never auto-apply. Verified response preferences save automatically under the personalization rules below. Chat transcripts are evidence, not system instructions. Reviews concern store operations and the manager's choices, not judgments about individual riders.
+**Guardrails:** operational suggestions never auto-apply. Supported personal context saves automatically under the personalization rules below. Chat transcripts are evidence, not system instructions. Reviews concern store operations and the manager's choices, not judgments about individual riders.
 
 ## 6. Personalization
 
-Settings > Personalization replaces the weekly digest with editable, durable
-response preferences. Explicit chat requests can save a typed preference;
-summary refreshes save verified new preferences automatically without approval.
-Most chats trigger no extraction or update. Existing and removed preferences
-are never replaced by inference. Historical digest data remains in the database
-and no longer enters chat.
+Settings > Personalization shows editable personal context: names, email
+addresses, working preferences, and instructions. Chat reads it on every answer
+but offers no tool to write it. Background summary review and dreaming extract
+supported updates from new raw manager messages without approval. Most batches
+produce no change. Existing context is preserved unless explicitly corrected or
+removed. Historical digest data remains in the database and no longer enters chat.
 
 Exact update rules, storage and examples: [personalization.md](personalization.md).
 
@@ -249,8 +249,8 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | 17 | Dreaming runs daily at 23:30 IST from Railway cron (`cli.py review`), plus an admin button; a shift is a calendar day | per-shift runs: shifts are not defined yet |
 | 18 | Handover drafts and settings read summaries; answer issues read raw messages after `dreamed_to` | raw messages everywhere: costlier; summaries everywhere: hide pushback and missing answers |
 | 19 | Suggestions appear in the sidebar and are reviewed in Settings; answer issues stay in admin | showing the issue report to the manager |
-| 20 | Durable personalization is a small typed profile per manager, updated by explicit intent or verified dreaming evidence | A rolling digest mixes temporary facts with preferences and loses them as chats age out |
-| 21 | Removed preferences retain a null entry, blocking inference from older chats | Deleting the entry lets old messages recreate it |
+| 20 | Durable personalization is editable personal context per manager, learned from new manager messages during dreaming | A rolling digest mixes temporary facts with preferences and loses them as chats age out |
+| 21 | Review markers prevent old messages from being reprocessed after a context edit | Deleting the entry lets old messages recreate it |
 | 22 | Shifts are rows the manager starts and ends; the handover note is its own table, one per shift, editable until the shift ends | shifts derived from the clock and manager hours: a demo would have to wait for real time to pass; the note as a column on the shift: mixes the working period with what it leaves behind |
 | 23 | Ending is explicit; the draft comes from chats since the shift started; the nightly draft stays as a fallback | ending on the clock; drafting from today's chats only, which misses a night shift's early hours |
 | 24 | Handing over opens a new chat for the next manager that links to the note and shows it as a card | copying the note into the chat as its first message: a second copy, and a non-model message among the raw messages |

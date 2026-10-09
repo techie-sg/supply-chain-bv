@@ -46,11 +46,7 @@ from service.handover import (
     ensure_shift,
 )
 from service.managers import store_managers
-from service.personalization import (
-    PersonalizationChanges,
-    explicit,
-    manager_personalization,
-)
+from service.personalization import manager_personalization
 from service.preferences import (
     PreferenceError,
     PreferenceService,
@@ -359,11 +355,6 @@ def ask_question(
         logger.warning("Could not start a shift", exc_info=True)
     preferences = manager_preferences(manager_id)
     changes = SettingChanges(preferences)
-    personalization = PersonalizationChanges(
-        manager_personalization(manager_id),
-        question,
-        lambda: service.conversation_id,
-    )
 
     def reply(question: str, **kwargs: Any) -> AnswerResult:
         direct_setting = changes.direct_request(question)
@@ -377,21 +368,6 @@ def ask_question(
                 else result["reason"]
             )
             return AnswerResult(text, _trace(preferences, calls))
-        direct = personalization.direct_requests()
-        if direct:
-            calls = []
-            tool = traced_tools([personalization.tool()], calls)[0]
-            results = [json.loads(tool.run(arguments)) for arguments in direct]
-            if all(result.get("saved") for result in results):
-                saved = "; ".join(result["preference"] for result in results)
-                return AnswerResult(f"Saved. {saved}.", _trace(preferences, calls))
-            return AnswerResult(
-                "Could not save that preference. "
-                + "; ".join(
-                    result["reason"] for result in results if not result.get("saved")
-                ),
-                _trace(preferences, calls),
-            )
         if is_greeting(question):
             greeting = _briefing(preferences, kwargs.get("handover_note_id"))
             if greeting is not None:
@@ -401,10 +377,7 @@ def ask_question(
             _answer(
                 question,
                 preferences=preferences,
-                tools=[
-                    changes.tool(),
-                    *([personalization.tool()] if explicit(question) else []),
-                ],
+                tools=[changes.tool()],
                 **kwargs,
             ),
             changes,
