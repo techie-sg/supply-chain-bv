@@ -416,31 +416,24 @@ class HandoverNote(Base):
     )
 
 
-class MemoryDigest(Base):
-    """What the daily review remembers about a manager's recent chats."""
+class ManagerPersonalization(Base):
+    """Durable response preferences; null values retain deliberate removals."""
 
-    __tablename__ = "memory_digests"
+    __tablename__ = "manager_personalization"
     __table_args__ = (
         CheckConstraint(
-            "jsonb_typeof(sources) = 'array'",
-            name="ck_memory_digests_sources",
+            "jsonb_typeof(preferences) = 'object'",
+            name="ck_personalization_preferences",
         ),
         {"schema": "app"},
     )
-
     manager_id: Mapped[str] = mapped_column(
         String(32),
         ForeignKey("app.managers.manager_id", ondelete="RESTRICT"),
         primary_key=True,
     )
     store_id: Mapped[str] = mapped_column(String(32))
-    digest: Mapped[str | None] = mapped_column(Text)
-    # [{"conversation_id": ..., "covers_to": <summary_covers_to>}], newest first.
-    sources: Mapped[list] = mapped_column(JSONB, default=list, server_default="[]")
-    built_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-    )
+    preferences: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
 
 
 class Suggestion(Base):
@@ -449,7 +442,7 @@ class Suggestion(Base):
     __tablename__ = "suggestions"
     __table_args__ = (
         CheckConstraint(
-            "kind IN ('setting', 'handover_draft', 'answer_issue')",
+            "kind IN ('setting', 'handover_draft', 'answer_issue', 'personalization')",
             name="ck_suggestions_kind",
         ),
         CheckConstraint(

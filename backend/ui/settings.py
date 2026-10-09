@@ -1,6 +1,6 @@
 """Settings tab: the manager sets alerts, batching rules, incentive cap and greeting.
 
-It also shows the daily review's suggestions and, read-only, its memory digest.
+It also shows review suggestions and editable response personalization.
 
 Each manager has their own settings. Values are saved exactly as entered in the
 form; the assistant only proposes changes, which the manager confirms.
@@ -14,16 +14,15 @@ import gradio as gr
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
-from constants import DEMO_MANAGER_ID, DIGEST_DAYS, TIMEZONE
+from constants import DEMO_MANAGER_ID
 from domain.memory import BriefingView, PreferenceCode, Weekday
 from domain.preferences import EffectiveSetting, SettingDefinition
-from service.memory import memory_digest
 from service.preferences import (
     PreferenceError,
     limits,
     manager_preferences,
 )
-from service.suggestions import plural
+from ui import personalization as personalization_ui
 from ui import suggestions as suggestions_ui
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -92,7 +91,7 @@ class SettingsForm:
     status: gr.Markdown
     nav: gr.Radio | None = None
     suggestions: suggestions_ui.SuggestionComponents | None = None
-    memory: gr.Markdown | None = None
+    personalization: personalization_ui.PersonalizationComponents | None = None
     category_outputs: tuple[Any, ...] = ()  # each panel, then the Save row
 
     def _component(self, code: str, name: str) -> Any:
@@ -377,26 +376,6 @@ def load_summary(manager_id: str = DEMO_MANAGER_ID) -> str:
         return '<p class="summary-off">Settings unavailable.</p>'
 
 
-def load_memory(manager_id: str = DEMO_MANAGER_ID) -> str:
-    """The manager's memory digest, read-only, with what it was built from."""
-    try:
-        digest = memory_digest(manager_id)
-    except (SQLAlchemyError, RuntimeError):
-        logger.warning("Could not load the memory digest", exc_info=True)
-        return "Memory is unavailable right now. Check the database connection."
-    if digest is None or not digest.digest:
-        return (
-            "Nothing remembered yet. The daily review builds this from your chats "
-            f"in the last {DIGEST_DAYS} days."
-        )
-    built = digest.built_at.astimezone(TIMEZONE)
-    return (
-        f"{digest.digest}\n\n*From {plural(len(digest.sources), 'chat')} in the "
-        f"last {DIGEST_DAYS} days · built {built.day} {built.strftime('%b, %H:%M')}. "
-        "To correct something, tell the assistant in chat.*"
-    )
-
-
 CATEGORIES = [
     ("alerts", "Alerts", "When the assistant should warn you about the store."),
     ("batching", "Batching", "Rules for putting more than one order on a trip."),
@@ -411,16 +390,13 @@ CATEGORIES = [
         ),
     ),
     (
-        "memory",
-        "Memory",
-        (
-            "What the assistant remembers from your recent chats. It uses this "
-            "without asking; the daily review rebuilds it."
-        ),
+        "personalization",
+        "Personalization",
+        ("Tell DispatchDesk how you like to work and receive advice."),
     ),
 ]
 # Categories without the Save row.
-READ_ONLY = ("suggestions", "memory")
+READ_ONLY = ("suggestions", "personalization")
 
 # Show only the chosen category's panel; runs in the browser, no server call.
 # The last output is the Save row, which does not apply to read-only categories.
@@ -582,9 +558,8 @@ def build(manager: gr.State, summary: gr.HTML | None = None) -> SettingsForm:
 
             with gr.Column(visible=False, elem_classes="settings-panel") as panel:
                 panels.append(panel)
-                _panel_heading(*headings["memory"])
-                with gr.Column(elem_classes="setting-card"):
-                    memory = gr.Markdown(elem_id="memory-digest")
+                _panel_heading(*headings["personalization"])
+                personalization = personalization_ui.build(manager)
 
             with gr.Row(elem_id="settings-actions") as actions:
                 save = gr.Button(
@@ -616,7 +591,7 @@ def build(manager: gr.State, summary: gr.HTML | None = None) -> SettingsForm:
         status,
         nav=nav,
         suggestions=suggestion_parts,
-        memory=memory,
+        personalization=personalization,
         category_outputs=(*panels, actions),
     )
     events = [

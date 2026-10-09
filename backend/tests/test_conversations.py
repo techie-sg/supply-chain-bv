@@ -142,7 +142,11 @@ def store(monkeypatch) -> FakeStore:
     monkeypatch.setattr(conversations, "append_message", fake.append)
     # Keep tests off any real database: no handover notes.
     monkeypatch.setattr(conversations, "handover_block", lambda store_id: None)
-    monkeypatch.setattr(conversations, "memory_block", lambda manager_id: None)
+    monkeypatch.setattr(
+        conversations,
+        "manager_personalization",
+        lambda manager_id: type("Profile", (), {"prompt_block": lambda self: None})(),
+    )
     monkeypatch.setattr(conversations, "list_conversations", fake.list)
     monkeypatch.setattr(conversations, "resume_conversation", fake.resume)
     monkeypatch.setattr(conversations, "selected_conversation_id", fake.selected_id)
@@ -239,9 +243,14 @@ def test_messages_record_who_what_and_an_ist_timestamp() -> None:
 
 @pytest.fixture(autouse=True)
 def no_saved_context(monkeypatch, request) -> None:
-    """Default to no handover, memory or customized settings."""
+    """Default to no handover, personalization, alerts or customized settings."""
     monkeypatch.setattr(conversations, "handover_block", lambda store_id: None)
-    monkeypatch.setattr(conversations, "memory_block", lambda manager_id: None)
+    monkeypatch.setattr(conversations, "alerts_block", lambda manager_id: None)
+    monkeypatch.setattr(
+        conversations,
+        "manager_personalization",
+        lambda manager_id: type("Profile", (), {"prompt_block": lambda self: None})(),
+    )
     if "preference_store" not in request.fixturenames:
         monkeypatch.setattr(PreferenceService, "effective", lambda self: [])
 
@@ -256,7 +265,7 @@ def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> N
         preferences,
         summary=None,
         handover=None,
-        memory=None,
+        personalization=None,
         tools=(),
         alerts=None,
     ):
@@ -344,7 +353,7 @@ def test_ui_browse_entry_points(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None, handover=None, memory=None, tools=(), alerts=None: (
+        lambda question, *, history, preferences, summary=None, handover=None, personalization=None, tools=(), alerts=None: (
             "reply"
         ),
     )
@@ -444,7 +453,7 @@ def test_ui_title_entry_point_uses_the_configured_model(store, monkeypatch) -> N
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None, handover=None, memory=None, tools=(), alerts=None: (
+        lambda question, *, history, preferences, summary=None, handover=None, personalization=None, tools=(), alerts=None: (
             "Use the standby rider."
         ),
     )
@@ -529,6 +538,55 @@ def test_policy_questions_do_not_read_dispatch_rows(monkeypatch) -> None:
     assert reply == "policy" and trace == {"tools": [], "preferences": []}
 
 
+def test_new_chat_first_answer_and_followups_read_the_selected_managers_fresh_personalization(
+    store,
+    monkeypatch,
+):
+    profiles = {"karthik": "Answer length: Brief", "ananya": "Answer length: Detailed"}
+    reads, contexts = [], []
+
+    class Profile:
+        def __init__(self, manager_id):
+            self.manager_id = manager_id
+
+        def prompt_block(self):
+            reads.append(self.manager_id)
+            return profiles[self.manager_id]
+
+    def answer(question, **kwargs):
+        contexts.append(
+            (
+                kwargs["preferences"].manager_id,
+                kwargs["personalization"],
+                kwargs["history"],
+            ),
+        )
+        return "Answer"
+
+    monkeypatch.setattr(conversations, "manager_personalization", Profile)
+    monkeypatch.setattr(conversations, "answer_question", answer)
+    for manager_id in ("karthik", "ananya"):
+        chat_id = conversations.start_new_conversation(manager_id)
+        conversations.ask_question("First question", manager_id, chat_id)
+        assert contexts[-1] == (manager_id, profiles[manager_id], [])
+    profiles["ananya"] = "Answer length: Brief"
+    conversations.ask_question("Follow-up", "ananya", chat_id)
+    assert contexts[-1][:2] == ("ananya", "Answer length: Brief")
+    assert contexts[-1][2] and reads == ["karthik", "ananya", "ananya"]
+
+
+def test_shared_conversation_factory_binds_the_selected_manager(store, monkeypatch):
+    managers = []
+
+    def answer(question, **kwargs):
+        managers.append(kwargs["preferences"].manager_id)
+        return "Answer"
+
+    monkeypatch.setattr(conversations, "answer_question", answer)
+    conversations._service("imran").ask("First question")
+    assert managers == ["imran"]
+
+
 def test_setting_proposals_are_traced_without_a_scenario(monkeypatch) -> None:
     from domain.tools import Tool
 
@@ -600,7 +658,7 @@ def test_ui_summary_entry_point_uses_the_open_chat(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None, handover=None, memory=None, tools=(), alerts=None: (
+        lambda question, *, history, preferences, summary=None, handover=None, personalization=None, tools=(), alerts=None: (
             "reply"
         ),
     )
@@ -662,7 +720,7 @@ def test_ui_ask_returns_the_changes_the_assistant_proposed(
         preferences,
         summary=None,
         handover=None,
-        memory=None,
+        personalization=None,
         tools=(),
         alerts=None,
     ):

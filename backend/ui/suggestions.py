@@ -16,6 +16,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from constants import DEMO_MANAGER_ID, DEMO_STORE_ID, TIMEZONE
 from domain.memory import AlertOptions, SuggestionKind
+from domain.personalization import describe as describe_personalization
 from domain.preferences import EffectiveSetting
 from domain.suggestions import SuggestionView
 from service.dreaming import run_review
@@ -89,6 +90,8 @@ def _label(suggestion: SuggestionView) -> str:
     if suggestion.kind == SuggestionKind.HANDOVER_DRAFT:
         day = datetime.fromisoformat(suggestion.payload["shift"])
         return f"Handover note for {day.day} {day.strftime('%b')}"
+    if suggestion.kind == SuggestionKind.PERSONALIZATION:
+        return f"Personalization: {describe_personalization(suggestion.payload['code'], suggestion.payload['value'])}"
     return f"Setting: {_setting_text(suggestion.payload)}"
 
 

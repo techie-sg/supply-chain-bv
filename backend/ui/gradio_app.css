@@ -410,9 +410,14 @@ p.settings-status { padding-left: 0; color: var(--desk-muted); }
 .summary-yours { flex: none; padding: 1px 6px; border-radius: 6px; font-size: 11px; background: var(--desk-tint); color: var(--desk-accent); }
 .summary-off { margin: 4px 10px 0; font-size: 11px; color: var(--desk-muted); }
 #sidebar-scenario { margin: 0 !important; padding: 0 !important; }
-#sidebar-scenario .current-scenario { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 10px 2px; border: 0; border-top: 1px solid var(--desk-line-soft); border-radius: 0; background: transparent; }
+#sidebar-scenario-row { align-items: center; flex-wrap: nowrap; gap: 6px; padding: 10px 10px 2px; border-top: 1px solid var(--desk-line-soft); }
+#sidebar-scenario .current-scenario { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; padding: 0; border: 0; border-radius: 0; background: transparent; }
 #sidebar-scenario .current-scenario > span { color: var(--desk-dim); font-size: 11px; }
 #sidebar-scenario .current-scenario > strong { padding: 3px 9px; border: 1px solid var(--desk-accent-line); border-radius: 7px; background: var(--desk-tint); color: var(--desk-ink); font-size: 12px; font-weight: 500; }
+#reload-current-scenario { display: grid; place-items: center; flex: 0 0 28px !important; width: 28px; height: 28px; min-height: 28px; padding: 6px; border: 0; border-radius: 6px; background: transparent; color: var(--desk-muted); font-size: 0; box-shadow: none; }
+#reload-current-scenario::before { content: ""; width: 15px; height: 15px; background: currentColor; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 7v5h-5M4 17v-5h5'/%3E%3Cpath d='M6.1 7a7 7 0 0 1 11.8-2L20 8M4 16l2.1 3A7 7 0 0 0 17.9 17'/%3E%3C/svg%3E") center / contain no-repeat; }
+#reload-current-scenario:hover:not(:disabled) { background: var(--desk-soft); color: var(--desk-ink); }
+#reload-current-scenario:disabled { opacity: .4; }
 
 /* Position display-only times outside the bubble, beside the native copy action. */
 #conversation .prose p:has(> .message-time) { height: 0; margin: 0; line-height: 0; }

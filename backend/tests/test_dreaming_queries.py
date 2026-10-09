@@ -153,23 +153,3 @@ def test_latest_shift_notes_are_returned_together(review_engine: Engine) -> None
         (date(2026, 10, 8), "First"),
         (date(2026, 10, 8), "Second"),
     ]
-
-
-def test_digest_is_one_row_per_manager_and_replaced(review_engine: Engine) -> None:
-    from database.models import MemoryDigest
-    from queries.dreaming import all_managers, get_digest, save_digest
-
-    with review_engine.begin() as connection:
-        Base.metadata.tables["app.memory_digests"].create(connection, checkfirst=True)
-        connection.execute(delete(MemoryDigest))
-    try:
-        assert get_digest("karthik", review_engine) is None
-        sources = [{"conversation_id": "a", "covers_to": 3}]
-        save_digest("DS-1", "karthik", "- First", sources, review_engine)
-        save_digest("DS-1", "karthik", None, [], review_engine)
-        digest = get_digest("karthik", review_engine)
-        assert digest is not None and (digest.digest, digest.sources) == (None, [])
-        assert "karthik" in {item.manager_id for item in all_managers(review_engine)}
-    finally:
-        with review_engine.begin() as connection:
-            connection.execute(delete(MemoryDigest))

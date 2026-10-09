@@ -1,21 +1,20 @@
-"""Read chats for the daily review; store suggestions, handover notes and digests."""
+"""Read chats for the daily review; store suggestions and handover notes."""
 
 from datetime import date
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import Engine, func, insert, select, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from database.models import (
     Conversation,
     HandoverNote,
     Manager,
-    MemoryDigest,
     Suggestion,
 )
 from database.session import get_session
 from domain.memory import SuggestionKind, SuggestionStatus
+from queries.personalization import persist_profile
 from queries.preferences import persist_preference
 
 
@@ -173,10 +172,21 @@ def apply_suggestion(
     *,
     preference: dict[str, Any] | None = None,
     handover: tuple[date, str] | None = None,
+    personalization: dict[str, Any] | None = None,
     engine: Engine | None = None,
 ) -> None:
     """Persist a validated action and resolve its pending suggestion atomically."""
     with get_session(engine) as session:
+        if personalization is not None:
+            # Match the lock order used by direct profile saves and proposals.
+            session.execute(
+                select(Manager)
+                .where(
+                    Manager.store_id == store_id,
+                    Manager.manager_id == manager_id,
+                )
+                .with_for_update(),
+            )
         suggestion = session.scalar(
             select(Suggestion)
             .where(
@@ -189,7 +199,12 @@ def apply_suggestion(
         )
         if suggestion is None or suggestion.payload != expected_payload:
             raise LookupError("That suggestion is no longer pending or is not yours.")
-        if suggestion.kind == SuggestionKind.SETTING:
+        if (
+            suggestion.kind == SuggestionKind.PERSONALIZATION
+            and personalization is not None
+        ):
+            persist_profile(session, store_id, manager_id, personalization, expected={})
+        elif suggestion.kind == SuggestionKind.SETTING:
             if preference is not None:
                 persist_preference(session, store_id, manager_id, **preference)
         elif suggestion.kind == SuggestionKind.HANDOVER_DRAFT and handover is not None:
@@ -264,33 +279,3 @@ def latest_handover_notes(
     )
     with get_session(engine) as session:
         return list(session.scalars(statement))
-
-
-def all_managers(engine: Engine | None = None) -> list[Manager]:
-    """Every store's managers; the review rebuilds a digest for each."""
-    statement = select(Manager).order_by(Manager.store_id, Manager.manager_id)
-    with get_session(engine) as session:
-        return list(session.scalars(statement))
-
-
-def get_digest(manager_id: str, engine: Engine | None = None) -> MemoryDigest | None:
-    with get_session(engine) as session:
-        return session.get(MemoryDigest, manager_id)
-
-
-def save_digest(
-    store_id: str,
-    manager_id: str,
-    digest: str | None,
-    sources: list[dict[str, Any]],
-    engine: Engine | None = None,
-) -> None:
-    """Replace the manager's digest; there is one row per manager."""
-    values = {"digest": digest, "sources": sources, "built_at": func.now()}
-    statement = (
-        pg_insert(MemoryDigest)
-        .values(store_id=store_id, manager_id=manager_id, **values)
-        .on_conflict_do_update(index_elements=[MemoryDigest.manager_id], set_=values)
-    )
-    with get_session(engine) as session:
-        session.execute(statement)

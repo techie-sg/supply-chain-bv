@@ -92,6 +92,7 @@ class AlertOptions(BaseModel):
 
 
 class SuggestionKind(StrEnum):
+    PERSONALIZATION = "personalization"
     SETTING = "setting"
     HANDOVER_DRAFT = "handover_draft"
     ANSWER_ISSUE = "answer_issue"
