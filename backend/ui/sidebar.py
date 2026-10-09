@@ -181,6 +181,7 @@ class SidebarComponents:
     context_banner: gr.HTML
     manager_picker: gr.Dropdown
     badge: gr.HTML
+    handover_navigation: gr.Button
 
 
 def build_sidebar() -> SidebarComponents:
@@ -204,6 +205,12 @@ def build_sidebar() -> SidebarComponents:
                     "Settings",
                     size="sm",
                     elem_id="edit-settings",
+                    elem_classes="sidebar-nav-item",
+                )
+                handover_navigation = gr.Button(
+                    "Handover",
+                    size="sm",
+                    elem_id="sidebar-handover",
                     elem_classes="sidebar-nav-item",
                 )
                 demo_navigation = gr.Button(
@@ -285,4 +292,5 @@ def build_sidebar() -> SidebarComponents:
         context_banner,
         manager_picker,
         badge,
+        handover_navigation,
     )

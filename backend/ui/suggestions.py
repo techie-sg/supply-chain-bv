@@ -1,7 +1,8 @@
 """Suggestions from the daily review: the manager's panel and the admin report.
 
 Nothing here changes memory without a click: accepting a settings suggestion
-saves it through the Settings path; accepting a handover draft saves a note.
+saves it through the Settings path; accepting a handover draft saves the open
+shift's note without ending the shift.
 """
 
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from domain.memory import AlertOptions, SuggestionKind
 from domain.preferences import EffectiveSetting
 from domain.suggestions import SuggestionView
 from service.dreaming import run_review
+from service.handover import when
 from service.preferences import (
     PreferenceError,
     describe,
@@ -87,8 +89,8 @@ def _setting_text(payload: dict[str, Any]) -> str:
 
 def _label(suggestion: SuggestionView) -> str:
     if suggestion.kind == SuggestionKind.HANDOVER_DRAFT:
-        day = datetime.fromisoformat(suggestion.payload["shift"])
-        return f"Handover note for {day.day} {day.strftime('%b')}"
+        started = datetime.fromisoformat(suggestion.payload["started_at"])
+        return f"Handover note for your shift started {when(started)}"
     return f"Setting: {_setting_text(suggestion.payload)}"
 
 

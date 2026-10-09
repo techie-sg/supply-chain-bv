@@ -9,7 +9,7 @@ How DispatchDesk remembers a store's chats and a manager's settings across sessi
 | 1. Conversations: history, sidebar, titles, timestamps | Built | `conversations` (migrations 0005, 0007) |
 | 2. Preferences: catalogue, Settings tab, sidebar summary | Built; alert evaluation and briefing rendering wait for live tools | `preference_definitions`, `store_preferences` (0006) |
 | 3. Conversation summary: rolling, plus an idle cron job | Built | columns on `conversations` (0008) |
-| 4. Handover notes | Built | `handover_notes` (0009) |
+| 4. Shifts and handover notes | Built | `shifts` (0012), `handover_notes` (0009, linked to shifts in 0012) |
 | 5. Dreaming: daily review with suggestions | Built | `suggestions`, `conversations.dreamed_to` (0009) |
 | 6. Memory digest: what dreaming learns, used without asking | Built | `memory_digests` (0011) |
 | Resolution notes | Parked | `resolution_notes` |
@@ -38,6 +38,7 @@ Not designed yet: approval log, reminders and snoozed alerts, trace events.
 | `summary` | text, null | section 3 |
 | `summary_covers_to` | int, null | index of the last message in the summary |
 | `summarized_at` | timestamptz, null | when the summary was last saved |
+| `handover_note_id` | uuid, null, FK to `handover_notes` | set on the chat a hand over opens (section 4) |
 | `created_at`, `updated_at` | timestamptz | `updated_at` changes on each new message; opening a chat leaves it unchanged |
 
 Index `(store_id, manager_id, updated_at)`.
@@ -139,9 +140,48 @@ Alert `options`, all optional: `{"days": ["sat", "sun"], "start": "19:00", "end"
 
 Example: at 18 messages, 0 to 11 are folded (`summary_covers_to` = 11); at 30, 12 to 23 (= 23).
 
-## 4. Handover notes
+## 4. Shifts and handover notes
 
-`app.handover_notes`: `id`, `store_id`, `manager_id`, `shift` (date; a shift is a calendar day for now), `note`, `created_at`. Notes come from accepted handover drafts (section 5). The assistant gets the latest shift's notes as a `<handover_notes>` block; notes are reference, never rules, and never expire. The `last_handover_note` greeting view will read them.
+A shift is started and ended by the manager, never by the clock, so a demo can change shifts at any time. The shift's name and hours come from `managers`.
+
+A shift and its note are separate: the shift is the working period, the note is what it leaves for the next one.
+
+`app.shifts`, one row per worked shift:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | uuid | primary key |
+| `store_id`, `manager_id` | varchar(32) | scope |
+| `started_at` | timestamptz | set on **Start shift**, or on the manager's first question with no open shift |
+| `ended_at` | timestamptz, null | null while open; set on **End shift** |
+
+A partial unique index allows one open shift per manager.
+
+`app.handover_notes`, at most one per shift:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `id` | uuid | primary key |
+| `store_id`, `manager_id` | varchar(32) | scope |
+| `shift_id` | uuid, unique, FK to `shifts` | the shift it was written for |
+| `note` | text | editable while the shift is open, final once it ends |
+| `created_at` | timestamptz | |
+
+Saving a note inserts or updates it only while its shift is open; **End shift** saves the note and ends the shift in one transaction. Migration 0012 creates an ended shift for each existing note, links the note to it, and drops the note's old `shift` date.
+
+**Handover page** (sidebar, next to Settings):
+- **Your shift:** "Morning shift · started 9 Oct, 06:02 · Open", the note in an editable box, and:
+  - **Generate draft:** brings the summaries of the manager's chats with messages since `started_at` up to date (falling back to their last messages if that fails), then drafts through `prompts/handover_draft.md`. Only bullet lines are kept; a reply without any becomes a plain note listing the shift's chats, so a draft is never an error. Unsaved until Save.
+  - **Save note:** saves the text; the shift stays open.
+  - **End shift and hand over to <next manager>** (the store's next shift by start time): saves the note and ends the shift, starts the next manager's shift, opens a new chat for them linked to the note, and switches the workspace to them in the Assistant tab. With an empty note it asks once more first, and the new chat has no note.
+- Once ended: the note read-only, and **Start a new shift**.
+- **Past handovers:** the store's ended shifts from the last 7 days, newest first: who, shift, start and end, and the note.
+
+**The handover chat:** the note is not copied into the chat. The chat's `handover_note_id` points to it, and the chat shows it as a card at the top, read from `handover_notes`.
+
+**Read path:** in a handover chat the assistant gets that chat's note as `<handover_notes>`; in any other chat, the note of the store's most recently ended shift. Reference, never rules.
+
+**Nightly fallback:** the daily review drafts a note for an open shift that has chats and no note yet (section 5). Accepting it from Suggestions saves it into that shift's note without ending the shift.
 
 ## 5. Dreaming
 
@@ -150,13 +190,13 @@ A daily review of the chats that **proposes, never applies**. It runs once a day
 | Output | Reads | Shown in | On accept |
 | --- | --- | --- | --- |
 | **Settings suggestion** | summaries of recent chats, current settings, the catalogue | Sidebar **Suggestions**, reviewed in Settings | saved through the same validated path as the Settings tab |
-| **Handover draft** for the day | summaries of the day's chats | Sidebar **Suggestions**, editable before accepting | saved as that day's handover note |
+| **Handover draft** for an open shift with no note | summaries of the shift's chats | Sidebar **Suggestions**, editable before accepting | saved as that shift's note; the shift stays open |
 | **Answer issues**: no guidance found, unanswered question, pushback | raw messages after `dreamed_to` | Demo tools (admin) | none; a report for us |
 
 **A run**
 1. Find chats with messages after `conversations.dreamed_to` (the index of the last message reviewed) and bring their summaries fully up to date.
 2. Answer issues from the new raw messages: "no guidance" replies and manager messages with no reply are found by text and position; pushback (the manager disputing an answer) needs one small model call. Then `dreamed_to` moves to the last message, only if this step succeeded.
-3. Handover draft from the summaries of chats with messages today. A newer draft for the same day replaces a pending one.
+3. Handover draft for each open shift with chats and no note (section 4). A newer draft for the same shift replaces a pending one.
 4. Settings suggestions from recent chats' summaries. Each must be a valid catalogue value, differ from the current setting, have evidence from at least **3 chats**, and not repeat a pending or dismissed suggestion.
 
 Each output is saved as a `pending` row and fails independently; a failure is logged and changes nothing else.
@@ -222,6 +262,9 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | 19 | Suggestions appear in the sidebar and are reviewed in Settings; answer issues stay in admin | showing the issue report to the manager |
 | 20 | The memory digest is one text per manager, rebuilt nightly from the last 7 days of summaries, with its sources as chat ids and summary positions | one row per remembered item: per-item forget and evidence, but more schema than the MVP needs |
 | 21 | No Forget for now: wrong items age out within 7 days or are corrected in chat, and the digest is advisory only | a Forget button, which needs a `forgotten_at` boundary so the next run doesn't rebuild the same text |
+| 22 | Shifts are rows the manager starts and ends; the handover note is its own table, one per shift, editable until the shift ends | shifts derived from the clock and manager hours: a demo would have to wait for real time to pass; the note as a column on the shift: mixes the working period with what it leaves behind |
+| 23 | Ending is explicit; the draft comes from chats since the shift started; the nightly draft stays as a fallback | ending on the clock; drafting from today's chats only, which misses a night shift's early hours |
+| 24 | Handing over opens a new chat for the next manager that links to the note and shows it as a card | copying the note into the chat as its first message: a second copy, and a non-model message among the raw messages |
 
 ## Deferred
 
@@ -253,7 +296,8 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | `service/setting_changes.py` | chat setting changes: tool, merge, validate, confirm |
 | `service/summaries.py`, `cli.py` | summary folding, one-shot idle job |
 | `service/dreaming.py` | daily review orchestration and failure report |
-| `service/suggestions.py`, `service/handover.py`, `service/memory.py` | scoped suggestion actions, handover drafts and memory digest |
+| `service/suggestions.py`, `service/handover.py`, `service/memory.py` | scoped suggestion actions, shifts and handover notes, memory digest |
+| `ui/handover.py` | Handover page |
 | `queries/dreaming.py` | review persistence and atomic suggestion/draft actions |
 | `ui/gradio_app.py` | application composition and event wiring |
 | `ui/chat.py`, `ui/sidebar.py`, `ui/scenarios.py`, `ui/summary.py` | chat, history, manager selection, scenario inspection and summary presentation |

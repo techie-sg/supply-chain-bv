@@ -1,6 +1,5 @@
-"""Read chats for the daily review; store suggestions, handover notes and digests."""
+"""Read chats for the daily review; store suggestions and digests."""
 
-from datetime import date
 from typing import Any
 from uuid import UUID
 
@@ -9,7 +8,6 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from database.models import (
     Conversation,
-    HandoverNote,
     Manager,
     MemoryDigest,
     Suggestion,
@@ -17,6 +15,7 @@ from database.models import (
 from database.session import get_session
 from domain.memory import SuggestionKind, SuggestionStatus
 from queries.preferences import persist_preference
+from queries.shifts import write_note
 
 
 def conversations_to_review(engine: Engine | None = None) -> list[Conversation]:
@@ -143,7 +142,7 @@ def resolve_suggestion(
 
 
 def replace_handover_draft(row: dict[str, Any], engine: Engine | None = None) -> None:
-    """Replace pending drafts for this manager/day without an intermediate commit."""
+    """Replace pending drafts for this shift without an intermediate commit."""
     with get_session(engine) as session:
         # Serialize draft generation for the same manager, including an empty set.
         session.execute(
@@ -158,7 +157,7 @@ def replace_handover_draft(row: dict[str, Any], engine: Engine | None = None) ->
                 Suggestion.manager_id == row["manager_id"],
                 Suggestion.kind == SuggestionKind.HANDOVER_DRAFT,
                 Suggestion.status == SuggestionStatus.PENDING,
-                Suggestion.payload["shift"].astext == row["payload"]["shift"],
+                Suggestion.payload["shift_id"].astext == row["payload"]["shift_id"],
             )
             .values(status=SuggestionStatus.DISMISSED),
         )
@@ -172,7 +171,7 @@ def apply_suggestion(
     expected_payload: dict[str, Any],
     *,
     preference: dict[str, Any] | None = None,
-    handover: tuple[date, str] | None = None,
+    handover: tuple[UUID, str] | None = None,
     engine: Engine | None = None,
 ) -> None:
     """Persist a validated action and resolve its pending suggestion atomically."""
@@ -193,15 +192,9 @@ def apply_suggestion(
             if preference is not None:
                 persist_preference(session, store_id, manager_id, **preference)
         elif suggestion.kind == SuggestionKind.HANDOVER_DRAFT and handover is not None:
-            shift, note = handover
-            session.add(
-                HandoverNote(
-                    store_id=store_id,
-                    manager_id=manager_id,
-                    shift=shift,
-                    note=note,
-                ),
-            )
+            shift_id, note = handover
+            if write_note(session, shift_id, manager_id, note) is None:
+                raise LookupError("That shift has already ended.")
         else:
             raise ValueError("The prepared action does not match the suggestion.")
         suggestion.status = SuggestionStatus.ACCEPTED
@@ -226,45 +219,6 @@ def review_answer_issues(
             .returning(Suggestion.id),
         )
         return len(rows.all())
-
-
-def save_handover_note(
-    store_id: str,
-    manager_id: str,
-    shift: date,
-    note: str,
-    engine: Engine | None = None,
-) -> HandoverNote:
-    handover = HandoverNote(
-        store_id=store_id,
-        manager_id=manager_id,
-        shift=shift,
-        note=note,
-    )
-    with get_session(engine) as session:
-        session.add(handover)
-        session.flush()
-        session.refresh(handover)
-    return handover
-
-
-def latest_handover_notes(
-    store_id: str,
-    engine: Engine | None = None,
-) -> list[HandoverNote]:
-    """Every note of the most recent shift that has notes, oldest first."""
-    latest_shift = (
-        select(func.max(HandoverNote.shift))
-        .where(HandoverNote.store_id == store_id)
-        .scalar_subquery()
-    )
-    statement = (
-        select(HandoverNote)
-        .where(HandoverNote.store_id == store_id, HandoverNote.shift == latest_shift)
-        .order_by(HandoverNote.created_at)
-    )
-    with get_session(engine) as session:
-        return list(session.scalars(statement))
 
 
 def all_managers(engine: Engine | None = None) -> list[Manager]:

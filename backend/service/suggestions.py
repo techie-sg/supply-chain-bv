@@ -4,7 +4,6 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import fields
-from datetime import date
 from typing import Any
 from uuid import UUID
 
@@ -274,8 +273,11 @@ def accept_suggestion(
         text = (note if note is not None else payload["note"]).strip()
         if not text:
             raise PreferenceError("The handover note is empty.")
-        handover = (date.fromisoformat(payload["shift"]), text)
-        message = "Saved as the handover note for the next shift."
+        handover = (UUID(payload["shift_id"]), text)
+        message = (
+            "Saved as your shift's handover note. End your shift on the "
+            "Handover page when you are done."
+        )
     else:
         raise LookupError("Answer issues are not accepted, only reviewed.")
     apply_suggestion(

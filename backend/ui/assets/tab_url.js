@@ -4,8 +4,14 @@ async () => {
         '#workspace-tabs > .tab-wrapper [role="tab"][aria-selected="true"]'
     );
     const view = tab?.dataset.tabId;
-    if (!['assistant', 'settings', 'demo'].includes(view)) return;
-    const navigation = {assistant: 'new-chat', settings: 'edit-settings', demo: 'sidebar-demo'};
+    if (!['assistant', 'settings', 'handover', 'demo'].includes(view)) return;
+    const navigation = {
+        assistant: 'new-chat',
+        settings: 'edit-settings',
+        handover: 'sidebar-handover',
+        demo: 'sidebar-demo',
+    };
+    const titles = {settings: 'Settings', handover: 'Handover', demo: 'Scenarios'};
     for (const [name, id] of Object.entries(navigation)) {
         const button = document.getElementById(id);
         if (name === view) button?.setAttribute('aria-current', 'page');
@@ -16,5 +22,5 @@ async () => {
     window.history.replaceState(null, '', url);
     document.title = view === 'assistant'
         ? (document.documentElement.dataset.chatTitle || 'DispatchDesk')
-        : `${view === 'settings' ? 'Settings' : 'Scenarios'} | DispatchDesk`;
+        : `${titles[view]} | DispatchDesk`;
 }

@@ -11,6 +11,7 @@ from logging_config import configure_logging, configure_uvicorn_logging
 from service.conversations import current_conversation_id
 from service.scenarios import scenario_names
 from ui import chat as chat_ui
+from ui import handover as handover_ui
 from ui import navigation as navigation_ui
 from ui import scenarios as scenarios_ui
 from ui import settings
@@ -48,6 +49,7 @@ def build_app() -> gr.Blocks:
         new_chat = sidebar_components.new_chat
         edit_settings = sidebar_components.edit_settings
         demo_navigation = sidebar_components.demo_navigation
+        handover_navigation = sidebar_components.handover_navigation
         history_list = sidebar_components.history_list
         suggestions_entry = sidebar_components.suggestions_entry
         suggestions_entry_text = sidebar_components.suggestions_entry_text
@@ -79,6 +81,11 @@ def build_app() -> gr.Blocks:
                 gr.Column(elem_id="settings-workspace", min_width=0),
             ):
                 settings_form = settings.build(manager, summary=settings_summary)
+            with (
+                gr.Tab("Handover", id="handover"),
+                gr.Column(elem_id="handover-workspace", min_width=0),
+            ):
+                handover_page = handover_ui.build(manager)
             scenarios_components = scenarios_ui.build_scenarios(
                 scenarios,
                 choices,
@@ -177,6 +184,18 @@ def build_app() -> gr.Blocks:
             queue=False,
             show_progress="hidden",
         )
+        # Reload on open: a question may have started a shift since.
+        handover_navigation.click(
+            lambda: gr.update(selected="handover"),
+            outputs=workspace,
+            js=sidebar_ui.CLOSE_SIDEBAR_ON_PHONE_JS,
+            queue=False,
+            show_progress="hidden",
+        ).then(
+            handover_ui.page,
+            inputs=manager,
+            outputs=handover_page.outputs(),
+        )
         summary_outputs = [
             summary_trigger,
             summary_status,
@@ -249,6 +268,11 @@ def build_app() -> gr.Blocks:
                     outputs=answer_issues,
                 )
                 .then(settings.load_memory, inputs=manager, outputs=memory_view)
+                .then(
+                    handover_ui.page,
+                    inputs=manager,
+                    outputs=handover_page.outputs(),
+                )
             )
 
         show_manager(
@@ -270,6 +294,18 @@ def build_app() -> gr.Blocks:
             .then(list, outputs=pending_changes, queue=False)
             .then(fn=None, js=sidebar_ui.MANAGER_URL_JS, inputs=manager_picker),
         ).then(fn=None, js=sidebar_ui.CLOSE_SIDEBAR_ON_PHONE_JS)
+        # After a hand over: switch to the next manager and open their new chat,
+        # which is now their latest.
+        show_manager(
+            handover_page.handed_to.change(
+                handover_ui.take_over,
+                inputs=handover_page.handed_to,
+                outputs=[manager, manager_picker, badge, workspace],
+                queue=False,
+            )
+            .then(list, outputs=pending_changes, queue=False)
+            .then(fn=None, js=sidebar_ui.MANAGER_URL_JS, inputs=manager_picker),
+        )
         app.load(fn=None, js=sidebar_ui.CLOSE_SIDEBAR_ON_PHONE_JS)
         app.load(fn=None, js=navigation_ui.CHAT_NAVIGATION_JS)
         app.load(fn=None, js=summary_ui.SUMMARY_POPOVER_JS)
@@ -297,6 +333,10 @@ def build_app() -> gr.Blocks:
             sidebar_ui.conversation_location,
             inputs=[manager, active_chat],
             outputs=chat_location,
+        ).then(
+            handover_ui.chat_card,
+            inputs=[manager, active_chat],
+            outputs=chat_components.handover_card,
         )
         chat_location.change(
             fn=None,

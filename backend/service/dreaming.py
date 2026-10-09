@@ -3,7 +3,7 @@
 A run brings each reviewed chat's summary up to date, then produces:
 
 - answer issues from raw messages after `dreamed_to` (for the admin report),
-- a handover draft for the day from the day's chat summaries,
+- a handover draft for each open shift with chats and no note yet,
 - settings suggestions from recent chat summaries,
 - each manager's memory digest from the last week's chat summaries.
 
@@ -94,7 +94,7 @@ class DreamingService:
         self.summaries = summaries
         self.preferences = preferences
         self.engine = engine
-        self.handover = HandoverService(generate, engine)
+        self.handover = HandoverService(generate, engine, summaries)
         self.settings = SettingsSuggestionService(generate, preferences, engine)
         self.memory = MemoryService(generate, engine)
 
@@ -212,11 +212,7 @@ class DreamingService:
             },
         ):
             try:
-                report.handover_drafts += self.handover.handover_draft(
-                    store_id,
-                    manager_id,
-                    now.astimezone(TIMEZONE).date(),
-                )
+                report.handover_drafts += self.handover.nightly_draft(manager_id)
             except PROVIDER_ERRORS:
                 logger.warning("Could not draft the handover note", exc_info=True)
                 report.failures.append("handover draft")

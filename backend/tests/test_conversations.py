@@ -76,7 +76,11 @@ def store(monkeypatch) -> FakeStore:
     monkeypatch.setattr(conversations, "start_conversation", fake.start)
     monkeypatch.setattr(conversations, "append_message", fake.append)
     # Keep tests off any real database: no handover notes.
-    monkeypatch.setattr(conversations, "handover_block", lambda store_id: None)
+    monkeypatch.setattr(
+        conversations,
+        "chat_handover_block",
+        lambda note_id, store_id: None,
+    )
     monkeypatch.setattr(conversations, "memory_block", lambda manager_id: None)
     monkeypatch.setattr(conversations, "list_conversations", fake.list)
     monkeypatch.setattr(conversations, "resume_conversation", fake.resume)
@@ -170,7 +174,11 @@ def test_messages_record_who_what_and_an_ist_timestamp() -> None:
 @pytest.fixture(autouse=True)
 def no_saved_context(monkeypatch, request) -> None:
     """Default to no handover, memory or customized settings."""
-    monkeypatch.setattr(conversations, "handover_block", lambda store_id: None)
+    monkeypatch.setattr(
+        conversations,
+        "chat_handover_block",
+        lambda note_id, store_id: None,
+    )
     monkeypatch.setattr(conversations, "memory_block", lambda manager_id: None)
     if "preference_store" not in request.fixturenames:
         monkeypatch.setattr(PreferenceService, "effective", lambda self: [])
@@ -286,6 +294,40 @@ def test_ui_browse_entry_points(store, monkeypatch) -> None:
     assert item["first_question"] == "Earlier"
     first = conversations.resume_past_conversation(str(item["id"]))[0]
     assert (first["who"], first["what"]) == ("manager", "Earlier")
+
+
+def test_a_handover_chat_answers_with_its_own_note(store, monkeypatch) -> None:
+    note_id = uuid4()
+    seen = []
+    monkeypatch.setattr(
+        conversations,
+        "chat_handover_block",
+        lambda linked, store_id: f"note {linked}" if linked else "latest",
+    )
+
+    def answer(
+        question,
+        *,
+        history,
+        preferences,
+        summary=None,
+        handover=None,
+        memory=None,
+        tools=(),
+    ):
+        seen.append(handover)
+        return "reply"
+
+    monkeypatch.setattr(conversations, "answer_question", answer)
+    monkeypatch.setattr(conversations, "chat_handover", lambda linked: linked)
+    conversations.ask_question("Plain chat")
+    chat_id = conversations.current_conversation_id()
+    assert chat_id is not None
+    assert conversations.conversation_handover(chat_id) is None
+    store.rows[-1].handover_note_id = note_id
+    conversations.ask_question("What did Ananya leave?", conversation_id=chat_id)
+    assert seen == ["latest", f"note {note_id}"]
+    assert conversations.conversation_handover(chat_id) == note_id
 
 
 def test_first_answer_gets_a_clean_title_once(store, monkeypatch) -> None:

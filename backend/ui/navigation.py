@@ -33,4 +33,6 @@ def show_suggestions() -> tuple[dict, ...]:
 
 def _restore_tab(request: gr.Request) -> dict:
     view = request.query_params.get("view", "assistant")
-    return gr.update(selected=view if view in ("demo", "settings") else "assistant")
+    return gr.update(
+        selected=view if view in ("demo", "settings", "handover") else "assistant",
+    )

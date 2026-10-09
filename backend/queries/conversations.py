@@ -35,9 +35,14 @@ def start_conversation(
     store_id: str,
     manager_id: str,
     engine: Engine | None = None,
+    handover_note_id: UUID | None = None,
 ) -> Conversation:
     """Create an empty conversation, which becomes the latest one."""
-    conversation = Conversation(store_id=store_id, manager_id=manager_id)
+    conversation = Conversation(
+        store_id=store_id,
+        manager_id=manager_id,
+        handover_note_id=handover_note_id,
+    )
     with get_session(engine) as session:
         session.add(conversation)
         session.flush()
