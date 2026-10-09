@@ -275,6 +275,13 @@ body { margin: 0; background: var(--desk-bg); }
 #conversation .prose pre { padding: 10px 12px; overflow-x: auto; }
 #conversation .prose pre code { background: transparent !important; border: 0; padding: 0; }
 
+/* Toasts (gr.Info / gr.Warning / gr.Error): Gradio paints them from the light page fills. */
+.toast-wrap .toast-body { background: var(--desk-raised) !important; border-color: var(--desk-line) !important; color: var(--desk-ink); box-shadow: 0 8px 28px #00000066; }
+.toast-wrap .toast-body :is(.toast-title, .toast-text, .toast-details, .toast-close, p, span) { color: var(--desk-ink) !important; }
+.toast-wrap .toast-body.info { --toast-color: var(--desk-accent); }
+.toast-wrap .toast-body.warning { --toast-color: #e0b563; }
+.toast-wrap .toast-body.error { --toast-color: #e07a7a; }
+
 @media (max-width: 550px) {
   #conversation { width: 100% !important; }
   #composer-dock { width: calc(100% - 24px) !important; bottom: 12px; }
