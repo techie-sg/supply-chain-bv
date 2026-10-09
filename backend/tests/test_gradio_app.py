@@ -210,7 +210,7 @@ def test_reply_uses_pending_message_once_and_keeps_previous_history(
 
     def answer(question, manager_id=None):
         calls.append(question)
-        return "reply", []
+        return "reply", [], None
 
     monkeypatch.setattr(gradio_app, "ask_question", answer)
     previous = [
@@ -251,7 +251,7 @@ def test_chat_passes_only_the_question_without_reading_scenario_data(
 
     def answer(question, manager_id=None):
         seen.append(question)
-        return "reply", []
+        return "reply", [], None
 
     def no_scenario(*args, **kwargs):
         raise AssertionError("Chat must not read scenario data")
@@ -503,7 +503,7 @@ def test_chat_preserves_nonblank_message_whitespace(monkeypatch) -> None:
 
     def answer(question, manager_id=None):
         seen.append(question)
-        return "reply", []
+        return "reply", [], None
 
     monkeypatch.setattr(gradio_app, "ask_question", answer)
     message = "  Should riders speed?\n"
@@ -871,14 +871,14 @@ def test_chat_hands_proposed_changes_to_the_confirmation_card(
     monkeypatch.setattr(
         gradio_app,
         "ask_question",
-        lambda q, manager_id=None: ("Proposed.", [change]),
+        lambda q, manager_id=None: ("Proposed.", [change], None),
     )
     _, _, pending = gradio_app.chat("Alert me below 85", [])
     assert pending == [CHANGE]
     monkeypatch.setattr(
         gradio_app,
         "ask_question",
-        lambda q, manager_id=None: ("No change.", []),
+        lambda q, manager_id=None: ("No change.", [], None),
     )
     assert gradio_app.chat("Thanks", [])[2] == gr.skip()
 
@@ -1019,7 +1019,7 @@ def test_chat_and_confirmation_use_the_selected_manager(
 
     def answer(question, manager_id=None):
         seen.append(("ask", manager_id))
-        return "reply", []
+        return "reply", [], None
 
     def confirm(states, manager_id=None):
         seen.append(("confirm", manager_id))

@@ -25,11 +25,10 @@ from queries.conversations import (
 from service.agent import run_agent
 from service.dreaming import handover_block, memory_block
 from service.factory import create_llm_service
-from service.preferences import PreferenceService, demo_preferences, describe, manager_preferences
-from service.rag import answer_question, prepare_message
-from service.scenarios import TIMEZONE, current_scenario
 from service.llm_service import Tool
-from service.preferences import PreferenceService, manager_preferences
+from service.preferences import PreferenceService, describe, manager_preferences
+from service.rag import NO_GUIDANCE_ANSWER, answer_question, prepare_message
+from service.scenarios import TIMEZONE, current_scenario
 from service.setting_changes import SettingChange, SettingChanges, tidy_reply
 from service.summaries import history_start
 
@@ -250,30 +249,45 @@ def _answer(
     summary: str | None = None,
     preferences: PreferenceService | None = None,
     tools: Sequence[Tool] = (),
-) -> str:
-    """Answer with the settings, the chat's summary, the last handover and memory."""
+) -> tuple[str, dict[str, Any]]:
+    """Answer with the settings, the chat's summary, the last handover and memory.
+
+    With a scenario loaded, the model also gets the live dispatch tools; without
+    one the answer comes from the playbook alone. Returns the reply and its trace.
+    """
     preferences = preferences or manager_preferences()
-    return answer_question(
+    handover = handover_block(DEMO_STORE_ID)
+    memory = memory_block(preferences.manager_id)
+    scenario = current_scenario()
+    if scenario is None:
+        reply = answer_question(
+            question,
+            history=history,
+            preferences=preferences,
+            summary=summary,
+            handover=handover,
+            memory=memory,
+            tools=tools,
+        )
+        return reply, _trace(preferences)
+    user_message = prepare_message(
         question,
         history=history,
         preferences=preferences,
         summary=summary,
-        handover=handover_block(DEMO_STORE_ID),
-        memory=memory_block(preferences.manager_id),
-        tools=tools,
+        handover=handover,
+        memory=memory,
     )
     if user_message is None:
-        return (
-            "I could not find relevant guidance in the DispatchDesk knowledge base.",
-            _trace(settings),
-        )
+        return NO_GUIDANCE_ANSWER, _trace(preferences)
     result = run_agent(
         question,
         store_id=scenario["store_id"],
         history=history,
         user_message=user_message,
+        local_tools=tools,
     )
-    return result["answer"], _trace(settings, result["trace"])
+    return result["answer"], _trace(preferences, result["trace"])
 
 
 def _title(question: str, answer: str) -> str:
@@ -301,30 +315,39 @@ def ask_question(
     question: str,
     manager_id: str = DEMO_MANAGER_ID,
     conversation_id: str | None = None,
-) -> tuple[str, list[SettingChange]]:
-    """UI entry point: answer using the stored history of the latest chat.
+) -> tuple[str, list[SettingChange], dict[str, Any] | None]:
+    """UI entry point: answer using the stored history of the selected chat.
 
-    Also returns the setting changes the assistant proposed in this answer;
-    none is saved until the manager confirms it.
+    Also returns the setting changes the assistant proposed in this answer
+    (none is saved until the manager confirms it) and the trace to show under it.
     """
     preferences = manager_preferences(manager_id)
     changes = SettingChanges(preferences)
     service = ConversationService(
         DEMO_STORE_ID,
         manager_id,
-        answer=lambda question, **kwargs: tidy_reply(
+        answer=lambda question, **kwargs: _tidied(
             _answer(
                 question,
                 preferences=preferences,
                 tools=[changes.tool()],
                 **kwargs,
             ),
-            changes.proposals,
+            changes,
         ),
         titler=_title,
         conversation_id=conversation_id,
     )
-    return service.ask(question), changes.proposals
+    reply, trace = service.ask_traced(question)
+    return reply, changes.proposals, trace
+
+
+def _tidied(
+    result: tuple[str, dict[str, Any]],
+    changes: SettingChanges,
+) -> tuple[str, dict[str, Any]]:
+    reply, trace = result
+    return tidy_reply(reply, changes.proposals), trace
 
 
 def add_note(
@@ -335,10 +358,6 @@ def add_note(
     """UI entry point: record an assistant note in the open chat."""
     return _service(manager_id, conversation_id).note(text)
 
-
-def ask_question_traced(question: str) -> tuple[str, dict[str, Any] | None]:
-    """UI entry point: the answer with the trace to show under it."""
-    return _service().ask_traced(question)
 
 def conversation_history(
     manager_id: str = DEMO_MANAGER_ID,

@@ -163,10 +163,13 @@ def test_messages_record_who_what_and_an_ist_timestamp() -> None:
 
 
 @pytest.fixture(autouse=True)
-def no_scenario_loaded(monkeypatch) -> None:
+def no_scenario_loaded(monkeypatch, request) -> None:
     """Default to the playbook-only path with no stored settings or scenario."""
     monkeypatch.setattr(conversations, "current_scenario", lambda: None)
-    monkeypatch.setattr(PreferenceService, "effective", lambda self: [])
+    monkeypatch.setattr(conversations, "handover_block", lambda store_id: None)
+    monkeypatch.setattr(conversations, "memory_block", lambda manager_id: None)
+    if "preference_store" not in request.fixturenames:
+        monkeypatch.setattr(PreferenceService, "effective", lambda self: [])
 
 
 def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> None:
@@ -187,7 +190,7 @@ def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> N
         return "reply"
 
     monkeypatch.setattr(conversations, "answer_question", answer)
-    assert conversations.ask_question("Hello") == ("reply", [])
+    assert conversations.ask_question("Hello")[:2] == ("reply", [])
     assert conversations.conversation_history()[0]["what"] == "Hello"
     conversations.start_new_conversation()
     assert conversations.conversation_history() == []
@@ -404,7 +407,7 @@ def test_with_a_scenario_loaded_the_agent_gets_guidance_settings_and_summary(
     monkeypatch,
 ) -> None:
     seen = {}
-    prefs = SimpleNamespace(effective=list)
+    prefs = SimpleNamespace(effective=list, manager_id="m")
 
     def prepare(question, **kwargs):
         seen["prepare"] = (question, kwargs)
@@ -417,7 +420,7 @@ def test_with_a_scenario_loaded_the_agent_gets_guidance_settings_and_summary(
     monkeypatch.setattr(conversations, "current_scenario", lambda: {"store_id": "S-9"})
     monkeypatch.setattr(conversations, "prepare_message", prepare)
     monkeypatch.setattr(conversations, "run_agent", agent)
-    monkeypatch.setattr(conversations, "demo_preferences", lambda: prefs)
+    monkeypatch.setattr(conversations, "manager_preferences", lambda *a: prefs)
 
     reply, trace = conversations._answer("Why late?", history=[], summary="earlier")
 
@@ -434,8 +437,8 @@ def test_with_a_scenario_but_no_guidance_the_agent_is_not_started(monkeypatch) -
     monkeypatch.setattr(conversations, "prepare_message", lambda *a, **k: None)
     monkeypatch.setattr(
         conversations,
-        "demo_preferences",
-        lambda: SimpleNamespace(effective=list),
+        "manager_preferences",
+        lambda *a: SimpleNamespace(effective=list, manager_id="m"),
     )
     monkeypatch.setattr(
         conversations,
@@ -528,7 +531,7 @@ def test_ui_ask_returns_the_changes_the_assistant_proposed(
         return "Proposed: SLA dip below 85%. Press Confirm to save it."
 
     monkeypatch.setattr(conversations, "answer_question", answer)
-    reply, [change] = conversations.ask_question("Alert me if SLA drops below 85")
+    reply, [change], _ = conversations.ask_question("Alert me if SLA drops below 85")
     assert reply.startswith("Proposed")
     assert (change.code, change.value) == ("sla_dip_alert", 85)
     # Nothing is saved until the manager confirms.

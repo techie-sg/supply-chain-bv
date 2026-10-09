@@ -20,7 +20,6 @@ from service.conversations import (
     add_note,
     ask_question,
     conversation_details,
-    ask_question_traced,
     conversation_history,
     conversation_summary,
     current_conversation_id,
@@ -457,6 +456,7 @@ def to_display(messages: Sequence[dict[str, Any]]) -> list[dict]:
         for message in messages
     ]
 
+
 def _trace_block(trace: dict[str, Any] | None) -> str:
     html = _trace_html(trace)
     return f"\n\n{html}" if html else ""
@@ -661,7 +661,7 @@ def chat(
     request_id = uuid4().hex
     try:
         with structlog.contextvars.bound_contextvars(request_id=request_id):
-            answer, proposals = ask_question(
+            answer, proposals, trace = ask_question(
                 message,
                 **_chat_scope(manager_id, conversation_id),
             )
@@ -682,7 +682,10 @@ def chat(
         history
         + [
             {"role": "user", "content": _with_time(message, now, now)},
-            {"role": "assistant", "content": _with_time(answer, now, now)},
+            {
+                "role": "assistant",
+                "content": _with_time(answer + _trace_block(trace), now, now),
+            },
         ],
         "",
         pending,

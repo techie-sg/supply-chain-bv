@@ -6,6 +6,8 @@ from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 from zoneinfo import ZoneInfo
 
+import pytest
+
 import service.tools as tools_mod
 from database.models import HourlyMetric, Order, Rider, Zone
 from service.tools import (
@@ -16,6 +18,12 @@ from service.tools import (
 )
 
 TZ = ZoneInfo("Asia/Kolkata")
+
+
+@pytest.fixture(autouse=True)
+def no_engine(monkeypatch):
+    """Sessions are mocked; building the real engine needs a database URL."""
+    monkeypatch.setattr(tools_mod, "_engine", lambda: None)
 
 
 # ---------------------------------------------------------------------------

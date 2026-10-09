@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from datetime import date as _date
 from datetime import datetime
+from functools import cache
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import structlog
-from sqlalchemy import select
+from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
 from database.models import HourlyMetric, Order, Rider, Zone
@@ -17,7 +18,12 @@ logger = structlog.stdlib.get_logger(__name__)
 
 TZ = ZoneInfo("Asia/Kolkata")
 STALE_AFTER_SEC = 300  # live data older than this is flagged stale
-_engine = build_engine()  # one engine for the module; connections are pooled
+
+
+@cache
+def _engine() -> Engine:
+    """Built on first use, so importing this module needs no database."""
+    return build_engine()
 
 
 def _error(code: str, message: str, **details) -> dict:
@@ -29,7 +35,7 @@ def _iso(value: datetime | None) -> str | None:
 
 
 def get_live_dispatch_status(store_id: str) -> dict:
-    with Session(_engine) as session:
+    with Session(_engine()) as session:
         orders = list(session.scalars(select(Order)))
         riders = list(session.scalars(select(Rider)))
         zones = list(session.scalars(select(Zone)))
@@ -184,7 +190,7 @@ def get_delivery_metrics(
 
     # Both queries share one session so the second SELECT runs while the
     # connection is still open (the original had a closed-session bug here).
-    with Session(_engine) as session:
+    with Session(_engine()) as session:
         store_rows = list(
             session.scalars(
                 select(HourlyMetric).where(HourlyMetric.store_id == store_id),

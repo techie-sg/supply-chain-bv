@@ -28,6 +28,7 @@ from mcp.client.stdio import StdioServerParameters
 from config import get_settings, require
 from constants import GROQ_MODEL
 from domain.chat import ChatMessage
+from service.llm_service import Tool
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -225,13 +226,20 @@ def _call_llm(messages: list[dict], tools: list[dict]) -> dict:
     return response.json()
 
 
-def _dispatch(call: dict, client: ToolSession) -> str:
-    """Run one tool call through the MCP server and return its JSON result."""
+def _dispatch(
+    call: dict,
+    client: ToolSession,
+    local_tools: dict[str, Tool] | None = None,
+) -> str:
+    """Run one tool call: an in-process tool if named, else the MCP server."""
     try:
         arguments = json.loads(call["function"]["arguments"] or "{}")
     except json.JSONDecodeError:
         return _error_text("INVALID_INPUT", "Arguments were not valid JSON.")
-    return client.call(call["function"]["name"], arguments)
+    name = call["function"]["name"]
+    if local_tools and name in local_tools:
+        return local_tools[name].run(arguments)
+    return client.call(name, arguments)
 
 
 def _build_messages(
@@ -293,14 +301,18 @@ def run_agent(
     max_steps: int = 5,
     client: ToolSession | None = None,
     user_message: str | None = None,
+    local_tools: Sequence[Tool] = (),
 ) -> AgentResult:
     """Run the tool-calling loop and return the final answer with a trace.
 
     `user_message` replaces the bare question, so the caller can include
     retrieved guidance, the manager's settings and a conversation summary.
+    `local_tools` run in this process next to the MCP tools, such as the
+    setting-change proposal that the manager confirms in the app.
     """
     with nullcontext(client) if client else ToolClient() as tools:
-        definitions = tools.tool_definitions()
+        local = {tool.name: tool for tool in local_tools}
+        definitions = tools.tool_definitions() + [t.schema() for t in local_tools]
         messages = _build_messages(user_message or question, store_id, history)
         trace: list[dict] = []
 
@@ -331,7 +343,7 @@ def run_agent(
 
             for call in tool_calls:
                 logger.info("Tool call", tool=call["function"]["name"], step=step)
-                output = _dispatch(call, tools)
+                output = _dispatch(call, tools, local)
                 trace.append(_trace_entry(step, call, output))
                 messages.append(_tool_turn(call, output))
 
