@@ -217,8 +217,10 @@ def build_app() -> gr.Blocks:
                     else sidebar_ui.restore_latest_conversation,
                     inputs=manager,
                     outputs=[chatbot, active_chat],
-                    concurrency_id="workspace",
-                    concurrency_limit=1,
+                    # A new browser session can restore independently. A
+                    # manager switch must finish after this session's reply.
+                    concurrency_id=None if linked else "workspace",
+                    concurrency_limit=4 if linked else 1,
                 )
                 .then(
                     sidebar_ui.conversation_choices,
@@ -279,6 +281,10 @@ def build_app() -> gr.Blocks:
             outputs=[chatbot, message, active_chat, workspace],
             concurrency_id="workspace",
             concurrency_limit=1,
+        ).then(
+            summary_ui.summary_card,
+            inputs=[manager, active_chat],
+            outputs=summary_outputs,
         ).then(fn=None, js=sidebar_ui.CLOSE_SIDEBAR_ON_PHONE_JS)
         active_chat.change(
             fn=None,
@@ -286,14 +292,6 @@ def build_app() -> gr.Blocks:
             queue=False,
         )
         active_chat.change(
-            sidebar_ui.conversation_choices,
-            inputs=[manager, active_chat],
-            outputs=history_list,
-        ).then(
-            summary_ui.summary_card,
-            inputs=[manager, active_chat],
-            outputs=summary_outputs,
-        ).then(
             sidebar_ui.conversation_location,
             inputs=[manager, active_chat],
             outputs=chat_location,
@@ -313,8 +311,7 @@ def build_app() -> gr.Blocks:
             event(
                 scenarios_ui.restore_workspace,
                 outputs=[current, scenario, preview, *tables],
-                concurrency_id="workspace",
-                concurrency_limit=1,
+                concurrency_limit=4,
             ).then(
                 scenarios_ui._assistant_context,
                 inputs=current,
@@ -335,8 +332,7 @@ def build_app() -> gr.Blocks:
                 scenarios_ui.prepare_scenario,
                 inputs=[scenario, current],
                 outputs=[preview, *tables],
-                concurrency_id="workspace",
-                concurrency_limit=1,
+                concurrency_limit=4,
             )
         load.click(
             scenarios_ui.load_selected_scenario,
@@ -362,7 +358,7 @@ def build_app() -> gr.Blocks:
             outputs=summary_outputs,
         )
         for event in (submit.click, message.submit):
-            event(
+            response = event(
                 fn=None,
                 js=chat_ui.SEND_MESSAGE_JS,
                 inputs=[message, chatbot],
@@ -376,7 +372,16 @@ def build_app() -> gr.Blocks:
                 show_progress="hidden",
                 concurrency_id="workspace",
                 concurrency_limit=1,
-            ).then(
+            )
+            # A generator can yield the restored draft and then fail. Gradio
+            # does not run the ordinary JS continuation for that error path.
+            response.failure(
+                chat_ui.recover_composer,
+                outputs=[processing, submit, message],
+                queue=False,
+                show_progress="hidden",
+            )
+            response.then(
                 fn=None,
                 js=chat_ui.FINISH_CHAT_JS,
                 outputs=[processing, submit, message],
@@ -392,6 +397,13 @@ def build_app() -> gr.Blocks:
                 sidebar_ui.conversation_choices,
                 inputs=[manager, active_chat],
                 outputs=history_list,
+            ).then(
+                # Make the summary control available as soon as the answer is
+                # shown, before the separate model call that creates its title.
+                summary_ui.summary_card,
+                inputs=[manager, active_chat],
+                outputs=summary_outputs,
+                show_progress="hidden",
             ).then(
                 sidebar_ui.title_conversation,
                 inputs=[manager, active_chat],

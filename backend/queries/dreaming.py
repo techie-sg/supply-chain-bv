@@ -244,7 +244,6 @@ def save_handover_note(
     with get_session(engine) as session:
         session.add(handover)
         session.flush()
-        session.refresh(handover)
     return handover
 
 
