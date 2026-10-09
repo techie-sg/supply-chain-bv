@@ -33,7 +33,11 @@ SETTING = item(
 )
 DRAFT = item(
     "handover_draft",
-    {"shift": "2026-10-08", "note": "- Standby rider came in."},
+    {
+        "shift_id": "4f1c",
+        "started_at": "2026-10-08T14:00:00+05:30",
+        "note": "- Standby rider came in.",
+    },
     1,
 )
 
@@ -58,7 +62,7 @@ def test_refresh_lists_pending_suggestions_with_their_details(
             ),
             str(SETTING.id),
         ),
-        ("Handover note for 8 Oct", str(DRAFT.id)),
+        ("Handover note for your shift started 8 Oct, 14:00", str(DRAFT.id)),
     ]
     assert items["value"] == str(SETTING.id)
     assert "Based on 3 chats." in detail and note == gr.update(visible=False, value="")

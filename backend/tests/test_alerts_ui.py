@@ -233,8 +233,8 @@ def test_pop_up_is_hidden_until_an_alert_fires_and_checks_are_wired(ui_app) -> N
     timers = [b for b in ui_app.blocks.values() if isinstance(b, gr.Timer)]
     assert [timer.value for timer in timers] == [alerts_ui.CHECK_SECONDS]
     checks_ = callbacks(ui_app, alerts_ui.queue_new)
-    # The timer, page load and manager switch, and a scenario load.
-    assert len(checks_) == 4
+    # The timer, page load, manager switch, hand over, and a scenario load.
+    assert len(checks_) == 5
     manager = next(
         b
         for b in ui_app.blocks.values()

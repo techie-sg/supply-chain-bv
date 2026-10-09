@@ -319,6 +319,7 @@ class ChatComponents:
     suggestions: gr.Row
     prompts: list[str]
     prompt_buttons: list[gr.Button]
+    handover_card: gr.HTML
 
 
 def build_chat() -> ChatComponents:
@@ -327,6 +328,12 @@ def build_chat() -> ChatComponents:
         gr.Column(elem_id="manager-workspace", min_width=0),
         gr.Column(elem_id="assistant-panel", min_width=0),
     ):
+        # A chat opened by a hand over shows the note it was opened with.
+        handover_card = gr.HTML(
+            visible=False,
+            apply_default_css=False,
+            elem_id="chat-handover",
+        )
         chatbot = gr.Chatbot(
             label="Conversation",
             show_label=False,
@@ -442,4 +449,5 @@ def build_chat() -> ChatComponents:
         suggestions,
         prompts,
         prompt_buttons,
+        handover_card,
     )

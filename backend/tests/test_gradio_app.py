@@ -1004,10 +1004,10 @@ def test_summary_popover_is_refreshed_with_the_chat(ui_app) -> None:
         for callback in ui_app.fns.values()
         if callback.fn is summary_ui.summary_card
     ]
-    # Page load, switching manager, opening a chat, a scenario load, New chat,
-    # and before title generation and after any summary folding for each answer,
-    # and starting a chat from an alert.
-    assert len(refreshers) == 10
+    # Page load, switching manager (picker or hand over), opening a chat, a
+    # scenario load, New chat, and before title generation and after any summary
+    # folding for each answer, and starting a chat from an alert.
+    assert len(refreshers) == 11
     assert all(trigger in callback.outputs for callback in refreshers)
     [click] = [
         callback
@@ -1283,10 +1283,11 @@ def test_switching_manager_clears_the_card_and_reloads_their_workspace(ui_app) -
         )
         and callback.trigger_after is not None
     ]
-    # Page load and switching manager each reload chat, chats and settings.
+    # Page load, switching manager and handing over each reload chat, chats and
+    # settings.
     assert loaders.count(sidebar_ui.restore_conversation) == 1
-    assert loaders.count(sidebar_ui.restore_latest_conversation) == 1
-    assert loaders.count(settings.load_settings) >= 2
+    assert loaders.count(sidebar_ui.restore_latest_conversation) == 2
+    assert loaders.count(settings.load_settings) >= 3
     # The pending-change card is cleared right after the switch.
     [clear] = [
         callback
@@ -1302,10 +1303,12 @@ def test_switching_manager_records_the_choice_in_the_url(ui_app) -> None:
         for block in ui_app.blocks.values()
         if isinstance(block, gr.Dropdown) and block.elem_id == "manager-picker"
     )
-    [url] = [
+    urls = [
         callback
         for callback in ui_app.fns.values()
         if callback.js == sidebar_ui.MANAGER_URL_JS
     ]
-    # State values never reach the browser, so the URL reads the picker.
-    assert url.inputs == [picker]
+    # Picking a manager and handing over; state values never reach the
+    # browser, so the URL reads the picker.
+    assert len(urls) == 2
+    assert all(url.inputs == [picker] for url in urls)

@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Literal, cast
 from uuid import uuid4
@@ -17,6 +17,7 @@ from service.suggestions import json_array
 
 NOW = datetime(2026, 10, 8, 23, 30, tzinfo=TIMEZONE)
 TODAY = "2026-10-08T19:00:00+05:30"
+SHIFT_START = datetime(2026, 10, 8, 14, 0, tzinfo=TIMEZONE)
 YESTERDAY = "2026-10-07T19:00:00+05:30"
 
 
@@ -49,6 +50,14 @@ class FakeReviewStore:
         self.suggestions: list[Suggestion] = []
         self.notes: list = []
         self.advanced: list[tuple] = []
+        self.shift = SimpleNamespace(
+            id=uuid4(),
+            store_id="DS-1",
+            manager_id="karthik",
+            started_at=SHIFT_START,
+            ended_at=None,
+        )
+        self.note: str | None = None
 
     def to_review(self, engine=None):
         return [
@@ -98,20 +107,14 @@ class FakeReviewStore:
         item.status = status
         return True
 
-    def dismiss_drafts(self, store_id, manager_id, shift, engine=None):
-        count = 0
+    def replace_draft(self, row, engine=None):
         for item in self.suggestions:
             if (
                 item.kind == SuggestionKind.HANDOVER_DRAFT
                 and item.status == SuggestionStatus.PENDING
-                and item.payload["shift"] == shift
+                and item.payload["shift_id"] == row["payload"]["shift_id"]
             ):
                 item.status = SuggestionStatus.DISMISSED
-                count += 1
-        return count
-
-    def replace_draft(self, row, engine=None):
-        self.dismiss_drafts(row["store_id"], row["manager_id"], row["payload"]["shift"])
         self.add([row])
 
     def apply(
@@ -132,16 +135,17 @@ class FakeReviewStore:
         if preference is not None:
             self.preference_store.save(store_id, manager_id, **preference)
         if handover is not None:
-            self.save_note(store_id, manager_id, *handover)
+            shift_id, note = handover
+            if shift_id != self.shift.id or self.shift.ended_at is not None:
+                raise LookupError("That shift has already ended.")
+            self.note = note
         item.status = SuggestionStatus.ACCEPTED
 
-    def save_note(self, store_id, manager_id, shift, note, engine=None):
-        row = SimpleNamespace(shift=shift, note=note)
-        self.notes.append(row)
-        return row
-
-    def latest_notes(self, store_id, engine=None):
-        return self.notes
+    def open_shift(self, manager_id, engine=None):
+        shift = self.shift
+        return (
+            shift if shift.manager_id == manager_id and shift.ended_at is None else None
+        )
 
 
 @pytest.fixture
@@ -158,7 +162,8 @@ def review(monkeypatch, preference_store) -> FakeReviewStore:
         "resolve_suggestion": fake.resolve,
         "replace_handover_draft": fake.replace_draft,
         "apply_suggestion": fake.apply,
-        "latest_handover_notes": fake.latest_notes,
+        "open_shift": fake.open_shift,
+        "note_for": lambda shift_id, engine=None: fake.note,
     }.items():
         for module in (dreaming, suggestions, handover):
             if hasattr(module, name):
@@ -232,7 +237,9 @@ def test_no_replies_means_no_pushback_call(review) -> None:
     assert service(reply).answer_issues(chat([message("manager", "Hi")])) == []
 
 
-def test_handover_draft_uses_todays_chats_and_replaces_a_pending_one(review) -> None:
+def test_nightly_draft_reads_the_shifts_chats_and_replaces_a_pending_one(
+    review,
+) -> None:
     review.chats = [
         chat(
             [message("manager", "Rain?")],
@@ -248,18 +255,31 @@ def test_handover_draft_uses_todays_chats_and_replaces_a_pending_one(review) -> 
         return "  - Standby rider came in at 19:40.  "
 
     reviewer = service(reply)
-    assert reviewer.handover.handover_draft("DS-1", "karthik", NOW.date())
-    assert reviewer.handover.handover_draft("DS-1", "karthik", NOW.date())
+    assert reviewer.handover.nightly_draft("karthik")
+    assert reviewer.handover.nightly_draft("karthik")
     assert "Chat: Rain\n- Standby rider approved." in seen[0]
     assert "Old chat" not in seen[0]
     drafts = [item for item in review.suggestions if item.kind == "handover_draft"]
     assert [item.status for item in drafts] == ["dismissed", "pending"]
     assert drafts[-1].payload == {
-        "shift": "2026-10-08",
+        "shift_id": str(review.shift.id),
+        "started_at": SHIFT_START.isoformat(),
         "note": "- Standby rider came in at 19:40.",
     }
-    assert drafts[-1].reason == "Handover note for 8 Oct, drafted from 1 chat."
-    assert not reviewer.handover.handover_draft("DS-1", "karthik", date(2026, 10, 9))
+    assert drafts[-1].reason == (
+        "Handover note for your shift started 8 Oct, 14:00, drafted from 1 chat."
+    )
+
+
+def test_nightly_draft_skips_shifts_with_a_note_or_without_one_open(review) -> None:
+    review.chats = [chat([message("manager", "Rain?")], summary="- Rain.")]
+    reviewer = service("- Note")
+    assert not reviewer.handover.nightly_draft("ananya")
+    review.note = "Already written"
+    assert not reviewer.handover.nightly_draft("karthik")
+    review.note = None
+    review.chats = []
+    assert not reviewer.handover.nightly_draft("karthik")
 
 
 def test_handover_uses_recent_messages_for_an_unsummarized_chat(review) -> None:
@@ -270,13 +290,14 @@ def test_handover_uses_recent_messages_for_an_unsummarized_chat(review) -> None:
         seen.append(user_message)
         return "Note"
 
-    service(reply).handover.handover_draft(
-        "DS-1",
-        "karthik",
-        NOW.date(),
-    )
+    service(reply).handover.nightly_draft("karthik")
     assert "manager: Frozen orders waiting" in seen[0]
-    assert not service("   ").handover.handover_draft("DS-1", "karthik", NOW.date())
+    # A reply with no bullets still leaves a plain note.
+    assert service("   ").handover.nightly_draft("karthik")
+    assert review.suggestions[-1].payload["note"] == (
+        "- Chats this shift: Frozen orders waiting.\n"
+        "- No issues, decisions or follow-ups were recorded."
+    )
 
 
 def test_settings_suggestions_keep_only_valid_supported_new_changes(review) -> None:
@@ -341,7 +362,11 @@ def test_run_reviews_each_chat_and_isolates_failures(review) -> None:
     report = reviewer.run(NOW)
     assert (report.chats, report.answer_issues, report.handover_drafts) == (1, 1, 0)
     assert report.failures == ["handover draft"]
-    assert cast(Any, reviewer.summaries).folded == [(review.chats[0].id, 0)]
+    # The review folds the chat it reviews; the handover draft then brings
+    # every chat of the open shift up to date before drafting.
+    folded = cast(Any, reviewer.summaries).folded
+    assert folded[0] == (review.chats[0].id, 0)
+    assert sorted(folded[1:]) == sorted((chat.id, 0) for chat in review.chats)
     assert review.advanced == [(review.chats[0].id, 1, None)]
     assert report.text() == (
         "Reviewed 1 chat with new messages: found 1 answer issue, drafted "
@@ -392,27 +417,21 @@ def test_accepting_a_setting_saves_it_through_the_settings_path(
         suggestions.accept_suggestion(suggestion.id, "DS-1", "karthik")
 
 
-def test_accepting_a_handover_draft_saves_the_edited_note(review) -> None:
-    review.add(
-        [
-            {
-                "store_id": "DS-1",
-                "manager_id": "karthik",
-                "kind": "handover_draft",
-                "payload": {"shift": "2026-10-08", "note": "Draft"},
-                "reason": "r",
-                "evidence": [],
-            },
-            {
-                "store_id": "DS-1",
-                "manager_id": "karthik",
-                "kind": "handover_draft",
-                "payload": {"shift": "2026-10-08", "note": "Draft"},
-                "reason": "r",
-                "evidence": [],
-            },
-        ],
-    )
+def test_accepting_a_handover_draft_fills_the_open_shifts_note(review) -> None:
+    payload = {
+        "shift_id": str(review.shift.id),
+        "started_at": SHIFT_START.isoformat(),
+        "note": "Draft",
+    }
+    row = {
+        "store_id": "DS-1",
+        "manager_id": "karthik",
+        "kind": "handover_draft",
+        "payload": payload,
+        "reason": "r",
+        "evidence": [],
+    }
+    review.add([row, dict(row)])
     first, second = review.suggestions
     with pytest.raises(PreferenceError, match="empty"):
         suggestions.accept_suggestion(second.id, "DS-1", "karthik", "   ")
@@ -421,12 +440,12 @@ def test_accepting_a_handover_draft_saves_the_edited_note(review) -> None:
         "DS-1",
         "karthik",
         "Edited note",
-    ) == ("Saved as the handover note for the next shift.")
-    assert [(note.shift, note.note) for note in review.notes] == [
-        (date(2026, 10, 8), "Edited note"),
-    ]
-    assert suggestions.dismiss_suggestion(second.id, "DS-1", "karthik")
-    assert handover.handover_block("DS-1") == "Handover from 8 Oct:\nEdited note"
+    ).startswith("Saved as your shift's handover note.")
+    assert review.note == "Edited note"
+    assert review.shift.ended_at is None
+    review.shift.ended_at = SHIFT_START
+    with pytest.raises(LookupError, match="already ended"):
+        suggestions.accept_suggestion(second.id, "DS-1", "karthik")
 
 
 def test_answer_issues_cannot_be_accepted(review) -> None:
@@ -448,10 +467,6 @@ def test_answer_issues_cannot_be_accepted(review) -> None:
         review.suggestions[0].id,
     ]
     assert suggestions.pending_suggestions() == []
-
-
-def test_no_notes_means_no_handover_block(review) -> None:
-    assert handover.handover_block("DS-1") is None
 
 
 def test_run_review_uses_the_configured_model(

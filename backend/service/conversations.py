@@ -37,7 +37,12 @@ from queries.conversations import (
 from resources import PROMPTS
 from service.alerts import alerts_block
 from service.factory import create_llm_service
-from service.handover import handover_block
+from service.handover import (
+    ShiftView,
+    chat_handover,
+    chat_handover_block,
+    ensure_shift,
+)
 from service.personalization import (
     PersonalizationChanges,
     explicit,
@@ -199,7 +204,11 @@ class ConversationService:
         # The summary stands in for older messages; recent ones stay word for word.
         history = to_chat_messages(context["messages"])
         self.conversation_id = context["id"]
-        extra = {"summary": context["summary"]} if context["summary"] else {}
+        extra: dict[str, Any] = {}
+        if context["summary"]:
+            extra["summary"] = context["summary"]
+        if context.get("handover_note_id"):
+            extra["handover_note_id"] = context["handover_note_id"]
         append_message(context["id"], new_message("manager", question), self.engine)
         result = self.answer(question, history=history, **extra)
         reply, trace = result.text, result.trace
@@ -268,10 +277,14 @@ def _answer(
     *,
     history: Sequence[ChatMessage],
     summary: str | None = None,
+    handover_note_id: UUID | None = None,
     preferences: PreferenceService | None = None,
     tools: Sequence[Tool] = (),
 ) -> AnswerResult:
-    """Answer through RAG and the configured provider, recording local tool calls."""
+    """Answer through RAG and the configured provider, recording local tool calls.
+
+    A chat opened by a hand over answers with its own note in view.
+    """
     preferences = preferences or manager_preferences()
     calls: list[ToolCallTrace] = []
     reply = answer_question(
@@ -279,7 +292,7 @@ def _answer(
         history=history,
         preferences=preferences,
         summary=summary,
-        handover=handover_block(preferences.store_id),
+        handover=chat_handover_block(handover_note_id, preferences.store_id),
         personalization=manager_personalization(preferences.manager_id).prompt_block(),
         tools=traced_tools([*tools, *dispatch_tools(preferences.store_id)], calls),
         alerts=_alerts(preferences.manager_id),
@@ -331,6 +344,11 @@ def ask_question(
     Also returns the setting changes the assistant proposed in this answer
     (none is saved until the manager confirms it) and the trace to show under it.
     """
+    try:
+        ensure_shift(manager_id)
+    except (SQLAlchemyError, RuntimeError, LookupError):
+        # A missing shift never blocks an answer.
+        logger.warning("Could not start a shift", exc_info=True)
     preferences = manager_preferences(manager_id)
     changes = SettingChanges(preferences)
     personalization = PersonalizationChanges(
@@ -424,6 +442,17 @@ def conversation_summary(
 ) -> dict[str, Any] | None:
     """UI entry point: the open chat's summary card, or None if not summarized."""
     return _service(manager_id, conversation_id).summary_view()
+
+
+def conversation_handover(
+    conversation_id: str,
+    manager_id: str = DEMO_MANAGER_ID,
+) -> ShiftView | None:
+    """UI entry point: the handover the manager's chat was opened with, if any."""
+    conversation = _service(manager_id, conversation_id).selected()
+    if conversation is None:
+        return None
+    return chat_handover(conversation.handover_note_id)
 
 
 def conversation_details(

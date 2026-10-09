@@ -279,6 +279,10 @@ class Conversation(Base):
     title: Mapped[str | None] = mapped_column(String(120))
     summarized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     dreamed_to: Mapped[int | None] = mapped_column(Integer)
+    # The handover note this chat was opened with, shown as a card at its top.
+    handover_note_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("app.handover_notes.id", ondelete="SET NULL"),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -392,12 +396,44 @@ class StorePreference(Base):
     )
 
 
+class Shift(Base):
+    """A working period the manager starts and ends by hand, never by the clock."""
+
+    __tablename__ = "shifts"
+    __table_args__ = (
+        Index(
+            "uq_shifts_open",
+            "manager_id",
+            unique=True,
+            postgresql_where=text("ended_at IS NULL"),
+        ),
+        Index("ix_shifts_store_ended", "store_id", "ended_at"),
+        {"schema": "app"},
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        primary_key=True,
+        default=uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    store_id: Mapped[str] = mapped_column(String(32))
+    manager_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("app.managers.manager_id", ondelete="RESTRICT"),
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class HandoverNote(Base):
-    """A note for the next shift; a shift is a calendar day for now."""
+    """What a shift leaves for the next one; editable until its shift ends."""
 
     __tablename__ = "handover_notes"
     __table_args__ = (
-        Index("ix_handover_notes_store_shift", "store_id", "shift"),
+        UniqueConstraint("shift_id", name="uq_handover_notes_shift"),
         {"schema": "app"},
     )
 
@@ -408,7 +444,9 @@ class HandoverNote(Base):
     )
     store_id: Mapped[str] = mapped_column(String(32))
     manager_id: Mapped[str] = mapped_column(String(32))
-    shift: Mapped[date] = mapped_column(Date)
+    shift_id: Mapped[UUID] = mapped_column(
+        ForeignKey("app.shifts.id", ondelete="RESTRICT"),
+    )
     note: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

@@ -43,10 +43,9 @@ def conversation_engine() -> Iterator[Engine]:
         with engine.begin() as connection:
             connection.execute(text("CREATE SCHEMA IF NOT EXISTS app"))
             ensure_managers(connection)
-            Base.metadata.tables["app.conversations"].create(
-                connection,
-                checkfirst=True,
-            )
+            # Chats link to handover notes, which link to shifts.
+            for table in ("app.shifts", "app.handover_notes", "app.conversations"):
+                Base.metadata.tables[table].create(connection, checkfirst=True)
             connection.execute(delete(Conversation))
         yield engine
     finally:

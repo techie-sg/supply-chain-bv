@@ -5,17 +5,18 @@ import os
 import pytest
 from catalogue import DEFINITIONS
 from conftest import ensure_managers
-from sqlalchemy import delete, event, select
+from sqlalchemy import delete, event, func, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from database.models import (
     HandoverNote,
     PreferenceDefinition,
+    Shift,
     StorePreference,
     Suggestion,
 )
-from database.session import build_engine
+from database.session import Base, build_engine
 from domain.memory import SuggestionKind
 from queries.dreaming import (
     add_suggestions,
@@ -24,6 +25,7 @@ from queries.dreaming import (
     replace_handover_draft,
 )
 from queries.preferences import active_preferences, save_preference
+from queries.shifts import note_for, open_shift, start_shift
 from service.suggestions import (
     accept_suggestion,
     dismiss_suggestion,
@@ -39,18 +41,20 @@ def action_engine():
     engine = build_engine(url)
     with engine.begin() as connection:
         ensure_managers(connection)
+        for table in ("app.shifts", "app.handover_notes"):
+            Base.metadata.tables[table].create(connection, checkfirst=True)
         connection.execute(
             pg_insert(PreferenceDefinition)
             .values(DEFINITIONS)
             .on_conflict_do_nothing(),
         )
-        for model in (Suggestion, HandoverNote, StorePreference):
+        for model in (Suggestion, HandoverNote, Shift, StorePreference):
             connection.execute(delete(model))
     try:
         yield engine
     finally:
         with engine.begin() as connection:
-            for model in (Suggestion, HandoverNote, StorePreference):
+            for model in (Suggestion, HandoverNote, Shift, StorePreference):
                 connection.execute(delete(model))
         engine.dispose()
 
@@ -66,6 +70,24 @@ def row(kind, payload, manager="karthik", store="DS-1"):
     }
 
 
+def draft(engine, note="Next shift"):
+    """A handover draft for karthik's open shift, starting one if needed."""
+    shift = start_shift("DS-1", "karthik", engine)
+    return row(
+        "handover_draft",
+        {
+            "shift_id": str(shift.id),
+            "started_at": shift.started_at.isoformat(),
+            "note": note,
+        },
+    )
+
+
+def shift_note(engine):
+    shift = open_shift("karthik", engine)
+    return None if shift is None else note_for(shift.id, engine)
+
+
 def pending(engine, manager="karthik", store="DS-1"):
     return list_suggestions(
         store,
@@ -77,10 +99,7 @@ def pending(engine, manager="karthik", store="DS-1"):
 
 
 def test_manager_and_store_scope_apply_outside_the_ui(action_engine):
-    add_suggestions(
-        [row("handover_draft", {"shift": "2026-10-09", "note": "Next shift"})],
-        action_engine,
-    )
+    add_suggestions([draft(action_engine)], action_engine)
     [item] = pending(action_engine)
     for store, manager in [("DS-2", "karthik"), ("DS-1", "ananya")]:
         with pytest.raises(LookupError):
@@ -90,18 +109,22 @@ def test_manager_and_store_scope_apply_outside_the_ui(action_engine):
 
 
 def test_handover_acceptance_is_applied_only_once(action_engine):
-    add_suggestions(
-        [row("handover_draft", {"shift": "2026-10-09", "note": "Next shift"})],
-        action_engine,
-    )
+    add_suggestions([draft(action_engine)], action_engine)
     [item] = pending(action_engine)
     accept_suggestion(item.id, "DS-1", "karthik", engine=action_engine)
     with pytest.raises(LookupError):
         accept_suggestion(item.id, "DS-1", "karthik", engine=action_engine)
-    with action_engine.connect() as connection:
-        assert connection.execute(select(HandoverNote.note)).scalars().all() == [
-            "Next shift",
-        ]
+    assert shift_note(action_engine) == "Next shift"
+
+
+def test_a_draft_for_an_ended_shift_saves_nothing(action_engine):
+    add_suggestions([draft(action_engine)], action_engine)
+    [item] = pending(action_engine)
+    with action_engine.begin() as connection:
+        connection.execute(update(Shift).values(ended_at=func.now()))
+    with pytest.raises(LookupError, match="already ended"):
+        accept_suggestion(item.id, "DS-1", "karthik", engine=action_engine)
+    assert get_suggestion(item.id, "DS-1", "karthik", action_engine).status == "pending"
 
 
 @pytest.mark.parametrize("kind", ["setting", "handover_draft"])
@@ -117,9 +140,9 @@ def test_failure_after_applying_action_rolls_back_every_write(action_engine, kin
             action_engine,
         )
         payload = {"code": "incentive_cap", "enabled": True, "value": 300}
+        add_suggestions([row(kind, payload)], action_engine)
     else:
-        payload = {"shift": "2026-10-09", "note": "Next shift"}
-    add_suggestions([row(kind, payload)], action_engine)
+        add_suggestions([draft(action_engine)], action_engine)
     [item] = pending(action_engine)
 
     def fail_after_writes(session, flush_context):
@@ -140,12 +163,11 @@ def test_failure_after_applying_action_rolls_back_every_write(action_engine, kin
         [preference] = active_preferences("DS-1", "karthik", action_engine)
         assert preference.value == 250
     else:
-        with action_engine.connect() as connection:
-            assert connection.execute(select(HandoverNote)).all() == []
+        assert shift_note(action_engine) is None
 
 
 def test_draft_replacement_failure_preserves_previous_pending_draft(action_engine):
-    old = row("handover_draft", {"shift": "2026-10-09", "note": "Original"})
+    old = draft(action_engine, "Original")
     add_suggestions([old], action_engine)
     [item] = pending(action_engine)
 
@@ -157,7 +179,7 @@ def test_draft_replacement_failure_preserves_previous_pending_draft(action_engin
     try:
         with pytest.raises(RuntimeError, match="replacement failure"):
             replace_handover_draft(
-                row("handover_draft", {"shift": "2026-10-09", "note": "Replacement"}),
+                {**old, "payload": {**old["payload"], "note": "Replacement"}},
                 action_engine,
             )
     finally:
@@ -172,7 +194,7 @@ def test_bulk_review_only_resolves_the_acting_scope_and_issue_kind(action_engine
             row("answer_issue", issue),
             row("answer_issue", issue, manager="ananya"),
             row("answer_issue", issue, store="DS-2"),
-            row("handover_draft", {"shift": "2026-10-09", "note": "Draft"}),
+            draft(action_engine, "Draft"),
         ],
         action_engine,
     )
