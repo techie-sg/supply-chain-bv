@@ -422,14 +422,27 @@ def build_chat() -> ChatComponents:
                     elem_id="send-message",
                 )
         with gr.Row(elem_id="starter-prompts") as suggestions:
-            prompts = [
-                "We're missing the 10-minute promise. Should I ask my riders to jump red lights and speed?",
-                "It's pouring and deliveries are late. Can I dock riders' pay for missing the delivery promise?",
-                "Packed orders are piling up. Can I batch frozen-item orders with other deliveries?",
+            prompt_labels = [
+                (
+                    "What's happening in my store\n"
+                    "right now, and what should\n"
+                    "I focus on first?"
+                ),
+                (
+                    "Which waiting orders can\n"
+                    "I batch together, and which\n"
+                    "need a separate delivery?"
+                ),
+                (
+                    "Why did our 10-minute SLA\n"
+                    "drop between 8 and 10 last night\n"
+                    "versus the night before?"
+                ),
             ]
+            prompts = [" ".join(label.splitlines()) for label in prompt_labels]
             prompt_buttons = [
-                gr.Button(question, size="sm", elem_classes="prompt-button")
-                for question in prompts
+                gr.Button(label, size="sm", elem_classes="prompt-button")
+                for label in prompt_labels
             ]
 
     return ChatComponents(

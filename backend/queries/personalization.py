@@ -1,6 +1,8 @@
 """Small, manager-scoped profiles and raw evidence for personalization."""
 
+from collections.abc import Sequence
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import Engine, cast, func, select, update
 from sqlalchemy.dialects.postgresql import JSONPATH
@@ -132,42 +134,98 @@ def evidence_chats(
         return [dict(row) for row in session.execute(statement).mappings()]
 
 
-def propose_personalization(row: dict[str, Any], engine: Engine | None = None) -> bool:
-    """A concurrent review or an old dismissed proposal must not be duplicated."""
+def _propose(session: Session, row: dict[str, Any]) -> bool:
+    """Caller holds the manager lock for this short transaction."""
+    profile = (
+        session.scalar(
+            select(ManagerPersonalization.preferences).where(
+                ManagerPersonalization.store_id == row["store_id"],
+                ManagerPersonalization.manager_id == row["manager_id"],
+            ),
+        )
+        or {}
+    )
+    if row["payload"]["code"] in profile:
+        return False
+    existing = session.scalar(
+        select(Suggestion.id)
+        .where(
+            Suggestion.store_id == row["store_id"],
+            Suggestion.manager_id == row["manager_id"],
+            Suggestion.kind == SuggestionKind.PERSONALIZATION,
+            Suggestion.payload["code"].astext == row["payload"]["code"],
+            Suggestion.payload["value"].astext == row["payload"]["value"],
+        )
+        .limit(1),
+    )
+    if existing is not None:
+        return False
+    session.add(Suggestion(**row))
+    return True
+
+
+def finish_review(
+    conversation_id: UUID,
+    store_id: str,
+    manager_id: str,
+    expected: int | None,
+    covers_to: int,
+    proposals: list[dict[str, Any]],
+    engine: Engine | None = None,
+) -> int | None:
+    """Commit proposals and progress together; stale workers cannot move progress."""
+    if covers_to < 0 or (expected is not None and covers_to <= expected):
+        raise ValueError("Personalization progress must move forward.")
+    if any(
+        row["store_id"] != store_id
+        or row["manager_id"] != manager_id
+        or row["kind"] != SuggestionKind.PERSONALIZATION
+        for row in proposals
+    ):
+        raise ValueError("Personalization evidence belongs to another manager.")
     with get_session(engine) as session:
         manager = session.scalar(
             select(Manager)
-            .where(
-                Manager.store_id == row["store_id"],
-                Manager.manager_id == row["manager_id"],
-            )
+            .where(Manager.store_id == store_id, Manager.manager_id == manager_id)
             .with_for_update(),
         )
         if manager is None:
             raise LookupError("That manager does not belong to this store.")
-        profile = (
-            session.scalar(
-                select(ManagerPersonalization.preferences).where(
-                    ManagerPersonalization.store_id == row["store_id"],
-                    ManagerPersonalization.manager_id == row["manager_id"],
-                ),
-            )
-            or {}
-        )
-        if row["payload"]["code"] in profile:
-            return False
-        existing = session.scalar(
-            select(Suggestion.id)
+        advanced = session.execute(
+            update(Conversation)
             .where(
-                Suggestion.store_id == row["store_id"],
-                Suggestion.manager_id == row["manager_id"],
-                Suggestion.kind == SuggestionKind.PERSONALIZATION,
-                Suggestion.payload["code"].astext == row["payload"]["code"],
-                Suggestion.payload["value"].astext == row["payload"]["value"],
+                Conversation.id == conversation_id,
+                Conversation.store_id == store_id,
+                Conversation.manager_id == manager_id,
+                Conversation.personalization_covers_to.is_not_distinct_from(expected),
+                Conversation.summary_covers_to >= covers_to,
+                func.jsonb_array_length(Conversation.messages) > covers_to,
             )
-            .limit(1),
+            .values(personalization_covers_to=covers_to, personalized_at=func.now())
+            .returning(Conversation.id),
+        ).scalar_one_or_none()
+        if advanced is None:
+            return None
+        return sum(_propose(session, row) for row in proposals)
+
+
+def pending_reviews(
+    limit: int,
+    exclude: Sequence[UUID] = (),
+    engine: Engine | None = None,
+) -> list[Conversation]:
+    """Pick unfinished summary-backed reviews, including chats with no new summary."""
+    statement = (
+        select(Conversation)
+        .where(
+            Conversation.summary.is_not(None),
+            func.coalesce(Conversation.personalization_covers_to, -1)
+            < Conversation.summary_covers_to,
         )
-        if existing is not None:
-            return False
-        session.add(Suggestion(**row))
-        return True
+        .order_by(Conversation.created_at, Conversation.id)
+        .limit(limit)
+    )
+    if exclude:
+        statement = statement.where(Conversation.id.not_in(exclude))
+    with get_session(engine) as session:
+        return list(session.scalars(statement))
