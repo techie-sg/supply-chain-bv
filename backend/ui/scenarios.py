@@ -403,6 +403,7 @@ def build_scenarios(
                 wrap=True,
                 show_search="filter",
                 elem_id="answer-issues",
+                elem_classes="scenario-table",
             )
 
     return ScenarioComponents(
