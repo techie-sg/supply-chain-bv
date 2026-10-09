@@ -6,7 +6,7 @@
 
 | # | Task (~1 hr) | Definition of Done | Evidence of Completion |
 |---|---|---|---|
-| 1 | Kickoff: assign roles, review requirements.md and Karthik's persona/objective, agree on tech stack | Roles assigned (prompt/RAG, tools/MCP, memory, guardrails/caching, observability/UI owners); requirements.md read by everyone; stack agreed | A `docs/team.md` listing roles and stack, with each member confirming they've read requirements.md |
+| 1 | Kickoff: assign roles, review requirements.md and Karthik's persona/objective, agree on tech stack | Roles assigned (prompt/RAG, tools, memory, guardrails/caching, observability/UI owners); requirements.md read by everyone; stack agreed | A `docs/team.md` listing roles and stack, with each member confirming they've read requirements.md |
 | 2 | Write an Amazon-style 6-pager for DispatchDesk: narrative memo covering the problem, the customer (Karthik), the solution, goals & non-goals, key risks/mitigations, and success metrics | 6-pager committed as a narrative document (no slides/bullets-only sections); every section from the standard format is present and specific to DispatchDesk, not generic | `docs/6-pager.md` in repo, reviewed and agreed on by the whole team |
 | 3 | Write a PR/FAQ for DispatchDesk: a mock press release announcing the launch, plus an FAQ covering customer questions and internal/guardrail questions | PR/FAQ committed; press release is written from the customer's (Karthik's) point of view; FAQ has at least 5 questions, including at least one on data handling and one on rider safety/working-hours policy | `docs/pr-faq.md` in repo, reviewed and agreed on by the whole team |
 | 4 | Set up the git repository: initialize repo, agree on branch strategy, add .gitignore, write a README | Repo exists remotely with main + feature branches; README lets a fresh clone run the project | A teammate clones the repo and runs it successfully from README alone |
@@ -18,7 +18,7 @@
 | 10 | Wire a minimal prototype: manager question → grounded explanation (no tools yet) | Full query→explanation round trip runs without crashing and reflects the corpus content | Terminal/notebook transcript of one successful run |
 | 11 | Build a Gradio chat UI for the prototype and deploy it locally with a shareable link | Gradio app launches and returns a grounded explanation for a real query | Screenshot of the running UI + shareable link posted to the team channel |
 
-## Week 2: Tools, MCP & Memory (7 tasks)
+## Week 2: Tools & Memory (7 tasks)
 **Demo Goal:** The same Gradio UI now pulls the live queue and rider status and historical stage metrics, and remembers the manager's alert threshold and batching constraints across two shifts; visible live in the chat.
 
 | # | Task (~1 hr) | Definition of Done | Evidence of Completion |
@@ -26,7 +26,7 @@
 | 12 | Design tool specs: `get_live_dispatch_status(store_id)` and `get_delivery_metrics(store_id, period)` | Written spec for both tools: inputs, outputs (including an "as of" timestamp on live data), error cases | `docs/tools.md` with both signatures and example input/output |
 | 13 | Implement the live-dispatch-status tool | Returns correct queue depth, oldest-order age, per-order details (zone, items, frozen flag), and rider states (with hours on shift and minutes since last break) for a known store, and a clear error for an unknown one | Test log showing both cases |
 | 14 | Implement the delivery-metrics tool | Returns correct hourly orders, SLA %, stage breakdown (pick-pack, rider wait, ride), and riders online for a known period, and a clear error for an invalid one | Test log showing both cases |
-| 15 | Set up MCP to expose both tools to the agent; test a full round trip | Agent calls both tools via MCP and uses their results in a live response | Trace/log of one query showing the response built from tool output |
+| 15 | Wire both tools into the agent's tool-calling loop; test a full round trip | Agent calls both tools via tool calling and uses their results in a live response | Trace/log of one query showing the response built from tool output |
 | 16 | Design the memory schema: alert threshold (pending orders per available rider + applicable window), batching constraints (e.g., cold-chain rule), incentive cap, and shift handover notes | Schema documented; a record can be written and read back correctly | Schema doc + log of one record written and retrieved |
 | 17 | Integrate memory; test preference recall (e.g., "weekends after 7pm, alert above 2 orders per rider; never batch frozen") across 2 sessions | Preferences stated in session 1 are correctly recalled, unprompted, in session 2 | Transcripts of both sessions showing the preferences and their recall |
 | 18 | Wire tools and memory into the Gradio UI via an expandable "agent trace" panel | Panel lists each tool call (with data "as of" time) and the recalled preferences for the response | Screenshot of the panel expanded on a real query |

@@ -1,6 +1,6 @@
 # Dispatch tools
 
-The assistant can call two read-only Python tools through the configured `GroqService`. They run in the application process using the existing `Tool` contract. MCP integration is deferred.
+The assistant can call two read-only Python tools through the configured `GroqService`. They run in the application process using the existing `Tool` contract.
 
 `domain/tools.py` defines validated inputs and the JSON schemas sent to Groq. `service/tools.py` exposes the tools, assembles results, and calculates metrics. All database reads live in `queries/tools.py` and use transactional sessions with the configured connection and statement timeouts.
 
