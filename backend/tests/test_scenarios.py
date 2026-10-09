@@ -48,6 +48,50 @@ def test_normal_backlog_and_rain_have_distinct_starting_states() -> None:
     )  # disconnected route generation is not part of loading
 
 
+def test_reload_resolves_current_database_scenario_and_uses_a_fresh_clock(monkeypatch):
+    now = datetime(2026, 10, 9, 22, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+
+    class Clock:
+        @staticmethod
+        def now(timezone):
+            return now
+
+    monkeypatch.setattr(scenarios, "datetime", Clock)
+    reads = []
+
+    def current(engine=None):
+        reads.append(engine)
+        return (
+            {"scenario_key": "rain", "as_of": (now - timedelta(hours=3)).isoformat()}
+            if len(reads) == 1
+            else {"scenario_key": "rain", "as_of": now.isoformat(), "counts": {}}
+        )
+
+    monkeypatch.setattr(scenarios, "current_scenario", current)
+    saved = []
+    monkeypatch.setattr(
+        scenarios,
+        "replace_scenario",
+        lambda rows, engine=None: saved.extend(rows),
+    )
+    context = scenarios.reload_current_scenario()
+    assert context["scenario_key"] == "rain" and context["as_of"] == now.isoformat()
+    live = [row for row in saved if isinstance(row, (Order, Rider))]
+    assert live and all(row.scenario_key == "rain" and row.as_of == now for row in live)
+    assert all(row.placed_at < now for row in live if isinstance(row, Order))
+
+
+def test_reload_without_a_saved_scenario_never_replaces_data(monkeypatch):
+    monkeypatch.setattr(scenarios, "current_scenario", lambda engine=None: None)
+    monkeypatch.setattr(
+        scenarios,
+        "replace_scenario",
+        lambda *args: pytest.fail("No reset without a current scenario"),
+    )
+    with pytest.raises(LookupError, match="No scenario is loaded"):
+        scenarios.reload_current_scenario()
+
+
 def test_each_file_can_define_its_own_data(monkeypatch, tmp_path) -> None:
     source = scenarios.SCENARIO_DIR / "normal.yaml"
     data = yaml.safe_load(source.read_text())

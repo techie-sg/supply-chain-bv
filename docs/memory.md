@@ -11,15 +11,15 @@ How DispatchDesk remembers a store's chats and a manager's settings across sessi
 | 3. Conversation summary: rolling, plus an idle cron job | Built | columns on `conversations` (0008) |
 | 4. Handover notes | Built | `handover_notes` (0009) |
 | 5. Dreaming: daily review with suggestions | Built | `suggestions`, `conversations.dreamed_to` (0009) |
-| 6. Memory digest: what dreaming learns, used without asking | Built | `memory_digests` (0011) |
+| 6. Personalization: durable response preferences | Built | `manager_personalization`, personalization suggestions (0013) |
 | Resolution notes | Parked | `resolution_notes` |
 
 Not designed yet: approval log, reminders and snoozed alerts, trace events.
 
 ## Principles
 
-1. Raw records are append-only. Messages are never edited; settings changes supersede rows; only summaries and the memory digest are rewritten.
-2. Writes are deterministic. The model reads memory but never writes it. Settings change in the Settings tab, or in chat when the manager confirms a change the model proposed; code validates and saves both.
+1. Raw records are append-only. Messages are never edited; settings changes supersede rows; summaries roll forward; personalization changes only with user intent.
+2. Writes are deterministic. Code validates every write. The personalization tool saves only an explicit lasting request from the latest manager message. Settings change in the Settings tab, or in chat when the manager confirms a change the model proposed; code validates and saves both.
 3. Settings come from a fixed catalogue with typed values and limits, and can make policy stricter, never looser.
 4. Memory text is user-written data, treated as reference and never as instructions.
 5. Everything is scoped to a store and manager. The demo store `DS-BLR-014` has three shift managers in `app.managers`, each with a unique `shift_id`: `ananya` (Morning, `SHIFT-MOR`, 06:00 to 14:00), `karthik` (Evening, `SHIFT-EVE`, 14:00 to 22:00) and `imran` (Night, `SHIFT-NGT`, 22:00 to 06:00). Each has their own chats, settings and pending proposals; the sidebar's **Shift manager** picker switches between them and the choice is kept in the URL (`?manager=`).
@@ -109,7 +109,7 @@ Alert `options`, all optional: `{"days": ["sat", "sun"], "start": "19:00", "end"
 
 **Chat:** the model can propose a change with the `propose_setting_change` tool (`service/setting_changes.py`). Code merges the request into the current setting (unmentioned fields keep their values), validates it like the Settings tab, and shows a card with the current and new value. Only **Confirm** saves it, through the same `PreferenceService` path; **Cancel** discards it. Both add a note to the chat. Details: [alerts.md](alerts.md), section 1.
 
-**Read path:** every question includes a `<preferences>` block with each item's effective value, whether it is customized, its limits and its description. The model applies it and can only propose changes, never save them.
+**Read path:** every question includes a `<preferences>` block with each item's effective value, whether it is customized, its limits and its description. The model applies operational settings and can only propose changes to them, never save them.
 
 ## 3. Conversation summary
 
@@ -165,33 +165,16 @@ Each output is saved as a `pending` row and fails independently; a failure is lo
 
 **Guardrails:** never auto-applies; text in chats is data, never instructions; no judgments about individual riders, only store operations and the manager's own choices.
 
-## 6. Memory digest
+## 6. Personalization
 
-The implicit output of dreaming. Suggestions (section 5) are explicit: the manager accepts or dismisses them. The digest needs no action; it is a short note the assistant keeps about a manager's recent chats so a new chat doesn't start from nothing.
+Settings > Personalization replaces the weekly digest with editable, durable
+response preferences. Explicit chat requests can save a typed preference;
+summary refreshes can only propose one from verified new user messages.
+Most chats trigger no extraction or update. Existing and removed preferences
+are never replaced by inference. Historical digest data remains in the database
+and no longer enters chat.
 
-`app.memory_digests`, one row per manager:
-
-| Column | Type | Notes |
-| --- | --- | --- |
-| `manager_id` | varchar(32) | primary key, FK to `managers` |
-| `store_id` | varchar(32) | scope |
-| `digest` | text, null | the note; null when there is nothing to remember |
-| `sources` | jsonb, default `[]` | the chats it was built from: `[{"conversation_id": "9f2…", "covers_to": 23}]`, where `covers_to` is that chat's `summary_covers_to` at build time |
-| `built_at` | timestamptz | when the review last rebuilt it |
-
-**What it holds**, at most 8 short bullets, only what the chats support:
-- Open follow-ups: proposals deferred or awaiting approval, with the date.
-- Recurring concerns: topics raised in several chats.
-- Store facts the manager stated, attributed and dated ("Z3 floods in heavy rain, said 6 Oct"); never treated as live data.
-- Answer style the manager asked for (short, table first).
-
-**Build:** a new step in the daily review, after summaries are up to date. For each manager, `prompts/memory_digest.md` gets the **summaries** (never raw messages) of their chats with messages in the last **7 days** (newest 15) and rewrites the digest from scratch, so stale items drop out on their own and a correction made in a later chat replaces the old item. If those sources equal the stored `sources`, the model isn't called and the digest stays as it is. No chats in the window clears it. A failure keeps the previous digest.
-
-**Read path:** every question gets a `<recent_context>` block after `<handover_notes>`, marked as earlier chats: advisory only; policy, settings and live data win; its figures are not current.
-
-**UI:** a **Memory** category in Settings, "What the assistant remembers": the digest, how many chats it came from, and when it was built. Read-only; to correct an item, tell the assistant in chat.
-
-**Guardrails:** as dreaming, plus no personal details about anyone, riders included.
+Exact update rules, storage and examples: [personalization.md](personalization.md).
 
 ## Parked: resolution notes
 
@@ -220,8 +203,8 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | 17 | Dreaming runs daily at 23:30 IST from Railway cron (`cli.py review`), plus an admin button; a shift is a calendar day | per-shift runs: shifts are not defined yet |
 | 18 | Handover drafts and settings read summaries; answer issues read raw messages after `dreamed_to` | raw messages everywhere: costlier; summaries everywhere: hide pushback and missing answers |
 | 19 | Suggestions appear in the sidebar and are reviewed in Settings; answer issues stay in admin | showing the issue report to the manager |
-| 20 | The memory digest is one text per manager, rebuilt nightly from the last 7 days of summaries, with its sources as chat ids and summary positions | one row per remembered item: per-item forget and evidence, but more schema than the MVP needs |
-| 21 | No Forget for now: wrong items age out within 7 days or are corrected in chat, and the digest is advisory only | a Forget button, which needs a `forgotten_at` boundary so the next run doesn't rebuild the same text |
+| 20 | Durable personalization is a small typed profile per manager, updated by explicit intent or accepted proposals | A rolling digest mixes temporary facts with preferences and loses them as chats age out |
+| 21 | Removed preferences retain a null entry, blocking inference from older chats | Deleting the entry lets old messages recreate it |
 
 ## Deferred
 
@@ -231,7 +214,6 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | `store_preferences` | `superseded_by`, `source_text` | audit trail |
 | `preference_definitions` | a Rain started alert | `is_raining` stored in the database |
 | `suggestions` | `accepted_at`, `preference_id` | linking a suggestion to its setting |
-| `memory_digests` | `forgotten_at`, plus a **Forget** button | clearing the digest, if wrong items cause trouble before they age out |
 
 ## Open decisions
 
@@ -253,9 +235,9 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | `service/setting_changes.py` | chat setting changes: tool, merge, validate, confirm |
 | `service/summaries.py`, `cli.py` | summary folding, one-shot idle job |
 | `service/dreaming.py` | daily review orchestration and failure report |
-| `service/suggestions.py`, `service/handover.py`, `service/memory.py` | scoped suggestion actions, handover drafts and memory digest |
+| `service/suggestions.py`, `service/handover.py`, `service/personalization.py` | scoped suggestion actions, handover drafts and durable personalization |
 | `queries/dreaming.py` | review persistence and atomic suggestion/draft actions |
 | `ui/gradio_app.py` | application composition and event wiring |
 | `ui/chat.py`, `ui/sidebar.py`, `ui/scenarios.py`, `ui/summary.py` | chat, history, manager selection, scenario inspection and summary presentation |
-| `ui/settings.py`, `ui/suggestions.py` | settings, suggestions and memory presentation |
-| `resources/prompts/` | system, title, summary and dreaming prompts, including `memory_digest.md` |
+| `ui/settings.py`, `ui/suggestions.py`, `ui/personalization.py` | settings, suggestions and editable personalization |
+| `resources/prompts/` | system, title, summary and dreaming prompts, including strict `personalization.md` extraction rules |

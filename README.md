@@ -6,9 +6,11 @@ A dispatch assistant that answers questions using a simulated operating playbook
 
 Demo tools load **normal**, **backlog**, and **rain** starting snapshots and inspect orders, riders, hourly metrics, and zones. Current data comes from PostgreSQL; Refresh reads saved changes. Other scenarios preview their YAML definitions. Loading a scenario replaces operational rows and clears chat.
 
-Chat uses the question, stored conversation history, retrieved policy passages, and the manager's settings and remembered context. Groq can request current dispatch data or historical metrics through local tools. Data is read when a tool is called. Conversations are saved in PostgreSQL; the URL identifies the selected chat so a refresh reopens it. Without a chat ID, the latest chat opens.
+Chat uses the question, stored conversation history, retrieved policy passages, and the selected manager's settings and saved personalization. Personalization is read before the first answer and every follow-up, so changes apply immediately across chats. Groq can request current dispatch data or historical metrics through local tools. Data is read when a tool is called. Conversations are saved in PostgreSQL; the URL identifies the selected chat so a refresh reopens it. Without a chat ID, the latest chat opens.
 
-Settings (alert thresholds, batching, incentive cap, greeting) can be edited in **Settings** or proposed through chat. Chat proposals are saved only after the manager confirms them. Design: [docs/memory.md](docs/memory.md).
+Settings (alert thresholds, batching, incentive cap, greeting) can be edited in **Settings** or proposed through chat. Chat proposals are saved only after the manager confirms them. Response style and decision priorities are managed separately in **Settings → Personalization** and persist across chats. Design: [memory](docs/memory.md), [personalization](docs/personalization.md).
+
+The reload button beside **Current scenario** recreates the scenario currently saved in the database with fresh timestamps. It resets synthetic operational data to that scenario's starting state and preserves the open chat and manager preferences. Demo tools' **Refresh** reads saved rows without resetting them.
 
 ## Setup
 
@@ -92,7 +94,7 @@ uv run --group eval --group ingestion python -m evals.run_evals            # ret
 uv run --group eval --group ingestion python -m evals.run_evals --judge    # also generate and grade answers
 ```
 
-The harness evaluates retrieval and bare RAG; it does not exercise conversation preferences, handover, memory or dispatch tools. Its scores do not validate the full product workflow.
+The harness evaluates retrieval and bare RAG; it does not exercise conversation preferences, handover, personalization or dispatch tools. Its scores do not validate the full product workflow.
 
 Retrieval metrics: `hit@k` (any relevant chunk in top k), `recall@k` (share of expected chunks in top k), and `mrr`. `--judge` asks an LLM to grade each answer 1/0 on `behavior`, `no_invented_facts`, `no_execution_claim`, `safety` (safety rows only) and `live_data_honesty` (live-data rows only); `pass` requires every applicable check. Results are printed overall and by category, and per-question rows go to `evals/results.csv`, with `answer_model` and `judge_model` columns when `--judge` is used. Use `--judge-model` to grade with a different model than the one answering, and `--category` to run a subset, and `--delay` (seconds between questions) to stay under provider rate limits. `tests/test_evals.py` checks that every chunk ID in the dataset exists in the corpus.
 
@@ -137,7 +139,7 @@ The daily review (dreaming) runs from cron once a day; admins can also run it fr
 | Variables | `DATABASE_URL`, `GROQ_API_KEY` |
 | Healthcheck and public domain | None |
 
-Each run also rebuilds every manager's memory digest (shown in Settings → Memory) from the last 7 days of chat summaries; see [memory.md](docs/memory.md), section 6.
+Summary refreshes can propose durable response preferences in **Settings → Suggestions**. Only explicit chat requests, Settings saves or accepted suggestions change **Personalization**. Most conversations produce no change. See [personalization.md](docs/personalization.md) for exact update rules.
 
 Locally: `uv run python cli.py review`.
 

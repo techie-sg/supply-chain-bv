@@ -636,6 +636,50 @@ def test_read_only_screens_do_not_wait_for_another_sessions_answer(ui_app):
     )
 
 
+def test_sidebar_reload_refreshes_current_scenario_without_touching_chat(
+    monkeypatch,
+    ui_app,
+):
+    context = scenarios.scenario_details("rain")
+    monkeypatch.setattr(scenarios_ui, "reload_current_scenario", lambda: context)
+    monkeypatch.setattr(
+        scenarios_ui,
+        "start_new_conversation",
+        lambda *args, **kwargs: pytest.fail("Reload must preserve chat"),
+    )
+    result = scenarios_ui.reload_workspace()
+    assert result[0] == context and result[1]["value"] == "rain"
+    button = next(
+        component
+        for component in ui_app.blocks.values()
+        if isinstance(component, gr.Button)
+        and component.elem_id == "reload-current-scenario"
+    )
+    callback = next(
+        callback
+        for callback in ui_app.fns.values()
+        if (button._id, "click") in callback.targets
+    )
+    assert callback.fn is scenarios_ui.reload_workspace
+    assert (
+        callback.inputs == []
+    )  # resolves the actual database scenario, not the preview
+    assert callback.concurrency_id == "workspace" and callback.concurrency_limit == 1
+    assert all(
+        component.elem_id not in {"conversation", "message-input"}
+        for component in callback.outputs
+    )
+
+
+def test_sidebar_reload_errors_leave_the_workspace_unchanged(monkeypatch):
+    def missing():
+        raise LookupError("No scenario is loaded")
+
+    monkeypatch.setattr(scenarios_ui, "reload_current_scenario", missing)
+    with pytest.raises(gr.Error, match="No scenario is loaded"):
+        scenarios_ui.reload_workspace()
+
+
 def test_failed_stream_unlocks_the_composer_without_discarding_its_draft(ui_app):
     recoveries = [
         callback

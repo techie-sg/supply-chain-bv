@@ -13,6 +13,7 @@ from service.scenarios import scenario_names
 from ui import alerts as alerts_ui
 from ui import chat as chat_ui
 from ui import navigation as navigation_ui
+from ui import personalization as personalization_ui
 from ui import scenarios as scenarios_ui
 from ui import settings
 from ui import sidebar as sidebar_ui
@@ -60,6 +61,7 @@ def build_app() -> gr.Blocks:
         review_suggestions = sidebar_components.review_suggestions
         settings_summary = sidebar_components.settings_summary
         context_banner = sidebar_components.context_banner
+        reload_scenario = sidebar_components.reload_scenario
         manager_picker = sidebar_components.manager_picker
         badge = sidebar_components.badge
         with gr.Tabs(selected="assistant", elem_id="workspace-tabs") as workspace:
@@ -110,7 +112,9 @@ def build_app() -> gr.Blocks:
         suggestion_note = suggestion_components.note
         accept_suggestion = suggestion_components.accept
         dismiss_suggestion = suggestion_components.dismiss
-        memory_view = settings_form.memory
+        personalization_components = settings_form.personalization
+        assert personalization_components is not None
+        personalization_outputs = personalization_components.outputs()
         suggestion_outputs = suggestion_components.outputs(
             suggestions_entry,
             suggestions_entry_text,
@@ -143,7 +147,11 @@ def build_app() -> gr.Blocks:
             settings.load_settings,
             inputs=manager,
             outputs=settings_form.outputs(),
-        ).then(settings.load_summary, inputs=manager, outputs=settings_summary)
+        ).then(settings.load_summary, inputs=manager, outputs=settings_summary).then(
+            personalization_ui.load,
+            inputs=manager,
+            outputs=personalization_outputs,
+        )
         dismiss_suggestion.click(
             suggestions_ui.dismiss,
             inputs=[suggestion_items, manager],
@@ -161,7 +169,7 @@ def build_app() -> gr.Blocks:
             suggestions_ui.refresh_for,
             inputs=manager,
             outputs=suggestion_outputs,
-        ).then(settings.load_memory, inputs=manager, outputs=memory_view)
+        ).then(personalization_ui.load, inputs=manager, outputs=personalization_outputs)
         mark_reviewed_button.click(
             suggestions_ui.mark_issues_reviewed,
             inputs=manager,
@@ -181,6 +189,13 @@ def build_app() -> gr.Blocks:
             navigation_ui.open_settings,
             outputs=workspace,
             js=sidebar_ui.CLOSE_SIDEBAR_ON_PHONE_JS,
+            queue=False,
+            show_progress="hidden",
+        )
+        edit_settings.click(
+            personalization_ui.load,
+            inputs=manager,
+            outputs=personalization_outputs,
             queue=False,
             show_progress="hidden",
         )
@@ -257,7 +272,11 @@ def build_app() -> gr.Blocks:
                     inputs=manager,
                     outputs=answer_issues,
                 )
-                .then(settings.load_memory, inputs=manager, outputs=memory_view)
+                .then(
+                    personalization_ui.load,
+                    inputs=manager,
+                    outputs=personalization_outputs,
+                )
                 .then(
                     alerts_ui.queue_new,
                     inputs=[manager, alert_queue, alert_seen],
@@ -341,6 +360,23 @@ def build_app() -> gr.Blocks:
             outputs=situation,
             queue=False,
             show_progress="hidden",
+        )
+        current.change(
+            lambda context: gr.update(interactive=bool(context)),
+            inputs=current,
+            outputs=reload_scenario,
+            queue=False,
+            show_progress="hidden",
+        )
+        reload_scenario.click(
+            scenarios_ui.reload_workspace,
+            outputs=[current, scenario, preview, *tables],
+            concurrency_id="workspace",
+            concurrency_limit=1,
+        ).success(
+            scenarios_ui._assistant_context,
+            inputs=current,
+            outputs=context_banner,
         )
         if choices:
             scenario.input(

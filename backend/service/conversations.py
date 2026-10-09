@@ -38,7 +38,11 @@ from resources import PROMPTS
 from service.alerts import alerts_block
 from service.factory import create_llm_service
 from service.handover import handover_block
-from service.memory import memory_block
+from service.personalization import (
+    PersonalizationChanges,
+    explicit,
+    manager_personalization,
+)
 from service.preferences import PreferenceService, describe, manager_preferences
 from service.rag import answer_question
 from service.setting_changes import SettingChange, SettingChanges, tidy_reply
@@ -194,6 +198,7 @@ class ConversationService:
             context = {"id": conversation.id, "messages": [], "summary": None}
         # The summary stands in for older messages; recent ones stay word for word.
         history = to_chat_messages(context["messages"])
+        self.conversation_id = context["id"]
         extra = {"summary": context["summary"]} if context["summary"] else {}
         append_message(context["id"], new_message("manager", question), self.engine)
         result = self.answer(question, history=history, **extra)
@@ -275,7 +280,7 @@ def _answer(
         preferences=preferences,
         summary=summary,
         handover=handover_block(preferences.store_id),
-        memory=memory_block(preferences.manager_id),
+        personalization=manager_personalization(preferences.manager_id).prompt_block(),
         tools=traced_tools([*tools, *dispatch_tools(preferences.store_id)], calls),
         alerts=_alerts(preferences.manager_id),
     )
@@ -306,7 +311,11 @@ def _service(
     return ConversationService(
         DEMO_STORE_ID,
         manager_id,
-        answer=_answer,
+        answer=lambda question, **kwargs: _answer(
+            question,
+            preferences=manager_preferences(manager_id),
+            **kwargs,
+        ),
         titler=_title,
         conversation_id=conversation_id,
     )
@@ -324,6 +333,11 @@ def ask_question(
     """
     preferences = manager_preferences(manager_id)
     changes = SettingChanges(preferences)
+    personalization = PersonalizationChanges(
+        manager_personalization(manager_id),
+        question,
+        lambda: service.conversation_id,
+    )
     service = ConversationService(
         DEMO_STORE_ID,
         manager_id,
@@ -331,7 +345,10 @@ def ask_question(
             _answer(
                 question,
                 preferences=preferences,
-                tools=[changes.tool()],
+                tools=[
+                    changes.tool(),
+                    *([personalization.tool()] if explicit(question) else []),
+                ],
                 **kwargs,
             ),
             changes,

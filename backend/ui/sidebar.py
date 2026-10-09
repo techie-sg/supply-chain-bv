@@ -181,6 +181,7 @@ class SidebarComponents:
     review_suggestions: gr.Button
     settings_summary: gr.HTML
     context_banner: gr.HTML
+    reload_scenario: gr.Button
     manager_picker: gr.Dropdown
     badge: gr.HTML
 
@@ -252,12 +253,22 @@ def build_sidebar() -> SidebarComponents:
                     apply_default_css=False,
                     elem_id="settings-summary",
                 )
-            context_banner = gr.HTML(
-                '<div class="current-scenario"><span>Current scenario</span>'
-                "<strong>Checking…</strong></div>",
-                apply_default_css=False,
-                elem_id="sidebar-scenario",
-            )
+            with gr.Row(elem_id="sidebar-scenario-row"):
+                context_banner = gr.HTML(
+                    '<div class="current-scenario"><span>Current scenario</span>'
+                    "<strong>Checking…</strong></div>",
+                    apply_default_css=False,
+                    elem_id="sidebar-scenario",
+                    min_width=0,
+                )
+                reload_scenario = gr.Button(
+                    "Reload current scenario",
+                    size="sm",
+                    scale=0,
+                    min_width=0,
+                    interactive=False,
+                    elem_id="reload-current-scenario",
+                )
             with gr.Column(elem_id="manager-profile"):
                 manager_picker = gr.Dropdown(
                     choices=[],
@@ -285,6 +296,7 @@ def build_sidebar() -> SidebarComponents:
         review_suggestions,
         settings_summary,
         context_banner,
+        reload_scenario,
         manager_picker,
         badge,
     )

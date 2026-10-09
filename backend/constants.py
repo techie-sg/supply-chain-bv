@@ -27,6 +27,9 @@ SUMMARY_JOB_BATCH = 10  # idle chats summarized per run at most
 # Dreaming: a daily review of chats that proposes, never applies.
 DREAMING_MIN_CHATS = 3  # a settings suggestion needs evidence from this many chats
 DREAMING_RECENT_CHATS = 20  # chats read for settings suggestions
-DIGEST_DAYS = 7  # the memory digest reads chats with messages this recent
-DIGEST_MAX_CHATS = 15  # newest chats read for the memory digest
-DIGEST_MAX_ITEMS = 8  # bullets kept in the memory digest
+
+# Personalization review usually does nothing; inference always needs approval.
+PERSONALIZATION_MIN_CHATS = 3
+PERSONALIZATION_EVIDENCE_CHATS = 20
+PERSONALIZATION_EVIDENCE_MESSAGES = 60
+PERSONALIZATION_MAX_INSTRUCTIONS = 600
