@@ -1,0 +1,201 @@
+{
+  "run_ts": "20261009_071713",
+  "aggregate": {
+    "n_cases": 10,
+    "tool_selection_accuracy": 1.0,
+    "no_spurious_calls_rate": 1.0,
+    "no_missing_calls_rate": 1.0,
+    "argument_accuracy_mean": 1.0,
+    "argument_accuracy_n": 8,
+    "answer_groundedness_rate": 0.857,
+    "answer_groundedness_n": 7,
+    "avg_llm_calls": 1.9,
+    "total_elapsed_sec": 277.3
+  },
+  "cases": [
+    {
+      "id": "live-01",
+      "label": "Available rider count",
+      "tool_selection_correct": true,
+      "no_spurious_calls": true,
+      "no_missing_calls": true,
+      "argument_accuracy": 1.0,
+      "answer_grounded": true,
+      "tools_called": [
+        "get_live_dispatch_status"
+      ],
+      "expected_tools": [
+        "get_live_dispatch_status"
+      ],
+      "trace_errors": [],
+      "llm_calls": 2,
+      "elapsed_sec": 66.6,
+      "answer": "**Available riders:** 4 (as of 2026\u201110\u201108\u202fT19:30:00+05:30).  \nThe four riders with status \u201cavailable\u201d are RDR\u2011103, RDR\u2011104, RDR\u2011105, and RDR\u2011108."
+    },
+    {
+      "id": "live-02",
+      "label": "Packed-waiting orders",
+      "tool_selection_correct": true,
+      "no_spurious_calls": true,
+      "no_missing_calls": true,
+      "argument_accuracy": 1.0,
+      "answer_grounded": false,
+      "tools_called": [
+        "get_live_dispatch_status"
+      ],
+      "expected_tools": [
+        "get_live_dispatch_status"
+      ],
+      "trace_errors": [],
+      "llm_calls": 2,
+      "elapsed_sec": 1.18,
+      "answer": "**Packed orders waiting for a rider (as of 2026\u201110\u201108\u202f19:30:00\u202f+05:30):**\n\n- **ORD\u201101\u2011001** \u2013 4 items, Zone\u202fA  \n- **ORD\u201101\u2011002** \u2013 3 items, Zone\u202fB  \n\nThese are the only orders currently in the \u201cpacked_waiting_rider\u201d state."
+    },
+    {
+      "id": "live-03",
+      "label": "Rider break check",
+      "tool_selection_correct": true,
+      "no_spurious_calls": true,
+      "no_missing_calls": true,
+      "argument_accuracy": 1.0,
+      "answer_grounded": true,
+      "tools_called": [
+        "get_live_dispatch_status"
+      ],
+      "expected_tools": [
+        "get_live_dispatch_status"
+      ],
+      "trace_errors": [],
+      "llm_calls": 2,
+      "elapsed_sec": 133.03,
+      "answer": "**What\u2019s happening:**  \nRavi\u202fK (RDR\u2011101) has been on shift for **5.2\u202fhours** and has gone **95\u202fminutes** since his last break (as of 2026\u201110\u201108\u202f19:30\u202f+05:30).\n\n**Facts (live data)**  \n- `hours_on_shift`: 5.2\u202fh  \n- `minutes_since_last_break`: 95\u202fmin  \n- `status`: on_delivery (currently out for delivery)  \n\n**Unknowns**  \n- The store\u2019s break\u2011policy thresholds (e.g., mandatory break after X hours or Y minutes).  \n- Whether any rider\u2011specific exemptions apply.\n\n**What you can do next**  \n1. **Check the policy**: Look up the break\u2011policy in your playbook (e.g., \u201cMaximum shift length\u201d and \u201cMandatory break interval\u201d).  \n2. **If the policy says a break is required** (e.g., after 4\u202fh or 90\u202fmin), you can draft a message to Ravi reminding him to take a break or call in a standby rider to cover his deliveries while he rests.  \n3. **If the policy allows it** (e.g., no break required yet), you can keep him on shift.\n\n**Proposed action (requires your approval)**  \n- *Draft message to Ravi*: \u201cHi Ravi, you\u2019ve been on shift for 5.2\u202fh and 95\u202fmin since your last break. Please take a short break as per our policy. I\u2019ll call in a standby rider to cover your current deliveries.\u201d  \n\n(Only send after you confirm the policy allows this.)"
+    },
+    {
+      "id": "live-04",
+      "label": "Riders returning within 10 min",
+      "tool_selection_correct": true,
+      "no_spurious_calls": true,
+      "no_missing_calls": true,
+      "argument_accuracy": 1.0,
+      "answer_grounded": true,
+      "tools_called": [
+        "get_live_dispatch_status"
+      ],
+      "expected_tools": [
+        "get_live_dispatch_status"
+      ],
+      "trace_errors": [],
+      "llm_calls": 2,
+      "elapsed_sec": 1.66,
+      "answer": "**Rider returning in the next 10\u202fminutes**\n\n- **RDR\u2011107 \u2013 Lakshmi\u202fV** (ETA back \u2248\u202f2\u202fmin) \u2013 as of 2026\u201110\u201108\u202fT19:30:00+05:30."
+    },
+    {
+      "id": "metrics-01",
+      "label": "SLA on 2026-10-07 20-22",
+      "tool_selection_correct": true,
+      "no_spurious_calls": true,
+      "no_missing_calls": true,
+      "argument_accuracy": 1.0,
+      "answer_grounded": true,
+      "tools_called": [
+        "get_delivery_metrics"
+      ],
+      "expected_tools": [
+        "get_delivery_metrics"
+      ],
+      "trace_errors": [],
+      "llm_calls": 2,
+      "elapsed_sec": 1.62,
+      "answer": "The 10\u2011minute SLA for DS\u2011BLR\u2011014 on 2026\u201110\u201107 between 8\u202fpm and 10\u202fpm was **37.1\u202f%** (average across the two hours).  \n(See period summary from the `get_delivery_metrics` call.)"
+    },
+    {
+      "id": "metrics-02",
+      "label": "Order volume on 2026-10-07 19-21",
+      "tool_selection_correct": true,
+      "no_spurious_calls": true,
+      "no_missing_calls": true,
+      "argument_accuracy": 1.0,
+      "answer_grounded": true,
+      "tools_called": [
+        "get_delivery_metrics"
+      ],
+      "expected_tools": [
+        "get_delivery_metrics"
+      ],
+      "trace_errors": [],
+      "llm_calls": 2,
+      "elapsed_sec": 1.46,
+      "answer": "**Orders handled (7\u202fpm\u202f\u2013\u202f9\u202fpm, 2026\u201110\u201107):** 170 orders.  \n\n*Source: historical metrics for DS\u2011BLR\u2011014, period 19:00\u201121:00 on 2026\u201110\u201107 (period_summary.total_orders).*"
+    },
+    {
+      "id": "metrics-03",
+      "label": "Rain flag on 2026-10-06 18-22",
+      "tool_selection_correct": true,
+      "no_spurious_calls": true,
+      "no_missing_calls": true,
+      "argument_accuracy": 1.0,
+      "answer_grounded": null,
+      "tools_called": [
+        "get_delivery_metrics"
+      ],
+      "expected_tools": [
+        "get_delivery_metrics"
+      ],
+      "trace_errors": [],
+      "llm_calls": 2,
+      "elapsed_sec": 1.83,
+      "answer": "No, there was no rain during the 6\u202fpm\u201110\u202fpm window on 2026\u201110\u201106 at DS\u2011BLR\u2011014.  \nAll four hourly snapshots (18:00\u201119:00, 19:00\u201120:00, 20:00\u201121:00, 21:00\u201122:00) show `rain_flag: false`, and the period summary reports `rain_hours: 0`."
+    },
+    {
+      "id": "no-tool-01",
+      "label": "Batching policy question",
+      "tool_selection_correct": true,
+      "no_spurious_calls": true,
+      "no_missing_calls": true,
+      "argument_accuracy": null,
+      "answer_grounded": null,
+      "tools_called": [],
+      "expected_tools": [],
+      "trace_errors": [],
+      "llm_calls": 1,
+      "elapsed_sec": 0.94,
+      "answer": "I don\u2019t have the policy details on batching rules in front of me. Could you share the relevant playbook excerpt (or confirm the store\u2019s batching policy) so I can tell you whether two orders in the same zone can be batched and what the item limit per batch is?"
+    },
+    {
+      "id": "no-tool-02",
+      "label": "Maximum shift policy",
+      "tool_selection_correct": true,
+      "no_spurious_calls": true,
+      "no_missing_calls": true,
+      "argument_accuracy": null,
+      "answer_grounded": null,
+      "tools_called": [],
+      "expected_tools": [],
+      "trace_errors": [],
+      "llm_calls": 1,
+      "elapsed_sec": 0.91,
+      "answer": "I don\u2019t have the policy excerpt on hand. Could you share the relevant playbook section that specifies rider shift limits?"
+    },
+    {
+      "id": "multi-01",
+      "label": "Live queue vs yesterday 20-22 peak",
+      "tool_selection_correct": true,
+      "no_spurious_calls": true,
+      "no_missing_calls": true,
+      "argument_accuracy": 1.0,
+      "answer_grounded": true,
+      "tools_called": [
+        "get_live_dispatch_status",
+        "get_delivery_metrics"
+      ],
+      "expected_tools": [
+        "get_live_dispatch_status",
+        "get_delivery_metrics"
+      ],
+      "trace_errors": [],
+      "llm_calls": 3,
+      "elapsed_sec": 68.08,
+      "answer": "**What\u2019s happening:**  \nAt 19:30\u202fIST today, the store has **8 orders in the queue** (6 open + 2 packed\u2011waiting).  \nDuring the 20:00\u201122:00 window on 2026\u201110\u201107, the store received **198 orders** in total (\u224899 orders per hour).\n\n**Facts**\n\n| Item | Value | Source |\n|------|-------|--------|\n| Current queue depth (open + packed\u2011waiting) | 8 | `get_live_dispatch_status` (as of 2026\u201110\u201108\u202f19:30:00+05:30) |\n| Orders received 20\u201122\u202fh on 2026\u201110\u201107 | 198 | `get_delivery_metrics` (period 20\u201322) |\n| Average orders per hour in that period | 99 | `get_delivery_metrics` |\n\n**Comparison**\n\n- The current queue depth (8) is **much smaller** than the 198 orders that were received during the 20\u201122\u202fh period on 07\u202fOct.  \n- Even if all 198 orders had been in the queue, the current depth would still be a tiny fraction of that volume.\n\n**Implication**\n\nYour queue is currently light relative to the historical volume for that time slot. This suggests that the current rider pool and batching are keeping pace with demand, or that demand is lower today. If you anticipate a surge, you might want to monitor incoming orders and rider availability to maintain this low queue depth."
+    }
+  ]
+}

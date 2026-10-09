@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>DispatchDesk tool-calling evals</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f6f5f2; --surface: #fcfcfb; --line: #e4e3de; --grid: #ecebe7;
+  --ink: #0b0b0b; --ink2: #52514e; --ink3: #8a8983;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --good: #1b7f4b; --bad: #c0392b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #121211; --surface: #1a1a19; --line: #2e2e2b; --grid: #262624;
+    --ink: #fff; --ink2: #c3c2b7; --ink3: #8a8983;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --good: #4cc38a; --bad: #e66767;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, sans-serif; }
+main { max-width: 1100px; margin: 0 auto; padding: 32px 20px 80px; }
+h1 { font-size: 24px; margin: 0 0 4px; }
+h2 { font-size: 16px; margin: 0; }
+.sub { color: var(--ink2); margin: 2px 0 0; font-size: 13px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-top: 20px; }
+.progress-card { background: #fff8e1; border: 1px solid #ffe082; border-radius: 12px; padding: 14px 18px; margin-top: 20px; }
+@media (prefers-color-scheme: dark) {
+  .progress-card { background: #2a2500; border-color: #5a4500; }
+}
+.progress-track { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; }
+.progress-bar  { height: 8px; background: var(--s1); border-radius: 4px; transition: width 0.3s; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-top: 16px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.tile .k { font-size: 12px; color: var(--ink2); }
+.tile .v { font-size: 26px; font-weight: 600; margin-top: 2px; }
+.tile .d { font-size: 12px; color: var(--ink2); }
+.scroll { overflow-x: auto; margin-top: 12px; }
+table { border-collapse: collapse; width: 100%; font-size: 12px; }
+th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+th { color: var(--ink2); font-weight: 600; position: sticky; top: 0; background: var(--surface); z-index: 1; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+code { font-size: 11px; background: var(--page); padding: 1px 4px; border-radius: 4px; }
+details summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--ink2); }
+.case-row { cursor: pointer; }
+.case-row:hover { background: var(--grid); }
+.qa-row { display: none; }
+.qa-row.open { display: table-row; }
+.qa-body { padding: 8px 10px; font-size: 12px; line-height: 1.6; background: var(--grid); border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body>
+<main>
+  <h1>DispatchDesk tool-calling evals</h1>
+  <p class="sub">25 cases &mdash; live status, historical metrics, no-tool (policy), multi-tool, and adversarial edge cases.
+  LLM calls are real (Groq); tool execution is mocked. Latest run: 20261009 071713 UTC &mdash; 10 cases, 277s wall time.</p>
+  
+  <div class="tiles">
+    <div class="tile">
+      <div class="k">Tool selection</div>
+      <div class="v" style="color:#1b7f4b">100%</div>
+      <div class="d">10/10 cases</div>
+    </div>
+    <div class="tile">
+      <div class="k">No spurious calls</div>
+      <div class="v" style="color:#1b7f4b">100%</div>
+      <div class="d">10/10 cases</div>
+    </div>
+    <div class="tile">
+      <div class="k">No missing calls</div>
+      <div class="v" style="color:#1b7f4b">100%</div>
+      <div class="d">10/10 cases</div>
+    </div>
+    <div class="tile">
+      <div class="k">Arg accuracy</div>
+      <div class="v" style="color:#1b7f4b">100%</div>
+      <div class="d">n=8 tool cases</div>
+    </div>
+    <div class="tile">
+      <div class="k">Answer grounded</div>
+      <div class="v" style="color:#c98500">86%</div>
+      <div class="d">n=7 keyword cases</div>
+    </div>
+    <div class="tile">
+      <div class="k">Avg LLM calls</div>
+      <div class="v" style="">1.9</div>
+      <div class="d">1.9 per query</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Category breakdown &mdash; latest run</h2>
+    <p class="sub">Tool selection + no spurious + no missing all PASS = category pass.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Category</th><th class="n">Cases</th><th class="n">Passed</th><th>Rate</th><th>Notes</th></tr></thead>
+        <tbody>
+    <tr>
+      <td>Live status</td>
+      <td class="n">4</td>
+      <td class="n">4/4</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:160px;height:8px;background:#1b7f4b;border-radius:4px"></div>
+          <span style="color:#1b7f4b">100%</span>
+        </div>
+      </td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>Historical metrics</td>
+      <td class="n">3</td>
+      <td class="n">3/3</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:160px;height:8px;background:#1b7f4b;border-radius:4px"></div>
+          <span style="color:#1b7f4b">100%</span>
+        </div>
+      </td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>No-tool (policy)</td>
+      <td class="n">2</td>
+      <td class="n">2/2</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:160px;height:8px;background:#1b7f4b;border-radius:4px"></div>
+          <span style="color:#1b7f4b">100%</span>
+        </div>
+      </td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>Multi-tool</td>
+      <td class="n">1</td>
+      <td class="n">1/1</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:160px;height:8px;background:#1b7f4b;border-radius:4px"></div>
+          <span style="color:#1b7f4b">100%</span>
+        </div>
+      </td>
+      <td></td>
+    </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Per-case results &mdash; latest run</h2>
+    <p class="sub">Click any row to expand the question and model answer.</p>
+    <div class="scroll" style="max-height:540px">
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th><th>Label</th>
+            <th>Tool sel.</th><th>No spur.</th><th>No miss.</th>
+            <th class="n">Arg acc.</th><th>Grounded</th>
+            <th>Called</th><th>Expected</th><th class="n">LLM calls</th>
+          </tr>
+        </thead>
+        <tbody>
+    <tr class="case-row" onclick="this.nextElementSibling.classList.toggle('open')">
+      <td><code>live-01</code></td>
+      <td>Available rider count</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td class="n">100%</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td><code style="font-size:10px">get_live_dispatch_status</code></td>
+      <td><code style="font-size:10px">get_live_dispatch_status</code></td>
+      <td class="n">2</td>
+    </tr><tr class="qa-row"><td colspan="10"><div class="qa-body"><div><b style="color:var(--ink2)">Q:</b> How many riders are currently available at DS-BLR-014?</div><div style="margin-top:4px"><b style="color:var(--ink2)">A:</b> **Available riders:** 4 (as of 2026‑10‑08 T19:30:00+05:30).  
+The four riders with status “available” are RDR‑103, RDR‑104, RDR‑105, and RDR‑108.</div></div></td></tr>
+    <tr class="case-row" onclick="this.nextElementSibling.classList.toggle('open')">
+      <td><code>live-02</code></td>
+      <td>Packed-waiting orders</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td class="n">100%</td>
+      <td style="color:#c0392b">FAIL</td>
+      <td><code style="font-size:10px">get_live_dispatch_status</code></td>
+      <td><code style="font-size:10px">get_live_dispatch_status</code></td>
+      <td class="n">2</td>
+    </tr><tr class="qa-row"><td colspan="10"><div class="qa-body"><div><b style="color:var(--ink2)">Q:</b> Which orders at DS-BLR-014 are packed and waiting for a rider right now?</div><div style="margin-top:4px"><b style="color:var(--ink2)">A:</b> **Packed orders waiting for a rider (as of 2026‑10‑08 19:30:00 +05:30):**
+
+- **ORD‑01‑001** – 4 items, Zone A  
+- **ORD‑01‑002** – 3 items, Zone B  
+
+These are the only orders currently in the “packed_waiting_rider” state.</div></div></td></tr>
+    <tr class="case-row" onclick="this.nextElementSibling.classList.toggle('open')">
+      <td><code>live-03</code></td>
+      <td>Rider break check</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td class="n">100%</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td><code style="font-size:10px">get_live_dispatch_status</code></td>
+      <td><code style="font-size:10px">get_live_dispatch_status</code></td>
+      <td class="n">2</td>
+    </tr><tr class="qa-row"><td colspan="10"><div class="qa-body"><div><b style="color:var(--ink2)">Q:</b> How long has Ravi K been on shift at DS-BLR-014? Is he overdue for a break?</div><div style="margin-top:4px"><b style="color:var(--ink2)">A:</b> **What’s happening:**  
+Ravi K (RDR‑101) has been on shift for **5.2 hours** and has gone **95 minutes** since his last break (as of 2026‑10‑08 19:30 +05:30).
+
+**Facts (live data)**  
+- `hours_on_shift`: 5.2 h  
+- `minutes_since_last_break`: 95 min  
+- `status`: on_delivery (currently out for delivery)  
+
+**Unknowns**  
+- The store’s break‑policy thresholds (e.g., mandatory break after X hours or </div></div></td></tr>
+    <tr class="case-row" onclick="this.nextElementSibling.classList.toggle('open')">
+      <td><code>live-04</code></td>
+      <td>Riders returning within 10 min</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td class="n">100%</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td><code style="font-size:10px">get_live_dispatch_status</code></td>
+      <td><code style="font-size:10px">get_live_dispatch_status</code></td>
+      <td class="n">2</td>
+    </tr><tr class="qa-row"><td colspan="10"><div class="qa-body"><div><b style="color:var(--ink2)">Q:</b> Which riders at DS-BLR-014 will be back within the next 10 minutes?</div><div style="margin-top:4px"><b style="color:var(--ink2)">A:</b> **Rider returning in the next 10 minutes**
+
+- **RDR‑107 – Lakshmi V** (ETA back ≈ 2 min) – as of 2026‑10‑08 T19:30:00+05:30.</div></div></td></tr>
+    <tr class="case-row" onclick="this.nextElementSibling.classList.toggle('open')">
+      <td><code>metrics-01</code></td>
+      <td>SLA on 2026-10-07 20-22</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td class="n">100%</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td><code style="font-size:10px">get_delivery_metrics</code></td>
+      <td><code style="font-size:10px">get_delivery_metrics</code></td>
+      <td class="n">2</td>
+    </tr><tr class="qa-row"><td colspan="10"><div class="qa-body"><div><b style="color:var(--ink2)">Q:</b> What was the 10-minute SLA at DS-BLR-014 on 2026-10-07 from 8 pm to 10 pm?</div><div style="margin-top:4px"><b style="color:var(--ink2)">A:</b> The 10‑minute SLA for DS‑BLR‑014 on 2026‑10‑07 between 8 pm and 10 pm was **37.1 %** (average across the two hours).  
+(See period summary from the `get_delivery_metrics` call.)</div></div></td></tr>
+    <tr class="case-row" onclick="this.nextElementSibling.classList.toggle('open')">
+      <td><code>metrics-02</code></td>
+      <td>Order volume on 2026-10-07 19-21</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td class="n">100%</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td><code style="font-size:10px">get_delivery_metrics</code></td>
+      <td><code style="font-size:10px">get_delivery_metrics</code></td>
+      <td class="n">2</td>
+    </tr><tr class="qa-row"><td colspan="10"><div class="qa-body"><div><b style="color:var(--ink2)">Q:</b> How many orders did DS-BLR-014 handle on 2026-10-07 from 7 pm to 9 pm?</div><div style="margin-top:4px"><b style="color:var(--ink2)">A:</b> **Orders handled (7 pm – 9 pm, 2026‑10‑07):** 170 orders.  
+
+*Source: historical metrics for DS‑BLR‑014, period 19:00‑21:00 on 2026‑10‑07 (period_summary.total_orders).*</div></div></td></tr>
+    <tr class="case-row" onclick="this.nextElementSibling.classList.toggle('open')">
+      <td><code>metrics-03</code></td>
+      <td>Rain flag on 2026-10-06 18-22</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td class="n">100%</td>
+      <td style="color:#8a8983">N/A</td>
+      <td><code style="font-size:10px">get_delivery_metrics</code></td>
+      <td><code style="font-size:10px">get_delivery_metrics</code></td>
+      <td class="n">2</td>
+    </tr><tr class="qa-row"><td colspan="10"><div class="qa-body"><div><b style="color:var(--ink2)">Q:</b> Was rain a factor during the 6 pm to 10 pm window at DS-BLR-014 on 2026-10-06?</div><div style="margin-top:4px"><b style="color:var(--ink2)">A:</b> No, there was no rain during the 6 pm‑10 pm window on 2026‑10‑06 at DS‑BLR‑014.  
+All four hourly snapshots (18:00‑19:00, 19:00‑20:00, 20:00‑21:00, 21:00‑22:00) show `rain_flag: false`, and the period summary reports `rain_hours: 0`.</div></div></td></tr>
+    <tr class="case-row" onclick="this.nextElementSibling.classList.toggle('open')">
+      <td><code>no-tool-01</code></td>
+      <td>Batching policy question</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#8a8983">N/A</td>
+      <td style="color:#8a8983">N/A</td>
+      <td><code style="font-size:10px">(none)</code></td>
+      <td><code style="font-size:10px">(none)</code></td>
+      <td class="n">1</td>
+    </tr><tr class="qa-row"><td colspan="10"><div class="qa-body"><div><b style="color:var(--ink2)">Q:</b> Can I batch two orders going to the same zone? What is the item limit per batch?</div><div style="margin-top:4px"><b style="color:var(--ink2)">A:</b> I don’t have the policy details on batching rules in front of me. Could you share the relevant playbook excerpt (or confirm the store’s batching policy) so I can tell you whether two orders in the same zone can be batched and what the item limit per batch is?</div></div></td></tr>
+    <tr class="case-row" onclick="this.nextElementSibling.classList.toggle('open')">
+      <td><code>no-tool-02</code></td>
+      <td>Maximum shift policy</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#8a8983">N/A</td>
+      <td style="color:#8a8983">N/A</td>
+      <td><code style="font-size:10px">(none)</code></td>
+      <td><code style="font-size:10px">(none)</code></td>
+      <td class="n">1</td>
+    </tr><tr class="qa-row"><td colspan="10"><div class="qa-body"><div><b style="color:var(--ink2)">Q:</b> What is the maximum allowed shift length for a rider?</div><div style="margin-top:4px"><b style="color:var(--ink2)">A:</b> I don’t have the policy excerpt on hand. Could you share the relevant playbook section that specifies rider shift limits?</div></div></td></tr>
+    <tr class="case-row" onclick="this.nextElementSibling.classList.toggle('open')">
+      <td><code>multi-01</code></td>
+      <td>Live queue vs yesterday 20-22 peak</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td class="n">100%</td>
+      <td style="color:#1b7f4b">PASS</td>
+      <td><code style="font-size:10px">get_live_dispatch_status|get_delivery_metrics</code></td>
+      <td><code style="font-size:10px">get_live_dispatch_status|get_delivery_metrics</code></td>
+      <td class="n">3</td>
+    </tr><tr class="qa-row"><td colspan="10"><div class="qa-body"><div><b style="color:var(--ink2)">Q:</b> How does the current queue depth at DS-BLR-014 compare to the 8 pm to 10 pm period on 2026-10-07?</div><div style="margin-top:4px"><b style="color:var(--ink2)">A:</b> **What’s happening:**  
+At 19:30 IST today, the store has **8 orders in the queue** (6 open + 2 packed‑waiting).  
+During the 20:00‑22:00 window on 2026‑10‑07, the store received **198 orders** in total (≈99 orders per hour).
+
+**Facts**
+
+| Item | Value | Source |
+|------|-------|--------|
+| Current queue depth (open + packed‑waiting) | 8 | `get_live_dispatch_status` (as of 2026‑10‑08 19:30:00+05:3</div></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <details open>
+      <summary>Run history &mdash; 2 runs</summary>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Run (UTC)</th><th class="n">Cases</th>
+              <th class="n">Tool sel.</th><th class="n">No spur.</th><th class="n">No miss.</th>
+              <th class="n">Arg acc.</th><th class="n">Grounded</th>
+              <th class="n">Avg LLM</th><th class="n">Wall time</th>
+            </tr>
+          </thead>
+          <tbody>
+    <tr style="font-weight:600">
+      <td>20261009 071713 ★</td>
+      <td class="n">10</td>
+      <td class="n" style="color:#1b7f4b">100%</td>
+      <td class="n" style="color:#1b7f4b">100%</td>
+      <td class="n" style="color:#1b7f4b">100%</td>
+      <td class="n">100%</td>
+      <td class="n">86%</td>
+      <td class="n">1.9</td>
+      <td class="n">277s</td>
+    </tr>
+    <tr style="">
+      <td>20261009 051951</td>
+      <td class="n">10</td>
+      <td class="n" style="color:#1b7f4b">100%</td>
+      <td class="n" style="color:#1b7f4b">100%</td>
+      <td class="n" style="color:#1b7f4b">100%</td>
+      <td class="n">100%</td>
+      <td class="n">86%</td>
+      <td class="n">1.9</td>
+      <td class="n">82s</td>
+    </tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+  </div>
+</main>
+</body>
+</html>

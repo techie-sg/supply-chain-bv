@@ -1,0 +1,11 @@
+id,label,tool_selection_correct,no_spurious_calls,no_missing_calls,argument_accuracy,answer_grounded,tools_called,expected_tools,trace_errors,llm_calls,elapsed_sec
+live-01,Available rider count,True,True,True,1.0,True,get_live_dispatch_status,get_live_dispatch_status,,2,66.6
+live-02,Packed-waiting orders,True,True,True,1.0,False,get_live_dispatch_status,get_live_dispatch_status,,2,1.18
+live-03,Rider break check,True,True,True,1.0,True,get_live_dispatch_status,get_live_dispatch_status,,2,133.03
+live-04,Riders returning within 10 min,True,True,True,1.0,True,get_live_dispatch_status,get_live_dispatch_status,,2,1.66
+metrics-01,SLA on 2026-10-07 20-22,True,True,True,1.0,True,get_delivery_metrics,get_delivery_metrics,,2,1.62
+metrics-02,Order volume on 2026-10-07 19-21,True,True,True,1.0,True,get_delivery_metrics,get_delivery_metrics,,2,1.46
+metrics-03,Rain flag on 2026-10-06 18-22,True,True,True,1.0,,get_delivery_metrics,get_delivery_metrics,,2,1.83
+no-tool-01,Batching policy question,True,True,True,,,,,,1,0.94
+no-tool-02,Maximum shift policy,True,True,True,,,,,,1,0.91
+multi-01,Live queue vs yesterday 20-22 peak,True,True,True,1.0,True,get_live_dispatch_status|get_delivery_metrics,get_live_dispatch_status|get_delivery_metrics,,3,68.08

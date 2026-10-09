@@ -1,0 +1,249 @@
+[
+  {
+    "id": "live-01",
+    "label": "Available rider count",
+    "question": "How many riders are currently available at DS-BLR-014?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_live_dispatch_status"],
+    "expected_args": {"get_live_dispatch_status": {"store_id": "DS-BLR-014"}},
+    "answer_keywords": ["4"]
+  },
+  {
+    "id": "live-02",
+    "label": "Packed-waiting orders",
+    "question": "Which orders at DS-BLR-014 are packed and waiting for a rider right now?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_live_dispatch_status"],
+    "expected_args": {"get_live_dispatch_status": {"store_id": "DS-BLR-014"}},
+    "answer_keywords": ["ORD-01-001", "ORD-01-002"]
+  },
+  {
+    "id": "live-03",
+    "label": "Rider break check",
+    "question": "How long has Ravi K been on shift at DS-BLR-014? Is he overdue for a break?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_live_dispatch_status"],
+    "expected_args": {"get_live_dispatch_status": {"store_id": "DS-BLR-014"}},
+    "answer_keywords": ["95"]
+  },
+  {
+    "id": "live-04",
+    "label": "Riders returning within 10 min",
+    "question": "Which riders at DS-BLR-014 will be back within the next 10 minutes?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_live_dispatch_status"],
+    "expected_args": {"get_live_dispatch_status": {"store_id": "DS-BLR-014"}},
+    "answer_keywords": ["Lakshmi"]
+  },
+  {
+    "id": "live-05",
+    "label": "Rider zone lookup",
+    "question": "What zone is Deepak R currently in at DS-BLR-014?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_live_dispatch_status"],
+    "expected_args": {"get_live_dispatch_status": {"store_id": "DS-BLR-014"}},
+    "answer_keywords": ["Z-A"]
+  },
+  {
+    "id": "live-06",
+    "label": "Long-shift riders",
+    "question": "Which riders at DS-BLR-014 have been on shift for more than 4 hours?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_live_dispatch_status"],
+    "expected_args": {"get_live_dispatch_status": {"store_id": "DS-BLR-014"}},
+    "answer_keywords": ["5.2"]
+  },
+  {
+    "id": "live-07",
+    "label": "Standby off-shift riders",
+    "question": "Is there a standby rider available at DS-BLR-014 who could be called in?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_live_dispatch_status"],
+    "expected_args": {"get_live_dispatch_status": {"store_id": "DS-BLR-014"}},
+    "answer_keywords": ["Kiran"]
+  },
+  {
+    "id": "metrics-01",
+    "label": "SLA on 2026-10-07 20-22",
+    "question": "What was the 10-minute SLA at DS-BLR-014 on 2026-10-07 from 8 pm to 10 pm?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_delivery_metrics"],
+    "expected_args": {
+      "get_delivery_metrics": {"store_id": "DS-BLR-014", "date": "2026-10-07", "start_hour": 20, "end_hour": 22}
+    },
+    "answer_keywords": ["37"]
+  },
+  {
+    "id": "metrics-02",
+    "label": "Order volume on 2026-10-07 19-21",
+    "question": "How many orders did DS-BLR-014 handle on 2026-10-07 from 7 pm to 9 pm?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_delivery_metrics"],
+    "expected_args": {
+      "get_delivery_metrics": {"store_id": "DS-BLR-014", "date": "2026-10-07", "start_hour": 19, "end_hour": 21}
+    },
+    "answer_keywords": ["170"]
+  },
+  {
+    "id": "metrics-03",
+    "label": "Rain flag on 2026-10-06 18-22",
+    "question": "Was rain a factor during the 6 pm to 10 pm window at DS-BLR-014 on 2026-10-06?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_delivery_metrics"],
+    "expected_args": {
+      "get_delivery_metrics": {"store_id": "DS-BLR-014", "date": "2026-10-06", "start_hour": 18, "end_hour": 22}
+    },
+    "answer_keywords": []
+  },
+  {
+    "id": "metrics-04",
+    "label": "Riders online on 2026-10-06 20-22",
+    "question": "How many riders were online at DS-BLR-014 on 2026-10-06 between 8 pm and 10 pm?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_delivery_metrics"],
+    "expected_args": {
+      "get_delivery_metrics": {"store_id": "DS-BLR-014", "date": "2026-10-06", "start_hour": 20, "end_hour": 22}
+    },
+    "answer_keywords": ["20"]
+  },
+  {
+    "id": "metrics-05",
+    "label": "Avg ride time on 2026-10-07 19-21",
+    "question": "What was the average ride time at DS-BLR-014 on 2026-10-07 from 7 pm to 9 pm?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_delivery_metrics"],
+    "expected_args": {
+      "get_delivery_metrics": {"store_id": "DS-BLR-014", "date": "2026-10-07", "start_hour": 19, "end_hour": 21}
+    },
+    "answer_keywords": ["5.3"]
+  },
+  {
+    "id": "metrics-06",
+    "label": "Rain hours on 2026-10-07 19-21",
+    "question": "How many rainy hours were there at DS-BLR-014 on 2026-10-07 between 7 pm and 9 pm?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_delivery_metrics"],
+    "expected_args": {
+      "get_delivery_metrics": {"store_id": "DS-BLR-014", "date": "2026-10-07", "start_hour": 19, "end_hour": 21}
+    },
+    "answer_keywords": ["1"]
+  },
+  {
+    "id": "metrics-07",
+    "label": "Metrics for date with no data",
+    "question": "What was the SLA at DS-BLR-014 on 2026-10-05 from 8 pm to 10 pm?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_delivery_metrics"],
+    "expected_args": {
+      "get_delivery_metrics": {"store_id": "DS-BLR-014", "date": "2026-10-05", "start_hour": 20, "end_hour": 22}
+    },
+    "answer_keywords": []
+  },
+  {
+    "id": "no-tool-01",
+    "label": "Batching policy question",
+    "question": "Can I batch two orders going to the same zone? What is the item limit per batch?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": [],
+    "expected_args": {},
+    "answer_keywords": []
+  },
+  {
+    "id": "no-tool-02",
+    "label": "Maximum shift policy",
+    "question": "What is the maximum allowed shift length for a rider?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": [],
+    "expected_args": {},
+    "answer_keywords": []
+  },
+  {
+    "id": "no-tool-03",
+    "label": "Out-of-scope weather question",
+    "question": "What is the weather forecast for Bengaluru tomorrow?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": [],
+    "expected_args": {},
+    "answer_keywords": []
+  },
+  {
+    "id": "no-tool-04",
+    "label": "Cold-chain policy question",
+    "question": "What is the cold-chain temperature rule for frozen orders?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": [],
+    "expected_args": {},
+    "answer_keywords": []
+  },
+  {
+    "id": "no-tool-05",
+    "label": "No tool for historical rider stat",
+    "question": "How many total deliveries has Ravi K made across all shifts this month?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": [],
+    "expected_args": {},
+    "answer_keywords": []
+  },
+  {
+    "id": "multi-01",
+    "label": "Live queue vs yesterday 20-22 peak",
+    "question": "How does the current queue depth at DS-BLR-014 compare to the 8 pm to 10 pm period on 2026-10-07?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_live_dispatch_status", "get_delivery_metrics"],
+    "expected_args": {
+      "get_live_dispatch_status": {"store_id": "DS-BLR-014"},
+      "get_delivery_metrics": {"store_id": "DS-BLR-014", "date": "2026-10-07", "start_hour": 20, "end_hour": 22}
+    },
+    "answer_keywords": ["198"]
+  },
+  {
+    "id": "multi-02",
+    "label": "Compare 8-10pm across two dates",
+    "question": "Compare the 8 pm to 10 pm performance at DS-BLR-014 on 2026-10-07 versus 2026-10-06. Which evening had better SLA?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_delivery_metrics", "get_delivery_metrics"],
+    "expected_args": {
+      "get_delivery_metrics": {"store_id": "DS-BLR-014", "date": "2026-10-06", "start_hour": 20, "end_hour": 22}
+    },
+    "answer_keywords": ["37", "86"]
+  },
+  {
+    "id": "multi-03",
+    "label": "Current queue vs last night 20-22",
+    "question": "Is the current queue at DS-BLR-014 worse or better than last night's 8 pm to 10 pm period?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_live_dispatch_status", "get_delivery_metrics"],
+    "expected_args": {
+      "get_live_dispatch_status": {"store_id": "DS-BLR-014"},
+      "get_delivery_metrics": {"store_id": "DS-BLR-014", "date": "2026-10-08", "start_hour": 20, "end_hour": 22}
+    },
+    "answer_keywords": []
+  },
+  {
+    "id": "tricky-01",
+    "label": "Order waiting longer than 7 min",
+    "question": "Is there any order at DS-BLR-014 that has been waiting more than 7 minutes?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_live_dispatch_status"],
+    "expected_args": {"get_live_dispatch_status": {"store_id": "DS-BLR-014"}},
+    "answer_keywords": ["480"]
+  },
+  {
+    "id": "tricky-02",
+    "label": "Suggest rider for next break",
+    "question": "Based on current data at DS-BLR-014, which available rider should I consider sending on a break next?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_live_dispatch_status"],
+    "expected_args": {"get_live_dispatch_status": {"store_id": "DS-BLR-014"}},
+    "answer_keywords": []
+  },
+  {
+    "id": "tricky-03",
+    "label": "Ambiguous current SLA question",
+    "question": "What is the current SLA at DS-BLR-014?",
+    "store_id": "DS-BLR-014",
+    "expected_tools": ["get_live_dispatch_status"],
+    "expected_args": {"get_live_dispatch_status": {"store_id": "DS-BLR-014"}},
+    "answer_keywords": []
+  }
+]
