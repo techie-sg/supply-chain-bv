@@ -19,6 +19,7 @@ from uuid import UUID
 import structlog
 from sqlalchemy import Engine
 
+from config import get_settings
 from constants import DEMO_MANAGER_ID, DEMO_STORE_ID
 from database.models import AlertEvent, HourlyMetric, Order, Rider
 from domain.memory import AlertOperator, AlertOptions, PreferenceCategory
@@ -394,6 +395,7 @@ def check_alerts(
     if snapshot is None:
         return AlertCheck(available=False, alerts=[])
     settings = manager_preferences(manager_id).effective()
+    override = get_settings().alert_cooldown_override_min
     recorded = 0
     for result in evaluate(snapshot, settings, now):
         if not result.breached:
@@ -408,7 +410,7 @@ def check_alerts(
                 "snapshot_as_of": result.as_of,
                 "details": _details(result),
             },
-            result.cooldown_min,
+            override or result.cooldown_min,
             engine,
         )
         if event is not None:

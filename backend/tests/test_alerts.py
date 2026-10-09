@@ -434,3 +434,21 @@ def test_dismiss_alert_saves_for_the_manager(monkeypatch) -> None:
     assert calls == [(UUID(event_id), "DS-BLR-014", "imran")]
     assert alerts.dismiss_alert("not-a-uuid", "imran") is False
     assert len(calls) == 1
+
+
+def test_cooldown_override_applies_to_every_alert(events, monkeypatch) -> None:
+    monkeypatch.setattr(
+        alerts,
+        "get_settings",
+        lambda: SimpleNamespace(alert_cooldown_override_min=2),
+    )
+    alerts.check_alerts("karthik", now=THURSDAY)
+    assert len(events.rows) == 2
+    # Within the 2-minute override nothing new is recorded.
+    events.now = THURSDAY + timedelta(minutes=1)
+    alerts.check_alerts("karthik", now=events.now)
+    assert len(events.rows) == 2
+    # After it, both alerts pop up again although their own cooldown is 15 min.
+    events.now = THURSDAY + timedelta(minutes=3)
+    alerts.check_alerts("karthik", now=events.now)
+    assert len(events.rows) == 4

@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     chunking_strategy: str = "markdown_sections"
     chunk_size: int = Field(default=DEFAULT_CHUNK_SIZE, gt=0)
     chunk_overlap: int = Field(default=DEFAULT_CHUNK_OVERLAP, ge=0)
+    # Testing aid: when set, every alert uses this cooldown (minutes) instead of
+    # its own, so a lasting breach pops up again sooner. Leave unset normally.
+    alert_cooldown_override_min: int | None = Field(default=None, ge=1, le=240)
 
 
 def get_settings() -> Settings:
