@@ -163,9 +163,8 @@ def test_messages_record_who_what_and_an_ist_timestamp() -> None:
 
 
 @pytest.fixture(autouse=True)
-def no_scenario_loaded(monkeypatch, request) -> None:
-    """Default to the playbook-only path with no stored settings or scenario."""
-    monkeypatch.setattr(conversations, "current_scenario", lambda: None)
+def no_saved_context(monkeypatch, request) -> None:
+    """Default to no handover, memory or customized settings."""
     monkeypatch.setattr(conversations, "handover_block", lambda store_id: None)
     monkeypatch.setattr(conversations, "memory_block", lambda manager_id: None)
     if "preference_store" not in request.fixturenames:
@@ -186,7 +185,11 @@ def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> N
         tools=(),
     ):
         seen.append(preferences)
-        assert [tool.name for tool in tools] == ["propose_setting_change"]
+        assert [tool.name for tool in tools] == [
+            "propose_setting_change",
+            "get_live_dispatch_status",
+            "get_delivery_metrics",
+        ]
         return "reply"
 
     monkeypatch.setattr(conversations, "answer_question", answer)
@@ -403,51 +406,69 @@ def test_a_summarized_chat_sends_the_summary_and_only_recent_messages(store) -> 
     assert seen[0][1] is None
 
 
-def test_with_a_scenario_loaded_the_agent_gets_guidance_settings_and_summary(
+def test_dispatch_tools_share_the_rag_path_and_record_their_results(
     monkeypatch,
 ) -> None:
+    import json
+
+    import service.tools as tools_service
+
     seen = {}
-    prefs = SimpleNamespace(effective=list, manager_id="m")
+    prefs = SimpleNamespace(effective=list, manager_id="m", store_id="S-9")
 
-    def prepare(question, **kwargs):
-        seen["prepare"] = (question, kwargs)
-        return "PREPARED"
+    def answer(question, **kwargs):
+        seen.update(kwargs)
+        tool = next(t for t in kwargs["tools"] if t.name == "get_live_dispatch_status")
+        result = json.loads(tool.run({"store_id": "S-9"}))
+        assert result["as_of"] == "2026-10-09T20:14:00+05:30"
+        return "from tools"
 
-    def agent(question, **kwargs):
-        seen["agent"] = (question, kwargs)
-        return {"answer": "from tools", "trace": [{"tool": "get_live_dispatch_status"}]}
-
-    monkeypatch.setattr(conversations, "current_scenario", lambda: {"store_id": "S-9"})
-    monkeypatch.setattr(conversations, "prepare_message", prepare)
-    monkeypatch.setattr(conversations, "run_agent", agent)
+    monkeypatch.setattr(
+        tools_service,
+        "get_live_dispatch_status",
+        lambda store_id: {"as_of": "2026-10-09T20:14:00+05:30", "stale": False},
+    )
+    monkeypatch.setattr(conversations, "answer_question", answer)
     monkeypatch.setattr(conversations, "manager_preferences", lambda *a: prefs)
-
     reply, trace = conversations._answer("Why late?", history=[], summary="earlier")
-
     assert reply == "from tools"
-    assert trace["tools"] == [{"tool": "get_live_dispatch_status"}]
-    assert seen["prepare"][1]["summary"] == "earlier"
-    assert seen["prepare"][1]["preferences"] is prefs
-    assert seen["agent"][1]["store_id"] == "S-9"
-    assert seen["agent"][1]["user_message"] == "PREPARED"
+    assert trace["tools"][0]["tool"] == "get_live_dispatch_status"
+    assert trace["tools"][0]["as_of"] == "2026-10-09T20:14:00+05:30"
+    assert seen["summary"] == "earlier" and seen["preferences"] is prefs
 
 
-def test_with_a_scenario_but_no_guidance_the_agent_is_not_started(monkeypatch) -> None:
-    monkeypatch.setattr(conversations, "current_scenario", lambda: {"store_id": "S-9"})
-    monkeypatch.setattr(conversations, "prepare_message", lambda *a, **k: None)
+def test_policy_questions_do_not_read_dispatch_rows(monkeypatch) -> None:
+    import service.tools as tools_service
+
     monkeypatch.setattr(
-        conversations,
-        "manager_preferences",
-        lambda *a: SimpleNamespace(effective=list, manager_id="m"),
+        tools_service,
+        "read_live_dispatch",
+        lambda *a: (_ for _ in ()).throw(AssertionError("unexpected dispatch read")),
     )
-    monkeypatch.setattr(
-        conversations,
-        "run_agent",
-        lambda *a, **k: (_ for _ in ()).throw(AssertionError("agent should not run")),
+    monkeypatch.setattr(conversations, "answer_question", lambda *a, **k: "policy")
+    reply, trace = conversations._answer("Can riders jump red lights?", history=[])
+    assert reply == "policy" and trace == {"tools": [], "preferences": []}
+
+
+def test_setting_proposals_are_traced_without_a_scenario(monkeypatch) -> None:
+    from service.llm_service import Tool
+
+    local = Tool(
+        "propose_setting_change",
+        "Propose a setting change.",
+        {"type": "object"},
+        lambda args: '{"status":"proposed","saved":false}',
     )
-    reply, trace = conversations._answer("Why late?", history=[])
-    assert "could not find relevant guidance" in reply
-    assert trace == {"tools": [], "preferences": []}
+
+    def answer(question, **kwargs):
+        kwargs["tools"][0].run({"code": "incentive_cap", "value": 300})
+        return "Press Confirm."
+
+    monkeypatch.setattr(conversations, "answer_question", answer)
+    reply, trace = conversations._answer("Set cap to 300", history=[], tools=[local])
+    assert reply == "Press Confirm."
+    assert trace["tools"][0]["tool"] == "propose_setting_change"
+    assert trace["tools"][0]["arguments"]["value"] == 300
 
 
 def test_the_reply_is_stored_with_its_trace_and_returned_to_the_ui(store) -> None:
@@ -526,7 +547,7 @@ def test_ui_ask_returns_the_changes_the_assistant_proposed(
         memory=None,
         tools=(),
     ):
-        [tool] = tools
+        tool = next(t for t in tools if t.name == "propose_setting_change")
         tool.run({"code": "sla_dip_alert", "action": "set", "value": 85})
         return "Proposed: SLA dip below 85%. Press Confirm to save it."
 

@@ -11,6 +11,25 @@ from ui import gradio_app, settings
 NOW = datetime(2026, 10, 7, 19, 42, tzinfo=gradio_app.TIMEZONE)
 
 
+@pytest.mark.parametrize("arguments", ["null", "[]", "bad-json", None, {}])
+def test_invalid_stored_tool_arguments_do_not_break_chat_display(arguments) -> None:
+    line = gradio_app._tool_line(
+        {
+            "tool": "get_live_dispatch_status",
+            "arguments": arguments,
+            "error": "INVALID_INPUT",
+        },
+    )
+    assert "get_live_dispatch_status()" in line and "INVALID_INPUT" in line
+
+
+def test_new_tool_trace_arguments_show_the_store_id() -> None:
+    line = gradio_app._tool_line(
+        {"tool": "get_live_dispatch_status", "arguments": {"store_id": "S-1"}},
+    )
+    assert line == "get_live_dispatch_status(store_id=S-1)"
+
+
 def manager_state() -> gr.State:
     """The app's selected-manager state."""
     return next(

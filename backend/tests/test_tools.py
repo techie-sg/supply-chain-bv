@@ -1,298 +1,245 @@
-"""Tests for service/tools.py — read-only DB tool implementations."""
+"""Dispatch calculations, local input validation, and tool traces."""
 
-from __future__ import annotations
-
-from datetime import date, datetime
-from unittest.mock import MagicMock, patch
+import json
+from datetime import date, datetime, timedelta
+from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 import pytest
 
-import service.tools as tools_mod
 from database.models import HourlyMetric, Order, Rider, Zone
-from service.tools import (
-    _iso,
-    _weighted,
-    get_delivery_metrics,
-    get_live_dispatch_status,
-)
+from queries.tools import DispatchRows, MetricRows
+from service import tools
+from service.llm_service import Tool
 
 TZ = ZoneInfo("Asia/Kolkata")
+AS_OF = datetime(2026, 10, 3, 19, 30, tzinfo=TZ)
 
 
-@pytest.fixture(autouse=True)
-def no_engine(monkeypatch):
-    """Sessions are mocked; building the real engine needs a database URL."""
-    monkeypatch.setattr(tools_mod, "_engine", lambda: None)
+def order(identifier="O-1", *, age=1800, frozen=False, status="packed_waiting_rider"):
+    return Order(
+        order_id=identifier,
+        store_id="S-1",
+        scenario_key="normal",
+        as_of=AS_OF,
+        placed_at=AS_OF - timedelta(seconds=age),
+        status=status,
+        zone_id="Z-A",
+        item_count=3,
+        has_frozen_items=frozen,
+        assigned_rider_id=None,
+    )
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+def metric(hour=18, *, orders=10, sla=80, riders=3, rain=False):
+    return HourlyMetric(
+        store_id="S-1",
+        date=date(2026, 10, 2),
+        hour=hour,
+        orders=orders,
+        sla_10min_pct=sla,
+        avg_pick_pack_min=4,
+        avg_rider_wait_min=1,
+        avg_ride_min=8,
+        riders_online=riders,
+        rain_flag=rain,
+    )
 
 
-def _make_session(scalars_sequence: list) -> MagicMock:
-    """Return a mock Session context manager that yields scalars in order."""
-    session = MagicMock()
-    session.scalars.side_effect = [iter(s) for s in scalars_sequence]
-    cm = MagicMock()
-    cm.__enter__ = lambda _: session
-    cm.__exit__ = lambda _, *a: False
-    return cm
+@pytest.fixture
+def dispatch(monkeypatch):
+    rows = DispatchRows(
+        known_store_ids=["S-1"],
+        scenario_key="normal",
+        as_of=AS_OF,
+        orders=[order()],
+        riders=[
+            Rider(
+                rider_id="R-1",
+                store_id="S-1",
+                scenario_key="normal",
+                as_of=AS_OF,
+                name="Test Rider",
+                status="available",
+                current_zone="Z-A",
+                employment_type="full_time",
+                hours_on_shift=3.5,
+                minutes_since_last_break=45,
+                deliveries_today=8,
+                eta_back_min=None,
+            ),
+        ],
+        zones=[
+            Zone(
+                zone_id="Z-A",
+                zone_name="Zone A",
+                distance_from_store_km=2.5,
+                avg_ride_min_dry=12,
+                avg_ride_min_rain=18,
+            ),
+        ],
+    )
+    monkeypatch.setattr(tools, "read_live_dispatch", lambda store_id: rows)
+    return rows
 
 
-def _order(
-    store_id: str = "S-1",
-    order_id: str = "O-1",
-    status: str = "packed_waiting_rider",
-    zone_id: str = "Z-A",
-    item_count: int = 3,
-    has_frozen_items: bool = False,
-    as_of: datetime | None = None,
-    placed_at: datetime | None = None,
-    scenario_key: str = "normal",
-) -> MagicMock:
-    now = datetime(2026, 10, 3, 19, 30, tzinfo=TZ)
-    obj = MagicMock(spec=Order)
-    obj.store_id = store_id
-    obj.order_id = order_id
-    obj.status = status
-    obj.zone_id = zone_id
-    obj.item_count = item_count
-    obj.has_frozen_items = has_frozen_items
-    obj.assigned_rider_id = None
-    obj.as_of = as_of or now
-    obj.placed_at = placed_at or datetime(2026, 10, 3, 19, 0, tzinfo=TZ)
-    obj.scenario_key = scenario_key
-    return obj
+@pytest.fixture
+def historical(monkeypatch):
+    rows = MetricRows(rows=[metric(), metric(19, orders=20, sla=95, rain=True)])
+    monkeypatch.setattr(tools, "read_delivery_metrics", lambda *args: rows)
+    return rows
 
 
-def _rider(
-    store_id: str = "S-1",
-    rider_id: str = "R-1",
-    status: str = "available",
-) -> MagicMock:
-    obj = MagicMock(spec=Rider)
-    obj.store_id = store_id
-    obj.rider_id = rider_id
-    obj.name = "Test Rider"
-    obj.status = status
-    obj.current_zone = "Z-A"
-    obj.employment_type = "full_time"
-    obj.hours_on_shift = 3.5
-    obj.minutes_since_last_break = 45
-    obj.deliveries_today = 8
-    obj.eta_back_min = None
-    obj.as_of = datetime(2026, 10, 3, 19, 30, tzinfo=TZ)
-    obj.scenario_key = "normal"
-    return obj
+def test_live_status_returns_snapshot_counts_and_rider_facts(dispatch):
+    result = tools.get_live_dispatch_status("S-1")
+    assert result["as_of"] == AS_OF.isoformat()
+    assert result["queue"]["open_orders"] == 1
+    assert result["queue"]["counts_by_status"] == {"packed_waiting_rider": 1}
+    assert result["summary"]["pending_per_available_rider"] == 1
+    assert result["riders"][0]["minutes_since_last_break"] == 45
+    assert result["conditions"]["is_raining"] is False
 
 
-def _zone(zone_id: str = "Z-A") -> MagicMock:
-    obj = MagicMock(spec=Zone)
-    obj.zone_id = zone_id
-    obj.zone_name = f"Zone {zone_id}"
-    obj.distance_from_store_km = 2.5
-    obj.avg_ride_min_dry = 12
-    obj.avg_ride_min_rain = 18
-    return obj
+def test_oldest_packed_and_frozen_ages_use_the_snapshot_time(dispatch):
+    dispatch.orders.extend([order("O-2", age=600, frozen=True), order("O-3", age=300)])
+    result = tools.get_live_dispatch_status("S-1")
+    assert result["queue"]["oldest_packed_waiting_age_sec"] == 1800
+    assert result["queue"]["oldest_frozen_packed_age_sec"] == 600
+    assert result["stale"] is True
 
 
-def _metric(
-    store_id: str = "S-1",
-    metric_date: date | None = None,
-    hour: int = 18,
-    orders: int = 10,
-    sla_10min_pct: float = 82.0,
-    avg_pick_pack_min: float = 4.2,
-    avg_rider_wait_min: float = 1.1,
-    avg_ride_min: float = 11.5,
-    riders_online: int = 3,
-    rain_flag: bool = False,
-) -> MagicMock:
-    obj = MagicMock(spec=HourlyMetric)
-    obj.store_id = store_id
-    obj.date = metric_date or date(2026, 10, 2)
-    obj.hour = hour
-    obj.orders = orders
-    obj.sla_10min_pct = sla_10min_pct
-    obj.avg_pick_pack_min = avg_pick_pack_min
-    obj.avg_rider_wait_min = avg_rider_wait_min
-    obj.avg_ride_min = avg_ride_min
-    obj.riders_online = riders_online
-    obj.rain_flag = rain_flag
-    return obj
-
-
-# ---------------------------------------------------------------------------
-# _iso helper
-# ---------------------------------------------------------------------------
-
-
-def test_iso_converts_datetime_to_aware_isoformat() -> None:
-    dt = datetime(2026, 10, 3, 14, 0, tzinfo=ZoneInfo("UTC"))
-    result = _iso(dt)
-    assert result is not None
-    assert "19:30" in result  # UTC+5:30
-
-
-def test_iso_returns_none_for_none() -> None:
-    assert _iso(None) is None
-
-
-# ---------------------------------------------------------------------------
-# _weighted helper
-# ---------------------------------------------------------------------------
-
-
-def test_weighted_returns_none_when_total_orders_zero() -> None:
-    rows = [_metric(orders=0)]
-    assert _weighted(rows, "sla_10min_pct") is None
-
-
-def test_weighted_computes_order_weighted_average() -> None:
-    r1 = _metric(orders=10, sla_10min_pct=80.0)
-    r2 = _metric(orders=10, sla_10min_pct=90.0)
-    assert _weighted([r1, r2], "sla_10min_pct") == 85.0
-
-
-# ---------------------------------------------------------------------------
-# get_live_dispatch_status
-# ---------------------------------------------------------------------------
-
-
-def test_live_status_no_snapshot_when_empty_db() -> None:
-    cm = _make_session([[], [], []])
-    with patch.object(tools_mod, "Session", return_value=cm):
-        result = get_live_dispatch_status("S-1")
-    assert result["error"]["code"] == "NO_SNAPSHOT"
-
-
-def test_live_status_unknown_store() -> None:
-    order = _order(store_id="S-2")
-    rider = _rider(store_id="S-2")
-    zone = _zone()
-    cm = _make_session([[order], [rider], [zone]])
-    with patch.object(tools_mod, "Session", return_value=cm):
-        result = get_live_dispatch_status("S-1")
-    assert result["error"]["code"] == "UNKNOWN_STORE"
-    assert "S-2" in result["error"]["details"]["known_store_ids"]
-
-
-def test_live_status_success_structure() -> None:
-    order = _order(store_id="S-1", status="packed_waiting_rider")
-    rider = _rider(store_id="S-1", status="available")
-    zone = _zone()
-    cm = _make_session([[order], [rider], [zone]])
-    with patch.object(tools_mod, "Session", return_value=cm):
-        result = get_live_dispatch_status("S-1")
-    assert "error" not in result
-    assert result["store_id"] == "S-1"
-    assert "queue" in result and "riders" in result and "zones" in result
-    assert result["summary"]["available_riders"] == 1
-    assert result["summary"]["pending_per_available_rider"] == 1.0
-
-
-def test_live_status_orders_truncated_at_50() -> None:
-    orders = [_order(store_id="S-1", order_id=f"O-{i}") for i in range(55)]
-    rider = _rider(store_id="S-1")
-    cm = _make_session([orders, [rider], [_zone()]])
-    with patch.object(tools_mod, "Session", return_value=cm):
-        result = get_live_dispatch_status("S-1")
+def test_live_status_keeps_counts_when_the_order_list_is_truncated(dispatch):
+    dispatch.orders[:] = [order(f"O-{i}", age=i) for i in range(55)]
+    result = tools.get_live_dispatch_status("S-1")
+    assert result["queue"]["open_orders"] == 55
     assert len(result["queue"]["orders"]) == 50
     assert result["queue"]["orders_truncated"] is True
+    assert result["queue"]["orders"][0]["order_id"] == "O-54"
 
 
-def test_live_status_rider_returning_within_10_min() -> None:
-    order = _order(store_id="S-1")
-    rider = _rider(store_id="S-1", status="on_delivery")
-    rider.eta_back_min = 8
-    cm = _make_session([[order], [rider], [_zone()]])
-    with patch.object(tools_mod, "Session", return_value=cm):
-        result = get_live_dispatch_status("S-1")
+def test_no_available_riders_does_not_divide_by_zero(dispatch):
+    dispatch.riders[0].status = "on_delivery"
+    dispatch.riders[0].eta_back_min = 8
+    result = tools.get_live_dispatch_status("S-1")
+    assert result["summary"]["pending_per_available_rider"] is None
     assert result["summary"]["riders_returning_within_10_min"] == 1
 
 
-# ---------------------------------------------------------------------------
-# get_delivery_metrics
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "known, code",
+    [([], "NO_SNAPSHOT"), (["S-2"], "UNKNOWN_STORE")],
+)
+def test_missing_snapshot_and_unknown_store_are_distinct(monkeypatch, known, code):
+    monkeypatch.setattr(tools, "read_live_dispatch", lambda _: DispatchRows(known))
+    assert tools.get_live_dispatch_status("S-1")["error"]["code"] == code
 
 
-def test_delivery_metrics_invalid_date_format() -> None:
-    result = get_delivery_metrics("S-1", "not-a-date", 8, 10)
-    assert result["error"]["code"] == "INVALID_PERIOD"
-    assert result["error"]["details"]["reason"] == "invalid_date"
+def test_metrics_are_order_weighted_and_missing_hours_are_explicit(historical):
+    result = tools.get_delivery_metrics("S-1", "2026-10-02", 18, 21)
+    summary = result["period_summary"]
+    assert summary["total_orders"] == 30
+    assert summary["sla_10min_pct"] == 90
+    assert summary["orders_per_rider_online"] == 5
+    assert summary["rain_hours"] == 1
+    assert result["period"]["hours_missing"] == [20]
 
 
-def test_delivery_metrics_end_hour_not_after_start() -> None:
-    result = get_delivery_metrics("S-1", "2026-10-02", 10, 10)
-    assert result["error"]["code"] == "INVALID_PERIOD"
-    assert result["error"]["details"]["reason"] == "end_hour_not_after_start_hour"
+def test_metrics_with_no_orders_have_no_weighted_average(historical):
+    historical.rows[:] = [metric(orders=0, riders=0)]
+    summary = tools.get_delivery_metrics("S-1", "2026-10-02", 18, 19)["period_summary"]
+    assert summary["sla_10min_pct"] is None
+    assert summary["orders_per_rider_online"] is None
 
 
-def test_delivery_metrics_unknown_store() -> None:
-    # First scalars: store_rows for S-1 → empty; second: known store_ids
-    cm = _make_session([[], ["S-2"]])
-    with patch.object(tools_mod, "Session", return_value=cm):
-        result = get_delivery_metrics("S-1", "2026-10-02", 8, 10)
-    assert result["error"]["code"] == "UNKNOWN_STORE"
-    assert "S-2" in result["error"]["details"]["known_store_ids"]
+@pytest.mark.parametrize(
+    "day, start, end",
+    [
+        ("bad-date", 8, 10),
+        ("2026-02-30", 8, 10),
+        ("2026-10-02", 10, 10),
+        ("2026-10-02", -1, 25),
+    ],
+)
+def test_invalid_periods_are_rejected_before_database_access(
+    monkeypatch,
+    day,
+    start,
+    end,
+):
+    read = Mock()
+    monkeypatch.setattr(tools, "read_delivery_metrics", read)
+    assert (
+        tools.get_delivery_metrics("S-1", day, start, end)["error"]["code"]
+        == "INVALID_PERIOD"
+    )
+    read.assert_not_called()
 
 
-def test_delivery_metrics_no_data_for_period() -> None:
-    m = _metric(store_id="S-1", metric_date=date(2026, 10, 1), hour=12)
-    cm = _make_session([[m]])
-    with patch.object(tools_mod, "Session", return_value=cm):
-        result = get_delivery_metrics("S-1", "2026-10-02", 18, 20)
-    assert result["error"]["code"] == "NO_METRICS_FOR_PERIOD"
-    assert "2026-10-01" in result["error"]["details"]["available_dates"]
+def test_missing_history_lists_available_dates_and_hours(monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "read_delivery_metrics",
+        lambda *args: MetricRows([], ["S-1"], [date(2026, 10, 2)], [12]),
+    )
+    error = tools.get_delivery_metrics("S-1", "2026-10-02", 18, 20)["error"]
+    assert error["code"] == "NO_METRICS_FOR_PERIOD"
+    assert error["details"]["available_dates"] == ["2026-10-02"]
+    assert error["details"]["available_hours_on_date"] == [12]
 
 
-def test_delivery_metrics_success_structure() -> None:
-    m18 = _metric(store_id="S-1", metric_date=date(2026, 10, 2), hour=18, orders=10)
-    m19 = _metric(store_id="S-1", metric_date=date(2026, 10, 2), hour=19, orders=20)
-    cm = _make_session([[m18, m19]])
-    with patch.object(tools_mod, "Session", return_value=cm):
-        result = get_delivery_metrics("S-1", "2026-10-02", 18, 20)
-    assert "error" not in result
-    assert result["store_id"] == "S-1"
-    assert len(result["hourly"]) == 2
-    assert result["period_summary"]["total_orders"] == 30
+def test_metrics_unknown_store(monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "read_delivery_metrics",
+        lambda *a: MetricRows([], ["S-2"]),
+    )
+    assert (
+        tools.get_delivery_metrics("S-1", "2026-10-02", 18, 20)["error"]["code"]
+        == "UNKNOWN_STORE"
+    )
 
 
-def test_delivery_metrics_missing_hours_reported() -> None:
-    m = _metric(store_id="S-1", metric_date=date(2026, 10, 2), hour=18)
-    cm = _make_session([[m]])
-    with patch.object(tools_mod, "Session", return_value=cm):
-        result = get_delivery_metrics("S-1", "2026-10-02", 18, 21)
-    assert result["period"]["hours_missing"] == [19, 20]
+@pytest.mark.parametrize(
+    "arguments",
+    [None, [], {}, {"store_id": "S-1", "extra": True}],
+)
+def test_tool_inputs_are_validated_before_queries(monkeypatch, arguments):
+    read = Mock()
+    monkeypatch.setattr(tools, "read_live_dispatch", read)
+    tool = tools.dispatch_tools("S-1")[0]
+    assert json.loads(tool.run(arguments))["error"]["code"] == "INVALID_INPUT"
+    assert tool.parameters["additionalProperties"] is False
+    read.assert_not_called()
 
 
-def test_live_status_alert_fields_and_rain_flag() -> None:
-    placed = datetime(2026, 10, 3, 19, 0, tzinfo=TZ)
-    orders = [
-        _order(order_id="O-1", placed_at=placed),  # 30 min old, packed
-        _order(
-            order_id="O-2",
-            placed_at=placed.replace(minute=20),  # 10 min old, packed, frozen
-            has_frozen_items=True,
-        ),
-        _order(order_id="O-3", status="picking", placed_at=placed.replace(minute=25)),
+def test_tool_failures_are_returned_without_internal_database_details(monkeypatch):
+    def unavailable(store_id):
+        raise RuntimeError("private connection detail")
+
+    monkeypatch.setattr(tools, "read_live_dispatch", unavailable)
+    result = tools.dispatch_tools("S-1")[0].run({"store_id": "S-1"})
+    assert json.loads(result)["error"]["code"] == "DATA_UNAVAILABLE"
+    assert "private connection detail" not in result
+
+
+def test_live_results_reach_the_model_and_the_trace(dispatch):
+    trace = []
+    wrapped = tools.traced_tools(tools.dispatch_tools("S-1"), trace)
+    output = json.loads(wrapped[0].run({"store_id": "S-1"}))
+    assert output["queue"]["open_orders"] == 1
+    assert trace == [
+        {
+            "tool": "get_live_dispatch_status",
+            "arguments": {"store_id": "S-1"},
+            "as_of": AS_OF.isoformat(),
+            "stale": True,
+            "error": None,
+        },
     ]
-    cm = _make_session([orders, [_rider(store_id="S-1")], [_zone()]])
-    with patch.object(tools_mod, "Session", return_value=cm):
-        result = get_live_dispatch_status("S-1")
-    queue = result["queue"]
-    assert queue["counts_by_status"] == {"packed_waiting_rider": 2, "picking": 1}
-    assert queue["oldest_packed_waiting_age_sec"] == 1800
-    assert queue["oldest_frozen_packed_age_sec"] == 600
-    assert result["conditions"]["is_raining"] is False  # the "normal" scenario
 
 
-def test_live_status_flags_stale_snapshot() -> None:
-    # The fixture snapshot is dated 2026-10-03, so it is far older than the limit.
-    cm = _make_session([[_order()], [_rider()], [_zone()]])
-    with patch.object(tools_mod, "Session", return_value=cm):
-        result = get_live_dispatch_status("S-1")
-    assert result["stale"] is True
-    assert result["stale_after_sec"] == tools_mod.STALE_AFTER_SEC
+def test_plain_text_local_results_are_also_traced():
+    trace = []
+    local = Tool("local", "A local tool.", {"type": "object"}, lambda args: "proposal")
+    assert tools.traced_tools([local], trace)[0].run({}) == "proposal"
+    assert trace[0]["tool"] == "local" and trace[0]["error"] is None

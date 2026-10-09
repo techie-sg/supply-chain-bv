@@ -31,7 +31,7 @@ Each group shares its listed tasks and coordinates integration and review with t
 | Database and retrieval | PostgreSQL, SQLAlchemy, and pgvector cosine search |
 | Migrations | Alembic; run manually from a local machine |
 | Embeddings | Jina API, `jina-embeddings-v5-text-nano` |
-| Answer generation | Groq, `openai/gpt-oss-20b` |
+| Answer generation | Groq, `openai/gpt-oss-120b` |
 | Chunking | Markdown sections by default; optional fixed-size character windows |
 | Scenario definitions | YAML starting snapshots: normal, backlog, rain |
 | Dependencies | uv; locked versions in `backend/uv.lock` |

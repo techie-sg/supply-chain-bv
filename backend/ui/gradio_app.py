@@ -407,9 +407,13 @@ def _with_time(text: str, when: datetime, now: datetime) -> str:
 
 def _tool_line(call: dict[str, Any]) -> str:
     """One tool call: name, arguments, the data's as-of time and any problem."""
-    try:
-        arguments = json.loads(call.get("arguments") or "{}")
-    except json.JSONDecodeError:
+    arguments = call.get("arguments") or {}
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            arguments = {}
+    if not isinstance(arguments, dict):
         arguments = {}
     text = f"{call['tool']}({', '.join(f'{k}={v}' for k, v in arguments.items())})"
     if call.get("as_of"):

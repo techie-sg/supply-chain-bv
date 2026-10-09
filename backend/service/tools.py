@@ -1,17 +1,23 @@
+"""Read-only dispatch tools and per-answer tracing for local tool calls."""
+
 from __future__ import annotations
 
+import json
+from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import date as _date
 from datetime import datetime
-from functools import cache
+from functools import partial
+from time import perf_counter
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import structlog
-from sqlalchemy import Engine, select
-from sqlalchemy.orm import Session
+from pydantic import BaseModel, ValidationError
 
-from database.models import HourlyMetric, Order, Rider, Zone
-from database.session import build_engine
+from domain.tools import LiveStatusInput, MetricsInput
+from queries.tools import read_delivery_metrics, read_live_dispatch
+from service.llm_service import Tool
 from service.scenarios import _read_scenario
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -20,10 +26,23 @@ TZ = ZoneInfo("Asia/Kolkata")
 STALE_AFTER_SEC = 300  # live data older than this is flagged stale
 
 
-@cache
-def _engine() -> Engine:
-    """Built on first use, so importing this module needs no database."""
-    return build_engine()
+LIVE_DESCRIPTION = (
+    "Get the live order queue, rider statuses, and zone ride times for one "
+    "dark store. Use this for questions about the current backlog, waiting "
+    "orders, available or returning riders, batching candidates, ETAs, or a "
+    "rider's hours on shift and time since last break. Figures describe the "
+    "snapshot time in as_of; always quote that time with live numbers and "
+    "mention when stale is true. For past performance use get_delivery_metrics."
+)
+METRICS_DESCRIPTION = (
+    "Get historical hourly delivery metrics for one dark store, date, and "
+    "hour range: order counts, SLA percentage, pick-pack, rider-wait and ride "
+    "minutes, riders online, and rain flag, with an order-weighted summary. "
+    "Use this for past performance or period comparisons, once per period. "
+    "Hours are start-inclusive and end-exclusive: 8 to 10pm is start_hour=20, "
+    "end_hour=22. Quote the computed summary and mention hours_missing. For "
+    "the current queue use get_live_dispatch_status."
+)
 
 
 def _error(code: str, message: str, **details) -> dict:
@@ -35,30 +54,24 @@ def _iso(value: datetime | None) -> str | None:
 
 
 def get_live_dispatch_status(store_id: str) -> dict:
-    with Session(_engine()) as session:
-        orders = list(session.scalars(select(Order)))
-        riders = list(session.scalars(select(Rider)))
-        zones = list(session.scalars(select(Zone)))
-
-    if not orders and not riders:
+    data = read_live_dispatch(store_id)
+    if not data.known_store_ids:
         return _error(
             "NO_SNAPSHOT",
             "No live dispatch snapshot is loaded, so no live figures are available. "
             "Do not estimate queue or rider numbers.",
         )
 
-    known = sorted({o.store_id for o in orders} | {r.store_id for r in riders})
-    if store_id not in known:
+    if data.as_of is None or data.scenario_key is None:
         return _error(
             "UNKNOWN_STORE",
-            f"No live dispatch data for store '{store_id}'. Known store(s): {known}.",
+            f"No live dispatch data for store '{store_id}'. "
+            f"Known store(s): {data.known_store_ids}.",
             requested=store_id,
-            known_store_ids=known,
+            known_store_ids=data.known_store_ids,
         )
 
-    orders = [o for o in orders if o.store_id == store_id]
-    riders = [r for r in riders if r.store_id == store_id]
-    as_of = (orders or riders)[0].as_of.astimezone(TZ)
+    as_of = data.as_of.astimezone(TZ)
 
     order_rows: list[dict[str, Any]] = sorted(
         (
@@ -72,7 +85,7 @@ def get_live_dispatch_status(store_id: str) -> dict:
                 "placed_at": _iso(o.placed_at),
                 "age_sec": int((as_of - o.placed_at.astimezone(TZ)).total_seconds()),
             }
-            for o in orders
+            for o in data.orders
         ),
         key=lambda row: row["age_sec"],
         reverse=True,  # oldest first
@@ -89,7 +102,7 @@ def get_live_dispatch_status(store_id: str) -> dict:
             "deliveries_today": r.deliveries_today,
             "eta_back_min": r.eta_back_min,
         }
-        for r in riders
+        for r in data.riders
     ]
 
     packed = [o for o in order_rows if o["status"] == "packed_waiting_rider"]
@@ -106,7 +119,7 @@ def get_live_dispatch_status(store_id: str) -> dict:
         if r["eta_back_min"] is not None and r["eta_back_min"] <= 10
     )
 
-    scenario_key = (orders or riders)[0].scenario_key
+    scenario_key = data.scenario_key
     data_age_sec = int((datetime.now(TZ) - as_of).total_seconds())
     stale = data_age_sec > STALE_AFTER_SEC
     if stale:
@@ -146,7 +159,7 @@ def get_live_dispatch_status(store_id: str) -> dict:
                 "avg_ride_min_dry": z.avg_ride_min_dry,
                 "avg_ride_min_rain": z.avg_ride_min_rain,
             }
-            for z in zones
+            for z in data.zones
         ],
         "summary": {
             "available_riders": available,
@@ -180,6 +193,12 @@ def get_delivery_metrics(
             f"'{date}' is not a valid YYYY-MM-DD date.",
             reason="invalid_date",
         )
+    if not 0 <= start_hour <= 23 or not 1 <= end_hour <= 24:
+        return _error(
+            "INVALID_PERIOD",
+            "Hours must be between 0 and 24, with start_hour before end_hour.",
+            reason="hour_out_of_range",
+        )
     if end_hour <= start_hour:
         return _error(
             "INVALID_PERIOD",
@@ -188,37 +207,24 @@ def get_delivery_metrics(
             reason="end_hour_not_after_start_hour",
         )
 
-    # Both queries share one session so the second SELECT runs while the
-    # connection is still open (the original had a closed-session bug here).
-    with Session(_engine()) as session:
-        store_rows = list(
-            session.scalars(
-                select(HourlyMetric).where(HourlyMetric.store_id == store_id),
-            ),
-        )
-        if not store_rows:
-            known = sorted(
-                session.scalars(select(HourlyMetric.store_id).distinct()),
-            )
+    data = read_delivery_metrics(store_id, day, start_hour, end_hour)
+    rows = data.rows
+    if not rows:
+        if store_id not in data.known_store_ids:
             return _error(
                 "UNKNOWN_STORE",
                 f"No delivery metrics for store '{store_id}'.",
                 requested=store_id,
-                known_store_ids=known,
+                known_store_ids=data.known_store_ids,
             )
 
-    rows = sorted(
-        (r for r in store_rows if r.date == day and start_hour <= r.hour < end_hour),
-        key=lambda r: r.hour,
-    )
-    if not rows:
-        available_dates = sorted({r.date.isoformat() for r in store_rows})
+        available_dates = [value.isoformat() for value in data.available_dates]
         return _error(
             "NO_METRICS_FOR_PERIOD",
             f"No hourly metrics for store '{store_id}' on {date} in that range. "
             f"Data exists for: {', '.join(available_dates)}.",
             available_dates=available_dates,
-            available_hours_on_date=sorted(r.hour for r in store_rows if r.date == day),
+            available_hours_on_date=data.available_hours,
         )
 
     returned = {r.hour for r in rows}
@@ -264,3 +270,94 @@ def get_delivery_metrics(
         },
         "source": "hourly_metrics (historical aggregates)",
     }
+
+
+def _invoke(
+    call: Callable[..., dict],
+    input_model: type[BaseModel],
+    arguments: dict[str, Any],
+) -> str:
+    try:
+        inputs = input_model.model_validate(arguments)
+    except ValidationError as exc:
+        return json.dumps(
+            _error(
+                "INVALID_INPUT",
+                "Correct the tool arguments and try again.",
+                errors=exc.errors(include_input=False, include_url=False),
+            ),
+        )
+    try:
+        return json.dumps(call(**inputs.model_dump()))
+    except Exception:
+        logger.exception("Dispatch tool failed", tool=call.__name__)
+        return json.dumps(
+            _error(
+                "DATA_UNAVAILABLE",
+                "Dispatch data could not be read. Retry once; if it fails again, "
+                "tell the manager the data cannot be reached.",
+                retryable=True,
+            ),
+        )
+
+
+def dispatch_tools(store_id: str) -> list[Tool]:
+    """Expose local service functions through the existing model tool contract."""
+    return [
+        Tool(
+            name="get_live_dispatch_status",
+            description=f"{LIVE_DESCRIPTION} The current store_id is {store_id}.",
+            parameters=LiveStatusInput.model_json_schema(),
+            run=partial(_invoke, get_live_dispatch_status, LiveStatusInput),
+        ),
+        Tool(
+            name="get_delivery_metrics",
+            description=f"{METRICS_DESCRIPTION} The current store_id is {store_id}.",
+            parameters=MetricsInput.model_json_schema(),
+            run=partial(_invoke, get_delivery_metrics, MetricsInput),
+        ),
+    ]
+
+
+def _record_call(
+    tool: Tool,
+    trace: list[dict[str, Any]],
+    arguments: dict[str, Any],
+) -> str:
+    started = perf_counter()
+    output = (
+        tool.run(arguments)
+        if isinstance(arguments, dict)
+        else json.dumps(_error("INVALID_INPUT", "Tool arguments must be an object."))
+    )
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError:
+        parsed = {}
+    data = parsed if isinstance(parsed, dict) else {}
+    error = data.get("error")
+    trace.append(
+        {
+            "tool": tool.name,
+            "arguments": arguments if isinstance(arguments, dict) else {},
+            "error": error.get("code") if isinstance(error, dict) else None,
+            "as_of": data.get("as_of"),
+            "stale": data.get("stale"),
+        },
+    )
+    logger.info(
+        "Tool call",
+        tool=tool.name,
+        arguments=arguments,
+        duration_ms=round((perf_counter() - started) * 1000, 2),
+        is_error=bool(error),
+    )
+    return output
+
+
+def traced_tools(
+    tools: Sequence[Tool],
+    trace: list[dict[str, Any]],
+) -> list[Tool]:
+    """Record actual tool executions without maintaining another model loop."""
+    return [replace(tool, run=partial(_record_call, tool, trace)) for tool in tools]

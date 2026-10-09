@@ -2,13 +2,13 @@
 
 [Live demo: Open DispatchDesk](https://supply-chain-bv-production.up.railway.app/)
 
-A dispatch assistant that answers questions using a simulated operating playbook and, when a scenario is loaded, live (simulated) dispatch data. The application provides Gradio chat with stored conversation history, per-manager settings, Jina embeddings, PostgreSQL/pgvector retrieval, Groq answer generation, and read-only dispatch tools served over MCP.
+A dispatch assistant that answers questions using a simulated operating playbook and saved dispatch snapshots. The application provides Gradio chat with stored conversation history, per-manager settings, Jina embeddings, PostgreSQL/pgvector retrieval, Groq answer generation, and read-only dispatch tools.
 
 Demo tools load **normal**, **backlog**, and **rain** starting snapshots and inspect orders, riders, hourly metrics, and zones. Current data comes from PostgreSQL; Refresh reads saved changes. Other scenarios preview their YAML definitions. Loading a scenario replaces operational rows and clears chat.
 
-Chat uses the question, the stored conversation history, and retrieved policy passages. Conversations are saved in PostgreSQL; the URL identifies the selected chat so a refresh reopens it. Without a chat ID, the latest chat opens. Operational scenario rows are not sent to the chat model. Operational tools, persistent preference memory, and action execution are planned work.
+Chat uses the question, stored conversation history, retrieved policy passages, and the manager's settings and remembered context. Groq can request current dispatch data or historical metrics through local tools. Data is read when a tool is called. Conversations are saved in PostgreSQL; the URL identifies the selected chat so a refresh reopens it. Without a chat ID, the latest chat opens.
 
-Settings (alert thresholds, batching, incentive cap, greeting) are changed only in the **Settings** tab. Design: [docs/memory.md](docs/memory.md).
+Settings (alert thresholds, batching, incentive cap, greeting) can be edited in **Settings** or proposed through chat. Chat proposals are saved only after the manager confirms them. Design: [docs/memory.md](docs/memory.md).
 
 ## Setup
 
@@ -62,26 +62,26 @@ PORT=8080 uv run python cli.py app
 
 The corpus is in [`backend/service/rag_data/corpus/`](backend/service/rag_data/corpus/README.md). Default Markdown section chunking produces 37 chunks from seven operational documents. Ingestion upserts document and chunk rows in one transaction. The corpus README and prompt files are excluded from ingestion.
 
-Defaults are `jina-embeddings-v5-text-nano` for embeddings and Groq's `openai/gpt-oss-20b` for answers. Provider and chunking options are listed in [`backend/.env.example`](backend/.env.example). Reingest after changing the embedding model or chunking strategy.
+Defaults are `jina-embeddings-v5-text-nano` for embeddings and Groq's [`openai/gpt-oss-120b`](https://console.groq.com/docs/model/openai/gpt-oss-120b) for answers. Provider and chunking options are listed in [`backend/.env.example`](backend/.env.example). Reingest after changing the embedding model or chunking strategy.
 
 Assistant instructions live in [dispatch_manager_system.md](backend/service/rag_data/prompts/dispatch_manager_system.md), which the RAG service loads directly for each answer.
 
 The [RAG notebook](backend/notebooks/simple_rag.ipynb) demonstrates chunking, embedding, storage, retrieval, and a conversation with a follow-up. Select `backend/.venv/bin/python` as its kernel. The storage cell writes document data; provider cells make API calls.
 
-## Tools and MCP
+## Dispatch tools
 
-Two read-only tools are served by a local MCP server (`dispatchdesk-ops`, [`backend/mcp_server/server.py`](backend/mcp_server/server.py)) and described in [docs/tools.md](docs/tools.md):
+Two read-only tools use the existing Groq tool-calling loop and run in the application process. Their contract is in [docs/tools.md](docs/tools.md):
 
 | Tool | Returns |
 | --- | --- |
 | `get_live_dispatch_status(store_id)` | Open queue (counts by status, oldest ages, orders), riders with hours and breaks, zones, rain flag, and the snapshot's `as_of` time with a `stale` flag (older than 5 minutes) |
 | `get_delivery_metrics(store_id, date, start_hour, end_hour)` | Hourly orders, 10-minute SLA, pick-pack, rider-wait and ride minutes, riders online, rain flag, and an order-weighted period summary |
 
-The chat starts the server for each question as a subprocess over stdio (no network port), so it needs no separate process. It uses `DATABASE_URL` from the environment or `backend/.env`. To check it on its own, run `uv run pytest tests/test_mcp_server.py tests/test_agent.py`, or start it with `uv run python -m mcp_server.server`; it speaks MCP on stdin and stdout, and its logs go to stderr.
+`service/tools.py` validates tool arguments and computes results; `queries/tools.py` performs the database reads, filtering by store and the requested period. The configured `LLM_MODEL` and normal Groq retry and fallback behavior apply to all chat requests. MCP integration is deferred.
 
-To see it in the chat, load a scenario, ask "Orders are backing up right now, what's going on and what should I do first?", and open the **Agent trace** under the answer. The app log shows a `Tool call` line from the agent and one from the server for each call.
+To see it in the chat, load a scenario, ask "Orders are backing up right now, what's going on and what should I do first?", and open the **Agent trace** under the answer. It records executed dispatch and setting tools, their data timestamps and errors, and the manager's customized settings. The trace is saved with the answer and survives a refresh. If no snapshot is loaded, the tool returns `NO_SNAPSHOT`.
 
-Groq's free tier allows 8,000 tokens per minute, and one question that uses the tools sends about 10,000 prompt tokens across two calls. Expect a wait of up to about 20 seconds on a second question within a minute; the app retries automatically.
+Live data is a saved snapshot. Its original `as_of` time is preserved and it is flagged stale after five minutes. Historical comparisons report missing hours and calculate summaries from the available rows.
 
 ## Evals
 
@@ -144,8 +144,7 @@ Locally: `uv run python cli.py review`.
 | Path | Purpose |
 | --- | --- |
 | `backend/ui/` | Gradio callbacks, the Settings tab, styles, and favicon |
-| `backend/service/` | RAG, ingestion, provider services, chunking, scenarios, conversations, preferences, summaries, tools, and the tool-calling agent |
-| `backend/mcp_server/` | MCP server for the dispatch tools |
+| `backend/service/` | RAG, ingestion, provider services, chunking, scenarios, conversations, preferences, summaries, and local tools |
 | `backend/queries/` | Database operations |
 | `backend/domain/` | Data contracts |
 | `backend/database/` | SQLAlchemy models and sessions |

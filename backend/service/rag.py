@@ -1,7 +1,9 @@
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo
 
 import structlog
 
@@ -53,7 +55,7 @@ class RAGService:
         self.embedding_service = embedding_service
         self.llm_service = llm_service
 
-    def prepare_message(
+    def answer_question(
         self,
         question: str,
         top_k: int = 3,
@@ -62,23 +64,27 @@ class RAGService:
         summary: str | None = None,
         handover: str | None = None,
         memory: str | None = None,
-    ) -> str | None:
-        """Retrieve evidence and build the model's user message; None if none found.
+        tools: Sequence[Tool] = (),
+    ) -> str:
+        """Retrieve evidence and answer using the injected provider services.
 
         With preferences, the model sees the manager's settings and applies them.
+        With tools, the model may call them before answering; the settings tool
+        only proposes changes, which the manager confirms outside the model.
         `summary` stands in for older messages that `history` no longer holds.
         `handover` is the latest shift's handover notes; `memory` is the
         manager's digest of recent chats from the daily review.
         """
         if top_k < 1:
             raise ValueError("top_k must be positive")
+        started = perf_counter()
         query_embedding = self.embedding_service.embed_query(
             retrieval_query(question, history),
         )
         results = retrieve(query_embedding=query_embedding, match_count=top_k)
         if not results:
             logger.warning("No guidance retrieved", top_k=top_k)
-            return None
+            return NO_GUIDANCE_ANSWER
 
         context = self._build_context(results)
         user_message = f"Retrieved context:\n\n{context}\n\nQuestion: {question}"
@@ -110,38 +116,10 @@ class RAGService:
             )
         if preferences is not None:
             user_message = f"{preferences.prompt_block()}\n\n{user_message}"
-        logger.info("Guidance retrieved", retrieved_chunks=len(results))
-        return user_message
-
-    def answer_question(
-        self,
-        question: str,
-        top_k: int = 3,
-        history: Sequence[ChatMessage] | None = None,
-        preferences: PreferenceContext | None = None,
-        summary: str | None = None,
-        handover: str | None = None,
-        memory: str | None = None,
-        tools: Sequence[Tool] = (),
-    ) -> str:
-        """Retrieve evidence and answer using the injected provider services.
-
-        With tools, the model may call them before answering; the settings tool
-        only proposes changes, which the manager confirms outside the model.
-        """
-        started = perf_counter()
-        user_message = self.prepare_message(
-            question,
-            top_k,
-            history,
-            preferences,
-            summary,
-            handover,
-            memory,
-        )
-        if user_message is None:
-            return NO_GUIDANCE_ANSWER
         system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        if tools:
+            today = datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
+            system_prompt += f"\n\nToday's date is {today} (Asia/Kolkata)."
         answer = (
             self.llm_service.generate_with_tools(
                 system_prompt=system_prompt,
@@ -158,6 +136,7 @@ class RAGService:
         )
         logger.info(
             "RAG answer completed",
+            retrieved_chunks=len(results),
             duration_ms=round((perf_counter() - started) * 1000, 2),
         )
         return answer
@@ -194,30 +173,4 @@ def answer_question(
         handover=handover,
         memory=memory,
         tools=tools,
-    )
-
-
-def prepare_message(
-    question: str,
-    top_k: int = 3,
-    history: Sequence[ChatMessage] | None = None,
-    preferences: PreferenceContext | None = None,
-    summary: str | None = None,
-    handover: str | None = None,
-    memory: str | None = None,
-) -> str | None:
-    """Retrieval and prompt assembly for callers that run their own model loop."""
-    settings = get_settings()
-    service = RAGService(
-        embedding_service=create_embedding_service(settings),
-        llm_service=create_llm_service(settings),
-    )
-    return service.prepare_message(
-        question,
-        top_k,
-        history,
-        preferences,
-        summary,
-        handover,
-        memory,
     )

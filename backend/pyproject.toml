@@ -19,7 +19,6 @@ dependencies = [
     "torch>=2.14,<3",
     "torchvision>=0.29,<1",
     "docling>=2.133.0",
-    "mcp>=2.3.0",
 ]
 
 [dependency-groups]
@@ -47,10 +46,7 @@ torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [tool.ruff.lint]
-extend-select = []
-
-[tool.ruff.format]
-skip-magic-trailing-comma = false
+extend-select = ["COM812"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

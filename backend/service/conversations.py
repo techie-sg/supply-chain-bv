@@ -22,15 +22,15 @@ from queries.conversations import (
     set_title,
     start_conversation,
 )
-from service.agent import run_agent
 from service.dreaming import handover_block, memory_block
 from service.factory import create_llm_service
 from service.llm_service import Tool
 from service.preferences import PreferenceService, describe, manager_preferences
-from service.rag import NO_GUIDANCE_ANSWER, answer_question, prepare_message
-from service.scenarios import TIMEZONE, current_scenario
+from service.rag import answer_question
+from service.scenarios import TIMEZONE
 from service.setting_changes import SettingChange, SettingChanges, tidy_reply
 from service.summaries import history_start
+from service.tools import dispatch_tools, traced_tools
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -250,44 +250,19 @@ def _answer(
     preferences: PreferenceService | None = None,
     tools: Sequence[Tool] = (),
 ) -> tuple[str, dict[str, Any]]:
-    """Answer with the settings, the chat's summary, the last handover and memory.
-
-    With a scenario loaded, the model also gets the live dispatch tools; without
-    one the answer comes from the playbook alone. Returns the reply and its trace.
-    """
+    """Answer through RAG and the configured provider, recording local tool calls."""
     preferences = preferences or manager_preferences()
-    handover = handover_block(DEMO_STORE_ID)
-    memory = memory_block(preferences.manager_id)
-    scenario = current_scenario()
-    if scenario is None:
-        reply = answer_question(
-            question,
-            history=history,
-            preferences=preferences,
-            summary=summary,
-            handover=handover,
-            memory=memory,
-            tools=tools,
-        )
-        return reply, _trace(preferences)
-    user_message = prepare_message(
+    calls: list[dict[str, Any]] = []
+    reply = answer_question(
         question,
         history=history,
         preferences=preferences,
         summary=summary,
-        handover=handover,
-        memory=memory,
+        handover=handover_block(preferences.store_id),
+        memory=memory_block(preferences.manager_id),
+        tools=traced_tools([*tools, *dispatch_tools(preferences.store_id)], calls),
     )
-    if user_message is None:
-        return NO_GUIDANCE_ANSWER, _trace(preferences)
-    result = run_agent(
-        question,
-        store_id=scenario["store_id"],
-        history=history,
-        user_message=user_message,
-        local_tools=tools,
-    )
-    return result["answer"], _trace(preferences, result["trace"])
+    return reply, _trace(preferences, calls)
 
 
 def _title(question: str, answer: str) -> str:

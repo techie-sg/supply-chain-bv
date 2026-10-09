@@ -10,4 +10,3 @@ langchain-core
 langchain-groq
 requests
 structlog>=25,<27
-mcp>=2.3.0

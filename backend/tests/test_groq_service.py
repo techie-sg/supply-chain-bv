@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 from pydantic import SecretStr
 
 from service import groq_service as groq
@@ -83,7 +84,7 @@ def test_groq_preserves_previous_user_and_assistant_turns(monkeypatch) -> None:
     ]
 
 
-class ToolClient:
+class FakeGroqClient:
     """Fake ChatGroq: replies from a script, recording each bound call."""
 
     def __init__(self, replies) -> None:
@@ -117,7 +118,7 @@ def echo_tool(calls):
 def test_tool_calls_run_and_their_results_reach_the_model(monkeypatch) -> None:
     from langchain_core.messages import AIMessage
 
-    client = ToolClient(
+    client = FakeGroqClient(
         [
             AIMessage(
                 content="",
@@ -148,7 +149,7 @@ def test_unknown_tools_are_reported_and_tool_rounds_are_capped(monkeypatch) -> N
             tool_calls=[{"name": name, "args": {"value": 1}, "id": name}],
         )
 
-    client = ToolClient(
+    client = FakeGroqClient(
         [call("missing"), call("propose"), call("propose"), text_reply("done")],
     )
     service = GroqService(api_key=SecretStr("key"))
@@ -213,9 +214,21 @@ def test_repeated_rejections_answer_without_tools_and_say_so(monkeypatch) -> Non
 
 
 def test_without_tools_the_plain_path_is_used(monkeypatch) -> None:
-    client = ToolClient([text_reply("plain")])
+    client = FakeGroqClient([text_reply("plain")])
     monkeypatch.setattr(GroqService, "_client", client)
     assert (
         GroqService(api_key=SecretStr("k")).generate_with_tools("s", "u", []) == "plain"
     )
     assert client.bound == []
+
+
+@pytest.mark.parametrize("with_tools", [False, True])
+def test_empty_answers_are_rejected_before_being_saved(monkeypatch, with_tools) -> None:
+    client = FakeGroqClient([text_reply(" ")])
+    monkeypatch.setattr(GroqService, "_client", client)
+    service = GroqService(api_key=SecretStr("fake-key"))
+    with pytest.raises(RuntimeError, match="empty answer"):
+        if with_tools:
+            service.generate_with_tools("system", "question", [echo_tool([])])
+        else:
+            service.generate("system", "question")

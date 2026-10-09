@@ -420,12 +420,6 @@ p.settings-status { padding-left: 0; color: var(--desk-muted); }
 #conversation .agent-trace p { margin: 6px 0 2px; font-weight: 600; }
 #conversation .agent-trace ul { margin: 0; padding-left: 18px; }
 
-/* Keep the header and the workspace switcher visible while the page scrolls. */
-#brand-home { position: fixed !important; top: 0; left: 0; right: 0; width: auto !important; z-index: 40; margin: 0 !important; background: var(--desk-bg); }
-.column:has(> #chat-sidebar.open) #brand-home { left: 272px; }
-#workspace-tabs > .tab-wrapper { position: fixed !important; z-index: 41; }
-/* The fixed header leaves the page flow, so reserve its height above the content. */
-#workspace-tabs { margin-top: 77px !important; }
 @media (max-width: 768px) {
   .column:has(> #chat-sidebar:not(.open)) :is(#manager-workspace, #settings-workspace, #demo-workspace) { padding-top: 44px; }
 }
