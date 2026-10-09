@@ -36,6 +36,7 @@ from queries.conversations import (
     resume_conversation,
     save_summary,
 )
+from queries.personalization import pending_reviews
 from resources import PROMPTS
 from service.factory import create_llm_service
 from service.personalization import PersonalizationService
@@ -102,6 +103,7 @@ class SummaryService:
         start = raw_start(conversation)
         end = len(conversation.messages) - 1 - keep_recent
         if end < start:
+            self._review_personalization(conversation)
             return False
         previous = conversation.summary or "(none yet)"
         user_message = (
@@ -131,26 +133,32 @@ class SummaryService:
             conversation_id=str(conversation.id),
             covers_to=end,
         )
-        if saved and self.review_personalization:
-            try:
-                PersonalizationService(
-                    conversation.store_id,
-                    conversation.manager_id,
-                    self.engine,
-                ).review(conversation, start, end, summary, self.summarize)
-            except (
-                requests.RequestException,
-                RuntimeError,
-                ValueError,
-                SQLAlchemyError,
-            ):
-                # A preference suggestion must never make a successful summary fail.
-                logger.warning(
-                    "Could not review personalization",
-                    conversation_id=str(conversation.id),
-                    exc_info=True,
-                )
+        if saved:
+            conversation.summary = summary
+            conversation.summary_covers_to = end
+            self._review_personalization(conversation)
         return saved
+
+    def _review_personalization(self, conversation: Conversation) -> None:
+        if not self.review_personalization:
+            return
+        try:
+            PersonalizationService(
+                conversation.store_id,
+                conversation.manager_id,
+                self.engine,
+            ).review(conversation, self.summarize)
+        except (
+            requests.RequestException,
+            RuntimeError,
+            ValueError,
+            SQLAlchemyError,
+        ):
+            logger.warning(
+                "Could not review personalization; progress remains pending",
+                conversation_id=str(conversation.id),
+                exc_info=True,
+            )
 
     def after_answer(
         self,
@@ -199,11 +207,13 @@ class SummaryService:
         now = now or datetime.now(TIMEZONE)
         idle_before = now - timedelta(minutes=SUMMARY_IDLE_MINUTES)
         done = 0
+        attempted = set()
         for conversation in idle_unsummarized(
             idle_before,
             SUMMARY_JOB_BATCH,
             self.engine,
         ):
+            attempted.add(conversation.id)
             try:
                 done += self.fold(conversation, keep_recent=0)
             except (
@@ -217,6 +227,13 @@ class SummaryService:
                     conversation_id=str(conversation.id),
                     exc_info=True,
                 )
+        if self.review_personalization:
+            for conversation in pending_reviews(
+                SUMMARY_JOB_BATCH,
+                exclude=tuple(attempted),
+                engine=self.engine,
+            ):
+                self._review_personalization(conversation)
         return done
 
 

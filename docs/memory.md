@@ -39,6 +39,8 @@ Not designed yet: approval log, reminders and snoozed alerts, trace events.
 | `summary_covers_to` | int, null | index of the last message in the summary |
 | `summarized_at` | timestamptz, null | when the summary was last saved |
 | `handover_note_id` | uuid, null, FK to `handover_notes` | set on the chat a hand over opens (section 4) |
+| `personalization_covers_to` | int, null | last message successfully reviewed for personalization |
+| `personalized_at` | timestamptz, null | when the last personalization batch completed |
 | `created_at`, `updated_at` | timestamptz | `updated_at` changes on each new message; opening a chat leaves it unchanged |
 
 Index `(store_id, manager_id, updated_at)`.
@@ -121,13 +123,13 @@ Alert `options`, all optional: `{"days": ["sat", "sun"], "start": "19:00", "end"
 | Recent window, always sent raw | 6 messages |
 | Count limit on raw messages | 16 |
 | Size limit on raw text (characters ÷ 4) | 3,000 tokens |
-| Idle time, from the last message's `when` | 15 minutes |
+| Idle time, from the last message's `when` | 10 minutes |
 | Chats per CLI job run | 10 |
 
 **Triggers**
 - After an answer, on its own queue: if raw messages exceed either limit, fold all but the recent window.
 - On demand: **Summarize now** folds every message, the recent window included.
-- The `uv run python cli.py summaries` command folds every message of chats idle for 15 minutes that the summary doesn't fully cover, then exits. Railway cron runs it every five minutes. Gradio starts no scheduler. Selection uses positions and the last message's time, not `updated_at`.
+- The `uv run python cli.py summaries` command folds every message of chats idle for 10 minutes that the summary doesn't fully cover, then retries pending personalization batches. Railway cron runs it every five minutes. Gradio starts no scheduler. Selection uses positions and the last message's time, not `updated_at`.
 
 **Folding:** the previous summary plus the new slice go to `prompts/conversation_summary.md`, which keeps questions, diagnoses, proposals with their approval state, earlier figures marked as earlier, and open follow-ups, and forbids new facts. The save applies only if `summary_covers_to` is unchanged since the run started, sets `summarized_at`, and leaves `updated_at` alone.
 

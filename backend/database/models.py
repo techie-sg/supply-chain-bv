@@ -256,6 +256,20 @@ class Conversation(Base):
                 "coalesce(dreamed_to, -1) < jsonb_array_length(messages) - 1",
             ),
         ),
+        CheckConstraint(
+            "personalization_covers_to IS NULL OR "
+            "(personalization_covers_to >= 0 AND "
+            "personalization_covers_to < jsonb_array_length(messages))",
+            name="ck_conversations_personalization_position",
+        ),
+        Index(
+            "ix_conversations_pending_personalization",
+            "created_at",
+            postgresql_where=text(
+                "summary IS NOT NULL AND "
+                "coalesce(personalization_covers_to, -1) < summary_covers_to",
+            ),
+        ),
         {"schema": "app"},
     )
 
@@ -278,6 +292,8 @@ class Conversation(Base):
     summary_covers_to: Mapped[int | None] = mapped_column(Integer)
     title: Mapped[str | None] = mapped_column(String(120))
     summarized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    personalization_covers_to: Mapped[int | None] = mapped_column(Integer)
+    personalized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     dreamed_to: Mapped[int | None] = mapped_column(Integer)
     # The handover note this chat was opened with, shown as a card at its top.
     handover_note_id: Mapped[UUID | None] = mapped_column(

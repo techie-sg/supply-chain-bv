@@ -20,6 +20,10 @@ from sqlalchemy import Engine
 from constants import (
     DEMO_MANAGER_ID,
     DEMO_STORE_ID,
+    PERSONALIZATION_BATCH_BYTES,
+    PERSONALIZATION_BATCH_MESSAGES,
+    PERSONALIZATION_BATCHES_PER_CHAT,
+    PERSONALIZATION_MAX_INPUT_BYTES,
     PERSONALIZATION_MIN_CHATS,
     TIMEZONE,
 )
@@ -35,7 +39,7 @@ from domain.personalization import (
 from domain.tools import Tool
 from queries.personalization import (
     evidence_chats,
-    propose_personalization,
+    finish_review,
     read_profile,
     save_profile,
 )
@@ -182,27 +186,95 @@ class PersonalizationService:
     def review(
         self,
         conversation: Conversation,
+        generate: Callable[[str, str], str],
+    ) -> int:
+        """Review bounded batches after this chat's own marker, never apply a profile."""
+        if (conversation.store_id, conversation.manager_id) != (
+            self.store_id,
+            self.manager_id,
+        ):
+            raise ValueError("Personalization review belongs to another manager.")
+        if conversation.summary is None or conversation.summary_covers_to is None:
+            return 0
+        saved = 0
+        for _ in range(PERSONALIZATION_BATCHES_PER_CHAT):
+            expected = conversation.personalization_covers_to
+            start = 0 if expected is None else expected + 1
+            if start > conversation.summary_covers_to:
+                break
+            end = self._batch_end(conversation, start)
+            proposals = self._proposals(
+                conversation,
+                start,
+                end,
+                conversation.summary,
+                generate,
+            )
+            count = finish_review(
+                conversation.id,
+                self.store_id,
+                self.manager_id,
+                expected,
+                end,
+                proposals,
+                self.engine,
+            )
+            if count is None:
+                break  # another worker completed or moved this batch
+            conversation.personalization_covers_to = end
+            saved += count
+            logger.info(
+                "Personalization batch reviewed",
+                conversation_id=str(conversation.id),
+                covers_to=end,
+                proposals=count,
+            )
+        return saved
+
+    @staticmethod
+    def _batch_end(conversation: Conversation, start: int) -> int:
+        assert conversation.summary_covers_to is not None
+        end = min(
+            conversation.summary_covers_to,
+            start + PERSONALIZATION_BATCH_MESSAGES - 1,
+        )
+        size = 0
+        for index in range(start, end + 1):
+            message = conversation.messages[index]
+            if message["who"] != "manager" or not eligible(message["what"]):
+                continue
+            size += len(json.dumps(message["what"]).encode("utf-8")) + 128
+            if size > PERSONALIZATION_BATCH_BYTES:
+                if index == start:
+                    raise ValueError(
+                        "A personalization request exceeds the batch input limit.",
+                    )
+                return index - 1
+        return end
+
+    def _proposals(
+        self,
+        conversation: Conversation,
         start: int,
         end: int,
         summary: str,
         generate: Callable[[str, str], str],
-    ) -> int:
-        """Called only after a successful summary refresh; never changes a profile."""
+    ) -> list[dict[str, Any]]:
+        """Extract proposals outside any write transaction, from exact user evidence."""
+        batch = conversation.messages[start : end + 1]
         fresh = [
             (index, message)
-            for index, message in enumerate(conversation.messages)
-            if start <= index <= end
-            and message["who"] == "manager"
-            and eligible(message["what"])
+            for index, message in enumerate(batch, start)
+            if message["who"] == "manager" and eligible(message["what"])
         ]
         if not fresh:
-            return 0
+            return []
         profile = self.profile()
         allowed = {
             code: field.choices for code, field in FIELDS.items() if code not in profile
         }
         if not allowed:
-            return 0
+            return []
         fresh = [
             (index, message)
             for index, message in fresh
@@ -214,22 +286,52 @@ class PersonalizationService:
             )
         ]
         if not fresh:
-            return 0
+            return []
+        prompt = (PROMPTS / "personalization.md").read_text(encoding="utf-8")
+        fresh_keys = {(str(conversation.id), index) for index, _ in fresh}
+        messages: dict[tuple[str, int], str] = {
+            (str(conversation.id), index): message["what"] for index, message in fresh
+        }
+        # This context is optional. Full user messages, never truncated quotes,
+        # are retained as evidence; historical evidence fits only within the cap.
+        summary = summary.encode("utf-8")[:2048].decode("utf-8", errors="ignore")
+
+        def payload() -> str:
+            return json.dumps(
+                {
+                    "allowed_preferences": allowed,
+                    "new_messages": [
+                        {"conversation_id": chat, "message_index": index}
+                        for chat, index in sorted(fresh_keys)
+                    ],
+                    "manager_messages": [
+                        {"conversation_id": chat, "message_index": index, "text": text}
+                        for (chat, index), text in messages.items()
+                    ],
+                    "summary_for_context_only": summary,
+                },
+            )
+
+        def fits() -> bool:
+            return (
+                len(prompt.encode("utf-8")) + len(payload().encode("utf-8"))
+                <= PERSONALIZATION_MAX_INPUT_BYTES
+            )
+
+        if not fits():
+            raise ValueError("Personalization extraction input exceeds its budget.")
         chats = evidence_chats(self.store_id, self.manager_id, self.engine)
-        messages: dict[tuple[str, int], str] = {}
         for chat in chats:
             for offset, message in enumerate(chat["messages"]):
                 if message["who"] == "manager" and eligible(message["what"]):
-                    messages[(str(chat["id"]), chat["start"] + offset)] = message[
-                        "what"
-                    ]
-        fresh_keys = {(str(conversation.id), index) for index, _ in fresh}
-        messages.update(
-            {
-                (str(conversation.id), index): message["what"]
-                for index, message in fresh
-            },
-        )
+                    key = (str(chat["id"]), chat["start"] + offset)
+                    if key in messages or (
+                        key[0] == str(conversation.id) and key[1] > end
+                    ):
+                        continue
+                    messages[key] = message["what"]
+                    if not fits():
+                        del messages[key]
         # A single explicit request is enough for a proposal. Otherwise, require
         # three chats with matching style requests before paying for extraction.
         if not any(explicit(message["what"]) for _, message in fresh) and not any(
@@ -247,33 +349,15 @@ class PersonalizationService:
             for code, choices in allowed.items()
             for value in choices
         ):
-            return 0
-        raw = generate(
-            (PROMPTS / "personalization.md").read_text(encoding="utf-8"),
-            json.dumps(
-                {
-                    "allowed_preferences": allowed,
-                    "new_messages": [
-                        {"conversation_id": chat, "message_index": index}
-                        for chat, index in sorted(fresh_keys)
-                    ],
-                    "manager_messages": [
-                        {"conversation_id": chat, "message_index": index, "text": text}
-                        for (chat, index), text in messages.items()
-                    ],
-                    "summary_for_context_only": summary,
-                },
-            ),
-        )
+            return []
+        raw = generate(prompt, payload())
         try:
             candidates = TypeAdapter(list[PersonalizationCandidate]).validate_json(raw)
-        except (ValidationError, ValueError):
-            logger.warning(
-                "Invalid personalization extraction",
-                conversation_id=str(conversation.id),
-            )
-            return 0
-        saved = 0
+        except (ValidationError, ValueError) as exc:
+            raise ValueError(
+                "Invalid personalization extraction; batch remains pending.",
+            ) from exc
+        proposals = []
         for candidate in candidates[: len(FIELDS)]:
             if (
                 candidate.code not in allowed
@@ -307,7 +391,7 @@ class PersonalizationService:
                 < PERSONALIZATION_MIN_CHATS
             ):
                 continue
-            saved += propose_personalization(
+            proposals.append(
                 {
                     "store_id": self.store_id,
                     "manager_id": self.manager_id,
@@ -316,9 +400,8 @@ class PersonalizationService:
                     "reason": candidate.reason,
                     "evidence": [entry.model_dump() for entry in evidence],
                 },
-                self.engine,
             )
-        return saved
+        return proposals
 
 
 class PersonalizationChanges:

@@ -42,6 +42,8 @@ def saved(monkeypatch) -> list[tuple]:
         return True
 
     monkeypatch.setattr(summaries, "save_summary", save)
+    monkeypatch.setattr(summaries, "pending_reviews", lambda *args, **kwargs: [])
+    monkeypatch.setattr(summaries.PersonalizationService, "review", lambda *args: 0)
     return calls
 
 
@@ -205,7 +207,7 @@ def test_ui_summarize_now_entry_point_uses_the_demo_manager(saved, monkeypatch) 
     assert asked == [("DS-BLR-014", "karthik")]
 
 
-def test_personalization_review_runs_only_after_a_successful_summary_save(
+def test_personalization_review_uses_its_own_progress_after_a_summary_save(
     saved,
     monkeypatch,
 ):
@@ -215,19 +217,27 @@ def test_personalization_review_runs_only_after_a_successful_summary_save(
         def __init__(self, *args):
             pass
 
-        def review(self, conversation, start, end, summary, generate):
-            seen.append((conversation.id, start, end, summary))
+        def review(self, conversation, generate):
+            seen.append(
+                (
+                    conversation.id,
+                    conversation.personalization_covers_to,
+                    conversation.summary_covers_to,
+                    conversation.summary,
+                ),
+            )
 
     monkeypatch.setattr(summaries, "PersonalizationService", Review)
     service = SummaryService(lambda *args: "Summary", review_personalization=True)
     conversation = chat(30, covers_to=13)
     assert service.fold(conversation, keep_recent=6)
-    assert seen == [(conversation.id, 14, 23, "Summary")]
+    assert seen == [(conversation.id, None, 23, "Summary")]
     monkeypatch.setattr(summaries, "save_summary", lambda *args: False)
-    assert not service.fold(conversation, keep_recent=6)
+    assert not service.fold(chat(30, covers_to=13), keep_recent=6)
     assert len(seen) == 1
-    assert not service.fold(chat(4, covers_to=3), keep_recent=0)
-    assert len(seen) == 1
+    fully = chat(4, covers_to=3)
+    assert not service.fold(fully, keep_recent=0)
+    assert seen[-1] == (fully.id, None, 3, "Earlier: rain backlog.")
 
 
 def test_personalization_failure_does_not_fail_a_saved_summary(saved, monkeypatch):
@@ -244,3 +254,65 @@ def test_personalization_failure_does_not_fail_a_saved_summary(saved, monkeypatc
         keep_recent=0,
     )
     assert len(saved) == 1
+
+
+def test_cron_retries_pending_personalization_without_regenerating_summary(
+    saved,
+    monkeypatch,
+):
+    conversation = chat(4, covers_to=3)
+    conversation.personalization_covers_to = 1
+    seen, requested = [], []
+
+    class Review:
+        def __init__(self, *args):
+            pass
+
+        def review(self, row, generate):
+            seen.append((row.id, row.personalization_covers_to, row.summary_covers_to))
+
+    def pending(limit, exclude, engine=None):
+        requested.append((limit, exclude))
+        return [conversation]
+
+    monkeypatch.setattr(summaries, "idle_unsummarized", lambda *args: [])
+    monkeypatch.setattr(summaries, "pending_reviews", pending)
+    monkeypatch.setattr(summaries, "PersonalizationService", Review)
+    service = SummaryService(
+        lambda *args: pytest.fail("Summary is already current"),
+        review_personalization=True,
+    )
+    assert service.summarize_idle(NOW) == 0
+    assert seen == [(conversation.id, 1, 3)]
+    assert requested == [(10, ())]
+    assert saved == []
+
+
+def test_cron_does_not_retry_the_same_failed_batch_twice_in_one_run(saved, monkeypatch):
+    conversation = chat(4)
+    seen, excluded = [], []
+
+    class Review:
+        def __init__(self, *args):
+            pass
+
+        def review(self, row, generate):
+            seen.append(row.id)
+            raise RuntimeError("Provider failed")
+
+    def pending(limit, exclude, engine=None):
+        excluded.extend(exclude)
+        return []
+
+    monkeypatch.setattr(summaries, "idle_unsummarized", lambda *args: [conversation])
+    monkeypatch.setattr(summaries, "pending_reviews", pending)
+    monkeypatch.setattr(summaries, "PersonalizationService", Review)
+    assert (
+        SummaryService(
+            lambda *args: "Summary",
+            review_personalization=True,
+        ).summarize_idle(NOW)
+        == 1
+    )
+    assert seen == excluded == [conversation.id]
+    assert conversation.personalization_covers_to is None

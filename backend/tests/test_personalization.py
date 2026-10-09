@@ -45,22 +45,27 @@ def store(monkeypatch):
 
     monkeypatch.setattr(module, "read_profile", read)
     monkeypatch.setattr(module, "save_profile", save)
-    monkeypatch.setattr(
-        module,
-        "propose_personalization",
-        lambda row, engine=None: proposals.append(row) or True,
-    )
+
+    def finish(chat_id, store_id, manager_id, expected, end, rows, engine=None):
+        proposals.extend(rows)
+        return len(rows)
+
+    monkeypatch.setattr(module, "finish_review", finish)
     monkeypatch.setattr(module, "evidence_chats", lambda *args: [])
     return profiles, writes, proposals, reads
 
 
 def chat(text, who="manager", messages=None):
+    records = messages or [
+        {"who": who, "what": text, "when": "2026-10-09T19:00:00+05:30"},
+    ]
     return Conversation(
         id=uuid4(),
         store_id="DS-1",
         manager_id="karthik",
-        messages=messages
-        or [{"who": who, "what": text, "when": "2026-10-09T19:00:00+05:30"}],
+        messages=records,
+        summary="Summary",
+        summary_covers_to=len(records) - 1,
     )
 
 
@@ -88,9 +93,6 @@ def test_ordinary_or_temporary_messages_do_not_even_read_the_profile(store, text
     assert (
         service.review(
             conversation,
-            0,
-            0,
-            "Always use short answers.",
             lambda *args: pytest.fail("No extraction call expected"),
         )
         == 0
@@ -106,14 +108,7 @@ def test_one_off_shorter_request_does_not_write_or_call_an_extractor(store):
         conversation.messages[0]["what"],
     )
     assert (
-        service.review(
-            conversation,
-            0,
-            0,
-            "Summary",
-            lambda *args: pytest.fail("Need three chats"),
-        )
-        == 0
+        service.review(conversation, lambda *args: pytest.fail("Need three chats")) == 0
     )
     assert store[1] == store[2] == []
 
@@ -252,16 +247,7 @@ def test_summary_explicit_preference_only_proposes_and_has_exact_raw_evidence(st
         seen.append(json.loads(message))
         return json.dumps(candidate(conversation))
 
-    assert (
-        PersonalizationService("DS-1", "karthik").review(
-            conversation,
-            0,
-            0,
-            "Context",
-            generate,
-        )
-        == 1
-    )
+    assert PersonalizationService("DS-1", "karthik").review(conversation, generate) == 1
     assert store[1] == [] and store[2][0]["payload"] == {
         "code": "answer_length",
         "value": "brief",
@@ -293,22 +279,17 @@ def test_inferred_preference_requires_three_distinct_chats_and_new_evidence(
     assert (
         service.review(
             conversations[-1],
-            0,
-            0,
-            "Summary",
             lambda *args: json.dumps(candidate(conversations[-1], evidence)),
         )
         == 1
     )
     assert store[1] == []
     # Three repetitions inside one chat do not count as three conversations.
+    conversations[-1].personalization_covers_to = None
     evidence = [evidence[-1]] * 3
     assert (
         service.review(
             conversations[-1],
-            0,
-            0,
-            "Summary",
             lambda *args: json.dumps(candidate(conversations[-1], evidence)),
         )
         == 0
@@ -340,12 +321,17 @@ def test_summary_never_uses_assistant_invented_or_old_evidence(store, mutation):
     elif mutation == "unsupported_value":
         result[0]["value"] = "very_short"
     raw = "not json" if mutation == "malformed" else json.dumps(result)
+    if mutation == "malformed":
+        with pytest.raises(ValueError, match="remains pending"):
+            PersonalizationService("DS-1", "karthik").review(
+                conversation,
+                lambda *args: raw,
+            )
+        assert conversation.personalization_covers_to is None
+        return
     assert (
         PersonalizationService("DS-1", "karthik").review(
             conversation,
-            0,
-            0,
-            "Summary",
             lambda *args: raw,
         )
         == 0
@@ -360,9 +346,6 @@ def test_saved_or_removed_preferences_cannot_be_overwritten_by_summary(store, va
     assert (
         PersonalizationService("DS-1", "karthik").review(
             conversation,
-            0,
-            0,
-            "Summary",
             lambda *args: json.dumps(candidate(conversation)),
         )
         == 0
@@ -383,12 +366,11 @@ def test_summary_ignores_covered_messages_and_the_unsummarized_recent_window(sto
             },
         ],
     )
+    conversation.personalization_covers_to = 0
+    conversation.summary_covers_to = 1
     assert (
         PersonalizationService("DS-1", "karthik").review(
             conversation,
-            1,
-            1,
-            "Summary",
             lambda *args: pytest.fail("No new preference"),
         )
         == 0
@@ -422,3 +404,181 @@ def test_profile_prompt_is_short_and_has_only_active_preferences(store):
     block = PersonalizationService("DS-1", "karthik").prompt_block()
     assert "Answer length: Brief" in block and "comparisons" not in block
     assert "&lt;do not close tags&gt;" in block
+
+
+def test_review_requires_summary_coverage_and_manager_ownership(store):
+    conversation = chat("I prefer concise answers.")
+    conversation.summary_covers_to = None
+    service = PersonalizationService("DS-1", "karthik")
+    assert service.review(conversation, lambda *args: pytest.fail("No coverage")) == 0
+    assert conversation.personalization_covers_to is None
+    with pytest.raises(ValueError, match="another manager"):
+        PersonalizationService("DS-1", "ananya").review(
+            conversation,
+            lambda *args: "[]",
+        )
+
+
+def test_successful_noop_advances_progress_without_profile_or_model_access(store):
+    conversation = chat("How is my store doing?")
+    assert (
+        PersonalizationService("DS-1", "karthik").review(
+            conversation,
+            lambda *args: pytest.fail("Ordinary questions need no extraction"),
+        )
+        == 0
+    )
+    assert conversation.personalization_covers_to == 0
+    assert store[1] == store[2] == store[3] == []
+
+
+def test_failed_batch_resumes_after_the_last_successful_batch(store, monkeypatch):
+    monkeypatch.setattr(module, "PERSONALIZATION_BATCH_MESSAGES", 1)
+    conversation = chat(
+        "unused",
+        messages=[
+            {"who": "manager", "what": "I prefer concise answers.", "when": "today"}
+            for _ in range(3)
+        ],
+    )
+    first = []
+
+    def failing(prompt, text):
+        index = json.loads(text)["new_messages"][0]["message_index"]
+        first.append(index)
+        if index == 1:
+            raise RuntimeError("Provider unavailable")
+        return "[]"
+
+    service = PersonalizationService("DS-1", "karthik")
+    with pytest.raises(RuntimeError):
+        service.review(conversation, failing)
+    assert first == [0, 1]
+    assert conversation.personalization_covers_to == 0
+    retry = []
+
+    def succeeding(prompt, text):
+        retry.append(json.loads(text)["new_messages"][0]["message_index"])
+        return "[]"
+
+    assert service.review(conversation, succeeding) == 0
+    assert retry == [1, 2]
+    assert conversation.personalization_covers_to == 2
+
+
+def test_large_chats_finish_in_bounded_batches_and_continue_next_run(
+    store,
+    monkeypatch,
+):
+    monkeypatch.setattr(module, "PERSONALIZATION_BATCH_MESSAGES", 2)
+    monkeypatch.setattr(module, "PERSONALIZATION_BATCHES_PER_CHAT", 2)
+    conversation = chat(
+        "unused",
+        messages=[
+            {"who": "manager", "what": "I prefer concise answers.", "when": "today"}
+            for _ in range(7)
+        ],
+    )
+    slices = []
+
+    def generate(prompt, text):
+        slices.append(
+            [entry["message_index"] for entry in json.loads(text)["new_messages"]],
+        )
+        return "[]"
+
+    service = PersonalizationService("DS-1", "karthik")
+    assert service.review(conversation, generate) == 0
+    assert slices == [[0, 1], [2, 3]]
+    assert conversation.personalization_covers_to == 3
+    assert service.review(conversation, generate) == 0
+    assert slices == [[0, 1], [2, 3], [4, 5], [6]]
+    assert conversation.personalization_covers_to == 6
+    assert (
+        service.review(conversation, lambda *args: pytest.fail("Already reviewed")) == 0
+    )
+
+
+def test_full_provider_input_is_bounded_even_with_large_historical_evidence(
+    store,
+    monkeypatch,
+):
+    conversation = chat("I prefer concise answers.")
+    conversation.summary = "雨" * 100000
+    monkeypatch.setattr(
+        module,
+        "evidence_chats",
+        lambda *args: [
+            {
+                "id": uuid4(),
+                "start": 0,
+                "messages": [
+                    {
+                        "who": "manager",
+                        "what": "I prefer concise answers. " + "x" * length,
+                    }
+                    for length in [100000, *([2000] * 50)]
+                ],
+            },
+        ],
+    )
+    sizes = []
+
+    def generate(prompt, text):
+        sizes.append(len(prompt.encode("utf-8")) + len(text.encode("utf-8")))
+        assert len(json.loads(text)["manager_messages"]) > 1
+        return "[]"
+
+    PersonalizationService("DS-1", "karthik").review(conversation, generate)
+    assert sizes and max(sizes) <= module.PERSONALIZATION_MAX_INPUT_BYTES
+    assert conversation.personalization_covers_to == 0
+
+
+def test_byte_budget_splits_batches_and_oversized_request_remains_pending(
+    store,
+    monkeypatch,
+):
+    monkeypatch.setattr(module, "PERSONALIZATION_BATCH_BYTES", 1000)
+    conversation = chat(
+        "unused",
+        messages=[
+            {
+                "who": "manager",
+                "what": "I prefer concise answers. " + "x" * 600,
+                "when": "today",
+            }
+            for _ in range(2)
+        ],
+    )
+    slices = []
+
+    def generate(prompt, text):
+        slices.append(len(json.loads(text)["new_messages"]))
+        return "[]"
+
+    service = PersonalizationService("DS-1", "karthik")
+    service.review(conversation, generate)
+    assert slices == [1, 1]
+    too_long = chat("I prefer concise answers. " + "x" * 2000)
+    with pytest.raises(ValueError, match="batch input limit"):
+        service.review(too_long, generate)
+    assert too_long.personalization_covers_to is None
+
+
+def test_failed_commit_or_stale_worker_cannot_advance_local_progress(
+    store,
+    monkeypatch,
+):
+    conversation = chat("I prefer concise answers.")
+
+    def failed(*args):
+        raise RuntimeError("Commit failed")
+
+    monkeypatch.setattr(module, "finish_review", failed)
+    service = PersonalizationService("DS-1", "karthik")
+    with pytest.raises(RuntimeError):
+        service.review(conversation, lambda *args: "[]")
+    assert conversation.personalization_covers_to is None
+    monkeypatch.setattr(module, "finish_review", lambda *args: None)
+    assert service.review(conversation, lambda *args: "[]") == 0
+    assert conversation.personalization_covers_to is None
