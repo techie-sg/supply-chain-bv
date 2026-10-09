@@ -159,6 +159,65 @@ def test_entry_points_use_the_configured_model_and_demo_manager(
     assert asked == [("DS-BLR-014", "karthik")]
     monkeypatch.setattr(summaries, "idle_unsummarized", lambda *args, **kwargs: [])
     assert summaries.summary_service().summarize_idle() == 0
+    assert summaries.run_summary_job(force=True) == (0, 0)
+
+
+def test_force_job_bypasses_idle_wait_and_reviews_pending_personalization(
+    saved,
+    monkeypatch,
+):
+    recent = chat(4)
+    recent.messages[-1]["when"] = (NOW - timedelta(minutes=1)).isoformat()
+    pending = chat(4, covers_to=3)
+    pending.manager_id = "ananya"
+    queries, reviewed = [], []
+
+    def unsummarized(idle_before, limit, engine=None):
+        queries.append((idle_before, limit))
+        return [recent]
+
+    def pending_reviews(limit, exclude, engine=None):
+        assert exclude == (recent.id,)
+        assert limit == 10
+        return [pending]
+
+    class Review:
+        def __init__(self, store_id, manager_id, engine):
+            self.manager_id = manager_id
+
+        def review(self, conversation, generate):
+            reviewed.append((self.manager_id, conversation.id))
+
+    monkeypatch.setattr(summaries, "idle_unsummarized", unsummarized)
+    monkeypatch.setattr(summaries, "pending_reviews", pending_reviews)
+    monkeypatch.setattr(summaries, "PersonalizationService", Review)
+    service = SummaryService(lambda *args: "Summary", review_personalization=True)
+    assert service.summarize_idle(NOW, force=True) == 1
+    assert queries == [(NOW, 10)]
+    assert reviewed == [("karthik", recent.id), ("ananya", pending.id)]
+    assert saved == [(recent.id, "Summary", 3, None)]
+
+
+def test_job_reports_summary_and_personalization_failures(saved, monkeypatch):
+    conversation = chat(4)
+    pending = chat(4, covers_to=3)
+
+    def unavailable(*args):
+        raise RuntimeError("Provider unavailable")
+
+    class Review:
+        def __init__(self, *args):
+            pass
+
+        review = unavailable
+
+    monkeypatch.setattr(summaries, "idle_unsummarized", lambda *args: [conversation])
+    monkeypatch.setattr(summaries, "pending_reviews", lambda *args, **kwargs: [pending])
+    monkeypatch.setattr(summaries, "PersonalizationService", Review)
+    service = SummaryService(unavailable, review_personalization=True)
+    monkeypatch.setattr(summaries, "summary_service", lambda: service)
+    assert summaries.run_summary_job(force=True) == (0, 2)
+    assert not saved
 
 
 def test_summarize_now_folds_every_message_of_the_open_chat(saved, monkeypatch) -> None:

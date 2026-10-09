@@ -106,10 +106,6 @@ def build_app() -> gr.Blocks:
             preview = scenarios_components.preview
             refresh = scenarios_components.refresh
             tables = scenarios_components.tables
-            run_review_button = scenarios_components.run_review_button
-            mark_reviewed_button = scenarios_components.mark_reviewed_button
-            review_status = scenarios_components.review_status
-            answer_issues = scenarios_components.answer_issues
         alert_components = alerts_ui.build_popup()
         app.load(navigation_ui._restore_tab, outputs=workspace, queue=False)
         suggestion_components = settings_form.suggestions
@@ -166,24 +162,6 @@ def build_app() -> gr.Blocks:
             concurrency_id="settings",
             concurrency_limit=1,
         )
-        run_review_button.click(
-            suggestions_ui.run_review_now,
-            inputs=manager,
-            outputs=[review_status, answer_issues],
-            concurrency_id="review",
-            concurrency_limit=1,
-        ).then(
-            suggestions_ui.refresh_for,
-            inputs=manager,
-            outputs=suggestion_outputs,
-        ).then(personalization_ui.load, inputs=manager, outputs=personalization_outputs)
-        mark_reviewed_button.click(
-            suggestions_ui.mark_issues_reviewed,
-            inputs=manager,
-            outputs=[review_status, answer_issues],
-            concurrency_id="review",
-            concurrency_limit=1,
-        )
         # Sidebar navigation selects the same workspace panels and URL state.
         demo_navigation.click(
             lambda: gr.update(selected="demo"),
@@ -224,6 +202,26 @@ def build_app() -> gr.Blocks:
             summary_text,
             summarize_button,
         ]
+        scenarios_components.run_summary_job.click(
+            summary_ui.run_summary_job_now,
+            outputs=scenarios_components.summary_job_status,
+            concurrency_id="summaries",
+            concurrency_limit=1,
+            trigger_mode="once",
+            show_progress="minimal",
+        ).then(
+            summary_ui.summary_card,
+            inputs=[manager, active_chat],
+            outputs=summary_outputs,
+        ).then(
+            suggestions_ui.refresh_for,
+            inputs=manager,
+            outputs=suggestion_outputs,
+        ).then(
+            personalization_ui.load,
+            inputs=manager,
+            outputs=personalization_outputs,
+        )
         summarize_button.click(
             summary_ui.summarize_now,
             inputs=[manager, active_chat],
@@ -285,11 +283,6 @@ def build_app() -> gr.Blocks:
                     suggestions_ui.refresh_for,
                     inputs=manager,
                     outputs=suggestion_outputs,
-                )
-                .then(
-                    suggestions_ui.issues_table,
-                    inputs=manager,
-                    outputs=answer_issues,
                 )
                 .then(
                     personalization_ui.load,

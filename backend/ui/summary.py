@@ -15,6 +15,7 @@ from service.scenarios import (
     TIMEZONE,
 )
 from service.summaries import (
+    run_summary_job,
     summarize_latest_conversation,
     summarize_open_conversation,
 )
@@ -98,3 +99,26 @@ def summarize_conversation(
         summarize_latest_conversation(**chat_scope(manager_id, conversation_id))
     except (SQLAlchemyError, RuntimeError, ValueError, requests.RequestException):
         logger.warning("Could not summarize the conversation", exc_info=True)
+
+
+def run_summary_job_now() -> str:
+    """Demo action: run the cron batch without waiting for chats to become idle."""
+    try:
+        count, failures = run_summary_job(force=True)
+    except (
+        SQLAlchemyError,
+        RuntimeError,
+        ValueError,
+        requests.RequestException,
+    ) as exc:
+        logger.exception("Could not run the summary and personalization job")
+        raise gr.Error(
+            "Could not run summary and personalization. Please try again.",
+        ) from exc
+    status = (
+        f"Run finished at {datetime.now(TIMEZONE):%H:%M}. "
+        f"Updated {count} conversation {'summary' if count == 1 else 'summaries'}. "
+    )
+    if failures:
+        status += f"{failures} conversations could not finish; run again to retry. "
+    return status + "Suggested preferences require approval."

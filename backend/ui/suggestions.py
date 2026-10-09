@@ -1,4 +1,4 @@
-"""Suggestions from the daily review: the manager's panel and the admin report.
+"""The manager's pending suggestions from conversation and daily reviews.
 
 Nothing here changes memory without a click: accepting a settings suggestion
 saves it through the Settings path; accepting a handover draft saves the open
@@ -15,12 +15,11 @@ import gradio as gr
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
-from constants import DEMO_MANAGER_ID, DEMO_STORE_ID, SHOW_SUGGESTIONS, TIMEZONE
+from constants import DEMO_MANAGER_ID, DEMO_STORE_ID, SHOW_SUGGESTIONS
 from domain.memory import AlertOptions, SuggestionKind
 from domain.personalization import describe as describe_personalization
 from domain.preferences import EffectiveSetting
 from domain.suggestions import SuggestionView
-from service.dreaming import run_review
 from service.handover import when
 from service.preferences import (
     PreferenceError,
@@ -30,20 +29,12 @@ from service.preferences import (
 from service.suggestions import (
     accept_suggestion,
     dismiss_suggestion,
-    mark_answer_issues_reviewed,
-    open_answer_issues,
     pending_suggestions,
-    plural,
 )
 
 logger = structlog.stdlib.get_logger(__name__)
 
 UNAVAILABLE = "Suggestions are unavailable right now. Check the database connection."
-ISSUE_NAMES = {
-    "no_guidance": "No guidance found",
-    "unanswered": "No answer",
-    "pushback": "Pushback",
-}
 
 
 @dataclass
@@ -237,66 +228,3 @@ def build_panel() -> SuggestionComponents:
         dismiss_button,
         status,
     )
-
-
-# Admin: the answer-issue report ----------------------------------------------
-
-
-def issues_table(manager_id: str = DEMO_MANAGER_ID) -> dict[str, Any]:
-    try:
-        issues = open_answer_issues(manager_id=manager_id)
-    except (SQLAlchemyError, RuntimeError):
-        logger.warning("Could not load answer issues", exc_info=True)
-        issues = []
-    rows = []
-    for issue in issues:
-        payload = issue.payload
-        when = datetime.fromisoformat(payload["when"]).astimezone(TIMEZONE)
-        rows.append(
-            [
-                when.strftime("%d %b, %H:%M"),
-                ISSUE_NAMES.get(payload["issue"], payload["issue"]),
-                payload.get("chat") or "",
-                payload["question"],
-                payload.get("answer") or "",
-            ],
-        )
-    return {"headers": ["When", "Issue", "Chat", "Question", "Answer"], "data": rows}
-
-
-def run_review_now(manager_id: str = DEMO_MANAGER_ID) -> tuple[str, dict[str, Any]]:
-    """Review every manager's chats; then show the selected manager's issues."""
-    try:
-        report = run_review()
-    except (SQLAlchemyError, RuntimeError) as exc:
-        logger.exception("Daily review failed")
-        raise gr.Error(
-            "The review could not run. Check the database connection.",
-        ) from exc
-    status = " ".join(part for part in (report.text(), _waiting(manager_id)) if part)
-    return status, issues_table(manager_id)
-
-
-def _waiting(manager_id: str) -> str:
-    """What is still open after the run, including output from earlier runs."""
-    try:
-        pending = len(pending_suggestions(manager_id=manager_id))
-        issues = len(open_answer_issues(manager_id=manager_id))
-    except (SQLAlchemyError, RuntimeError):
-        logger.warning("Could not count open review items", exc_info=True)
-        return ""
-    return (
-        f"Waiting: {plural(pending, 'suggestion')} for the manager, "
-        f"{plural(issues, 'answer issue')} to look at."
-    )
-
-
-def mark_issues_reviewed(
-    manager_id: str = DEMO_MANAGER_ID,
-) -> tuple[str, dict[str, Any]]:
-    try:
-        count = mark_answer_issues_reviewed(DEMO_STORE_ID, manager_id)
-    except (SQLAlchemyError, RuntimeError) as exc:
-        logger.exception("Could not mark issues reviewed")
-        raise gr.Error(UNAVAILABLE) from exc
-    return f"Marked {count} issues as reviewed.", issues_table(manager_id)

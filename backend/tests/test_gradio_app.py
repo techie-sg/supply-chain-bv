@@ -879,6 +879,71 @@ def test_summary_runs_after_the_answer_on_its_own_queue(monkeypatch, ui_app) -> 
     assert all(callback.concurrency_id == "summaries" for callback in callbacks)
 
 
+@pytest.mark.parametrize("count", [0, 1, 2])
+def test_demo_summary_job_uses_the_forced_shared_job(monkeypatch, count):
+    called = []
+
+    def run(*, force):
+        called.append(force)
+        return count, 0
+
+    monkeypatch.setattr(summary_ui, "run_summary_job", run)
+    status = summary_ui.run_summary_job_now()
+    assert called == [True]
+    assert f"Updated {count} conversation" in status
+    assert "Suggested preferences require approval." in status
+
+
+def test_demo_summary_job_reports_partial_failures(monkeypatch):
+    monkeypatch.setattr(summary_ui, "run_summary_job", lambda **kwargs: (1, 2))
+    status = summary_ui.run_summary_job_now()
+    assert "Updated 1 conversation summary." in status
+    assert "2 conversations could not finish; run again to retry." in status
+
+
+@pytest.mark.parametrize("error", [RuntimeError, ValueError])
+def test_demo_summary_job_reports_failure_without_exposing_details(monkeypatch, error):
+    def unavailable(**kwargs):
+        raise error("private connection details")
+
+    monkeypatch.setattr(summary_ui, "run_summary_job", unavailable)
+    with pytest.raises(gr.Error, match="Could not run summary and personalization"):
+        summary_ui.run_summary_job_now()
+
+
+def test_demo_summary_job_refreshes_the_selected_chat_and_preferences(ui_app):
+    from ui import personalization as personalization_ui
+    from ui import suggestions as suggestions_ui
+
+    button = next(
+        block
+        for block in ui_app.blocks.values()
+        if isinstance(block, gr.Button) and block.elem_id == "run-summary-job"
+    )
+    [click] = [
+        callback
+        for callback in ui_app.fns.values()
+        if (button._id, "click") in callback.targets
+    ]
+    assert click.fn is summary_ui.run_summary_job_now
+    assert click.concurrency_id == "summaries" and click.concurrency_limit == 1
+    assert click.trigger_mode == "once"
+    assert click.outputs[0].elem_id == "summary-job-status"
+    parent = click
+    for function in (
+        summary_ui.summary_card,
+        suggestions_ui.refresh_for,
+        personalization_ui.load,
+    ):
+        [child] = [
+            callback
+            for callback in ui_app.fns.values()
+            if callback.fn is function and callback.trigger_after == parent._id
+        ]
+        assert manager_state(ui_app) in child.inputs
+        parent = child
+
+
 def test_summary_trigger_is_hidden_for_an_empty_chat(monkeypatch) -> None:
     monkeypatch.setattr(
         summary_ui,
@@ -1006,8 +1071,8 @@ def test_summary_popover_is_refreshed_with_the_chat(ui_app) -> None:
     ]
     # Page load, switching manager (picker or hand over), opening a chat, a
     # scenario load, New chat, and before title generation and after any summary
-    # folding for each answer, and starting a chat from an alert.
-    assert len(refreshers) == 11
+    # folding for each answer, starting a chat from an alert, and the demo job.
+    assert len(refreshers) == 12
     assert all(trigger in callback.outputs for callback in refreshers)
     [click] = [
         callback
