@@ -229,14 +229,17 @@ def test_run_agent_rejects_an_empty_final_answer() -> None:
             raise AssertionError("an empty answer must not be returned")
 
 
-def test_local_tools_are_offered_and_run_in_process() -> None:
+def test_local_tools_run_in_process_not_through_the_client() -> None:
     from service.llm_service import Tool
 
-    ran = []
-    tool = Tool(
-        "propose_x", "d", {"type": "object"}, lambda args: ran.append(args) or "ok"
-    )
-    fake = FakeClient({})
+    ran: list[dict] = []
+
+    def run(args: dict) -> str:
+        ran.append(args)
+        return "ok"
+
+    tool = Tool("propose_x", "d", {"type": "object"}, run)
+    fake = FakeClient()
     call = {"id": "1", "function": {"name": "propose_x", "arguments": '{"a": 1}'}}
     assert agent_mod._dispatch(call, fake, {"propose_x": tool}) == "ok"
     assert ran == [{"a": 1}] and fake.calls == []
