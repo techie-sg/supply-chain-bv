@@ -128,6 +128,14 @@ def load_scenario(key: str, engine: Engine | None = None) -> dict[str, Any]:
     return context
 
 
+def reload_current_scenario(engine: Engine | None = None) -> dict[str, Any]:
+    """Reset the database's active scenario with timestamps based on the current time."""
+    context = current_scenario(engine)
+    if context is None:
+        raise LookupError("No scenario is loaded. Load one from Demo tools first.")
+    return load_scenario(context["scenario_key"], engine)
+
+
 def current_scenario(engine: Engine | None = None) -> dict[str, Any] | None:
     """Restore saved rows and their original timestamp for a new UI session."""
     rows = read_scenario_rows(engine)

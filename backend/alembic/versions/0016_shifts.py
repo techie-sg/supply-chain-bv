@@ -11,8 +11,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "0012_shifts"
-down_revision: str | Sequence[str] | None = "0011_memory_digests"
+revision: str = "0016_shifts"
+down_revision: str | Sequence[str] | None = "0015_merge_personalization"
 
 
 def upgrade() -> None:

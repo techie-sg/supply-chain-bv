@@ -173,6 +173,36 @@ def test_save_reports_each_item_and_keeps_going_after_a_rejection(store) -> None
     }
 
 
+def test_bulk_save_reads_once_and_tracks_repeated_codes(store, monkeypatch) -> None:
+    from unittest.mock import Mock
+
+    read = Mock(wraps=preferences.active_preferences)
+    monkeypatch.setattr(preferences, "active_preferences", read)
+    chat = service()
+    messages = chat.save(
+        [
+            {"code": "sla_dip_alert", "enabled": True, "value": 85},
+            {"code": "sla_dip_alert", "enabled": True, "value": 85},
+            {"code": "sla_dip_alert", "enabled": True, "value": 30},
+            {"code": "sla_dip_alert", "enabled": True, "value": 90},
+        ],
+    )
+    assert read.call_count == 1
+    assert len(messages) == 3 and messages[1].startswith("Not saved:")
+    assert store.statuses("sla_dip_alert") == ["superseded", "active"]
+    assert chat.current("sla_dip_alert").value == 90
+    assert read.call_count == 2  # No stale snapshot survives the save call.
+
+
+def test_empty_bulk_save_does_not_read_settings(store, monkeypatch) -> None:
+    from unittest.mock import Mock
+
+    read = Mock(side_effect=AssertionError("No database read needed"))
+    monkeypatch.setattr(preferences, "active_preferences", read)
+    assert service().save([]) == []
+    read.assert_not_called()
+
+
 def test_turning_an_alert_off_keeps_its_threshold(store) -> None:
     service().set("orders_piling_up_alert", False, 8)
     [row] = store.rows

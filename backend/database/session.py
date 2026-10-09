@@ -6,7 +6,6 @@ from threading import RLock
 
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session
-from sqlalchemy.pool import NullPool
 
 from config import get_settings
 
@@ -31,7 +30,13 @@ def normalize_pg_url(url: str) -> str:
 def build_engine(url: str | None = None) -> Engine:
     return create_engine(
         normalize_pg_url(url or database_url()),
-        poolclass=NullPool,
+        # Reuse connections across callbacks. A bounded pool avoids repeating
+        # authentication/TLS for every query while limiting database usage.
+        pool_size=5,
+        max_overflow=5,
+        pool_timeout=5,
+        pool_pre_ping=True,
+        pool_recycle=1800,
         hide_parameters=True,
         connect_args={
             "connect_timeout": 5,

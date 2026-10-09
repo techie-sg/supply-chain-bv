@@ -18,6 +18,8 @@ from constants import (
     DREAMING_RECENT_CHATS,
 )
 from domain.memory import AlertOptions, PreferenceCode, SuggestionKind, SuggestionStatus
+from domain.personalization import FIELDS, validate_value
+from domain.personalization import describe as describe_personalization
 from domain.preferences import EffectiveSetting
 from domain.suggestions import SuggestionView
 from queries.dreaming import (
@@ -30,6 +32,7 @@ from queries.dreaming import (
     review_answer_issues,
 )
 from resources import PROMPTS
+from service.personalization import item as personalization_item
 from service.preferences import PreferenceError, PreferenceService, describe, validate
 from service.review_context import chat_label
 
@@ -193,7 +196,11 @@ def pending_suggestions(
         for row in list_suggestions(
             store_id,
             manager_id,
-            [SuggestionKind.SETTING, SuggestionKind.HANDOVER_DRAFT],
+            [
+                SuggestionKind.SETTING,
+                SuggestionKind.HANDOVER_DRAFT,
+                SuggestionKind.PERSONALIZATION,
+            ],
             [SuggestionStatus.PENDING],
             engine=engine,
         )
@@ -232,7 +239,26 @@ def accept_suggestion(
     payload = suggestion.payload
     preference = None
     handover = None
-    if suggestion.kind == SuggestionKind.SETTING:
+    personalization = None
+    if suggestion.kind == SuggestionKind.PERSONALIZATION:
+        code = payload["code"]
+        if code not in FIELDS:
+            raise PreferenceError("Unknown personalization preference.")
+        try:
+            value = validate_value(code, payload["value"])
+        except ValueError as exc:
+            raise PreferenceError(str(exc)) from exc
+        evidence = suggestion.evidence[0] if suggestion.evidence else {}
+        personalization = {
+            code: personalization_item(
+                value,
+                "suggestion",
+                conversation_id=evidence.get("conversation_id"),
+                quote=evidence.get("quote", ""),
+            ),
+        }
+        message = f"Saved. {describe_personalization(code, value)}."
+    elif suggestion.kind == SuggestionKind.SETTING:
         current = PreferenceService(store_id, manager_id, engine).current(
             payload["code"],
         )
@@ -287,6 +313,7 @@ def accept_suggestion(
         payload,
         preference=preference,
         handover=handover,
+        personalization=personalization,
         engine=engine,
     )
     logger.info("Suggestion accepted", kind=suggestion.kind)

@@ -13,13 +13,14 @@ from domain.managers import ShiftManager
 from service.conversations import (
     conversation_details,
     current_conversation_id,
+    latest_conversation_state,
     past_conversations,
     resume_past_conversation,
     title_latest_conversation,
 )
 from service.managers import choose_manager, store_managers
 from ui.browser import browser_script
-from ui.chat import chat_scope, restore_chat, to_display
+from ui.chat import chat_scope, to_display
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -69,11 +70,12 @@ def open_conversation(
 
 
 def restore_latest_conversation(manager_id: str) -> tuple[list[dict], str | None]:
-    history = restore_chat(manager_id)
     try:
-        return history, current_conversation_id(manager_id=manager_id)
+        messages, conversation_id = latest_conversation_state(manager_id=manager_id)
+        return to_display(messages), conversation_id
     except (SQLAlchemyError, RuntimeError):
-        return history, None
+        logger.warning("Could not restore the conversation", exc_info=True)
+        return [], None
 
 
 def restore_conversation(
@@ -179,6 +181,7 @@ class SidebarComponents:
     review_suggestions: gr.Button
     settings_summary: gr.HTML
     context_banner: gr.HTML
+    reload_scenario: gr.Button
     manager_picker: gr.Dropdown
     badge: gr.HTML
     handover_navigation: gr.Button
@@ -257,12 +260,22 @@ def build_sidebar() -> SidebarComponents:
                     apply_default_css=False,
                     elem_id="settings-summary",
                 )
-            context_banner = gr.HTML(
-                '<div class="current-scenario"><span>Current scenario</span>'
-                "<strong>Checking…</strong></div>",
-                apply_default_css=False,
-                elem_id="sidebar-scenario",
-            )
+            with gr.Row(elem_id="sidebar-scenario-row"):
+                context_banner = gr.HTML(
+                    '<div class="current-scenario"><span>Current scenario</span>'
+                    "<strong>Checking…</strong></div>",
+                    apply_default_css=False,
+                    elem_id="sidebar-scenario",
+                    min_width=0,
+                )
+                reload_scenario = gr.Button(
+                    "Reload current scenario",
+                    size="sm",
+                    scale=0,
+                    min_width=0,
+                    interactive=False,
+                    elem_id="reload-current-scenario",
+                )
             with gr.Column(elem_id="manager-profile"):
                 manager_picker = gr.Dropdown(
                     choices=[],
@@ -290,6 +303,7 @@ def build_sidebar() -> SidebarComponents:
         review_suggestions,
         settings_summary,
         context_banner,
+        reload_scenario,
         manager_picker,
         badge,
         handover_navigation,

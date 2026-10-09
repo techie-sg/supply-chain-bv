@@ -5,9 +5,9 @@ A run brings each reviewed chat's summary up to date, then produces:
 - answer issues from raw messages after `dreamed_to` (for the admin report),
 - a handover draft for each open shift with chats and no note yet,
 - settings suggestions from recent chat summaries,
-- each manager's memory digest from the last week's chat summaries.
+- personalization proposals while refreshing summaries, only with new evidence.
 
-Suggestions are saved as pending rows; the digest is used without asking.
+Suggestions are saved as pending rows; personalization never changes in review.
 Each output fails on its own.
 """
 
@@ -31,13 +31,11 @@ from domain.memory import (
 from queries.dreaming import (
     add_suggestions,
     advance_dreamed_to,
-    all_managers,
     conversations_to_review,
 )
 from resources import PROMPTS
 from service.factory import create_llm_service
 from service.handover import HandoverService
-from service.memory import MemoryService
 from service.preferences import PreferenceService
 from service.review_context import chat_evidence, chat_label
 from service.suggestions import SettingsSuggestionService, json_array, plural
@@ -61,7 +59,6 @@ class ReviewReport:
     answer_issues: int = 0
     handover_drafts: int = 0
     settings: int = 0
-    digests: int = 0
     failures: list[str] = field(default_factory=list)
 
     def text(self) -> str:
@@ -75,8 +72,6 @@ class ReviewReport:
                 f"{plural(self.handover_drafts, 'handover note')}, suggested "
                 f"{plural(self.settings, 'setting')}."
             )
-        if self.digests:
-            line += f" Updated {plural(self.digests, 'memory digest')}."
         if self.failures:
             line += f" Failed: {', '.join(self.failures)}."
         return line
@@ -96,7 +91,6 @@ class DreamingService:
         self.engine = engine
         self.handover = HandoverService(generate, engine, summaries)
         self.settings = SettingsSuggestionService(generate, preferences, engine)
-        self.memory = MemoryService(generate, engine)
 
     def _prompt(self, name: str) -> str:
         return (PROMPTS / name).read_text(encoding="utf-8")
@@ -224,21 +218,6 @@ class DreamingService:
             except PROVIDER_ERRORS:
                 logger.warning("Could not suggest settings", exc_info=True)
                 report.failures.append("settings suggestions")
-        # After the summaries are up to date; every manager, since old chats age out.
-        for manager in all_managers(self.engine):
-            try:
-                report.digests += self.memory.memory_digest(
-                    manager.store_id,
-                    manager.manager_id,
-                    now,
-                )
-            except PROVIDER_ERRORS:
-                logger.warning(
-                    "Could not rebuild the memory digest",
-                    manager_id=manager.manager_id,
-                    exc_info=True,
-                )
-                report.failures.append("memory digest")
         logger.info("Daily review finished", report=report.text())
         return report
 

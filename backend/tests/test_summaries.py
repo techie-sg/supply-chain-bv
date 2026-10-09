@@ -203,3 +203,44 @@ def test_ui_summarize_now_entry_point_uses_the_demo_manager(saved, monkeypatch) 
     monkeypatch.setattr(summaries, "latest_conversation", latest)
     assert summaries.summarize_open_conversation()
     assert asked == [("DS-BLR-014", "karthik")]
+
+
+def test_personalization_review_runs_only_after_a_successful_summary_save(
+    saved,
+    monkeypatch,
+):
+    seen = []
+
+    class Review:
+        def __init__(self, *args):
+            pass
+
+        def review(self, conversation, start, end, summary, generate):
+            seen.append((conversation.id, start, end, summary))
+
+    monkeypatch.setattr(summaries, "PersonalizationService", Review)
+    service = SummaryService(lambda *args: "Summary", review_personalization=True)
+    conversation = chat(30, covers_to=13)
+    assert service.fold(conversation, keep_recent=6)
+    assert seen == [(conversation.id, 14, 23, "Summary")]
+    monkeypatch.setattr(summaries, "save_summary", lambda *args: False)
+    assert not service.fold(conversation, keep_recent=6)
+    assert len(seen) == 1
+    assert not service.fold(chat(4, covers_to=3), keep_recent=0)
+    assert len(seen) == 1
+
+
+def test_personalization_failure_does_not_fail_a_saved_summary(saved, monkeypatch):
+    class Review:
+        def __init__(self, *args):
+            pass
+
+        def review(self, *args):
+            raise RuntimeError("Extraction unavailable")
+
+    monkeypatch.setattr(summaries, "PersonalizationService", Review)
+    assert SummaryService(lambda *args: "Summary", review_personalization=True).fold(
+        chat(4),
+        keep_recent=0,
+    )
+    assert len(saved) == 1

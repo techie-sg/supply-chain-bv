@@ -38,6 +38,7 @@ from queries.conversations import (
 )
 from resources import PROMPTS
 from service.factory import create_llm_service
+from service.personalization import PersonalizationService
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -90,9 +91,11 @@ class SummaryService:
         self,
         summarize: Summarizer,
         engine: Engine | None = None,
+        review_personalization: bool = False,
     ) -> None:
         self.summarize = summarize
         self.engine = engine
+        self.review_personalization = review_personalization
 
     def fold(self, conversation: Conversation, keep_recent: int) -> bool:
         """Fold raw messages, except the latest `keep_recent`, into the summary."""
@@ -128,6 +131,25 @@ class SummaryService:
             conversation_id=str(conversation.id),
             covers_to=end,
         )
+        if saved and self.review_personalization:
+            try:
+                PersonalizationService(
+                    conversation.store_id,
+                    conversation.manager_id,
+                    self.engine,
+                ).review(conversation, start, end, summary, self.summarize)
+            except (
+                requests.RequestException,
+                RuntimeError,
+                ValueError,
+                SQLAlchemyError,
+            ):
+                # A preference suggestion must never make a successful summary fail.
+                logger.warning(
+                    "Could not review personalization",
+                    conversation_id=str(conversation.id),
+                    exc_info=True,
+                )
         return saved
 
     def after_answer(
@@ -206,7 +228,7 @@ def _summarize(system_prompt: str, user_message: str) -> str:
 
 
 def summary_service() -> SummaryService:
-    return SummaryService(summarize=_summarize)
+    return SummaryService(summarize=_summarize, review_personalization=True)
 
 
 def summarize_latest_conversation(

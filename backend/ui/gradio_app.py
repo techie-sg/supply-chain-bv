@@ -10,9 +10,11 @@ from constants import DEMO_MANAGER_ID
 from logging_config import configure_logging, configure_uvicorn_logging
 from service.conversations import current_conversation_id
 from service.scenarios import scenario_names
+from ui import alerts as alerts_ui
 from ui import chat as chat_ui
 from ui import handover as handover_ui
 from ui import navigation as navigation_ui
+from ui import personalization as personalization_ui
 from ui import scenarios as scenarios_ui
 from ui import settings
 from ui import sidebar as sidebar_ui
@@ -45,6 +47,11 @@ def build_app() -> gr.Blocks:
         manager = gr.State(DEMO_MANAGER_ID)
         # Setting changes proposed in chat, waiting for Confirm or Cancel.
         pending_changes = gr.State([])
+        # Alert pop-ups waiting to be shown, the ones already shown on this
+        # page, and whether the shown alert's diagnosis is open.
+        alert_queue = gr.State([])
+        alert_seen = gr.State([])
+        alert_open = gr.State(False)
         sidebar_components = sidebar_ui.build_sidebar()
         new_chat = sidebar_components.new_chat
         edit_settings = sidebar_components.edit_settings
@@ -56,6 +63,7 @@ def build_app() -> gr.Blocks:
         review_suggestions = sidebar_components.review_suggestions
         settings_summary = sidebar_components.settings_summary
         context_banner = sidebar_components.context_banner
+        reload_scenario = sidebar_components.reload_scenario
         manager_picker = sidebar_components.manager_picker
         badge = sidebar_components.badge
         with gr.Tabs(selected="assistant", elem_id="workspace-tabs") as workspace:
@@ -102,6 +110,7 @@ def build_app() -> gr.Blocks:
             mark_reviewed_button = scenarios_components.mark_reviewed_button
             review_status = scenarios_components.review_status
             answer_issues = scenarios_components.answer_issues
+        alert_components = alerts_ui.build_popup()
         app.load(navigation_ui._restore_tab, outputs=workspace, queue=False)
         suggestion_components = settings_form.suggestions
         assert suggestion_components is not None
@@ -110,7 +119,9 @@ def build_app() -> gr.Blocks:
         suggestion_note = suggestion_components.note
         accept_suggestion = suggestion_components.accept
         dismiss_suggestion = suggestion_components.dismiss
-        memory_view = settings_form.memory
+        personalization_components = settings_form.personalization
+        assert personalization_components is not None
+        personalization_outputs = personalization_components.outputs()
         suggestion_outputs = suggestion_components.outputs(
             suggestions_entry,
             suggestions_entry_text,
@@ -143,7 +154,11 @@ def build_app() -> gr.Blocks:
             settings.load_settings,
             inputs=manager,
             outputs=settings_form.outputs(),
-        ).then(settings.load_summary, inputs=manager, outputs=settings_summary)
+        ).then(settings.load_summary, inputs=manager, outputs=settings_summary).then(
+            personalization_ui.load,
+            inputs=manager,
+            outputs=personalization_outputs,
+        )
         dismiss_suggestion.click(
             suggestions_ui.dismiss,
             inputs=[suggestion_items, manager],
@@ -161,7 +176,7 @@ def build_app() -> gr.Blocks:
             suggestions_ui.refresh_for,
             inputs=manager,
             outputs=suggestion_outputs,
-        ).then(settings.load_memory, inputs=manager, outputs=memory_view)
+        ).then(personalization_ui.load, inputs=manager, outputs=personalization_outputs)
         mark_reviewed_button.click(
             suggestions_ui.mark_issues_reviewed,
             inputs=manager,
@@ -195,6 +210,13 @@ def build_app() -> gr.Blocks:
             handover_ui.page,
             inputs=manager,
             outputs=handover_page.outputs(),
+        )
+        edit_settings.click(
+            personalization_ui.load,
+            inputs=manager,
+            outputs=personalization_outputs,
+            queue=False,
+            show_progress="hidden",
         )
         summary_outputs = [
             summary_trigger,
@@ -236,8 +258,10 @@ def build_app() -> gr.Blocks:
                     else sidebar_ui.restore_latest_conversation,
                     inputs=manager,
                     outputs=[chatbot, active_chat],
-                    concurrency_id="workspace",
-                    concurrency_limit=1,
+                    # A new browser session can restore independently. A
+                    # manager switch must finish after this session's reply.
+                    concurrency_id=None if linked else "workspace",
+                    concurrency_limit=4 if linked else 1,
                 )
                 .then(
                     sidebar_ui.conversation_choices,
@@ -267,11 +291,21 @@ def build_app() -> gr.Blocks:
                     inputs=manager,
                     outputs=answer_issues,
                 )
-                .then(settings.load_memory, inputs=manager, outputs=memory_view)
+                .then(
+                    personalization_ui.load,
+                    inputs=manager,
+                    outputs=personalization_outputs,
+                )
                 .then(
                     handover_ui.page,
                     inputs=manager,
                     outputs=handover_page.outputs(),
+                )
+                .then(
+                    alerts_ui.queue_new,
+                    inputs=[manager, alert_queue, alert_seen],
+                    outputs=[alert_queue, alert_seen],
+                    show_progress="hidden",
                 )
             )
 
@@ -292,6 +326,8 @@ def build_app() -> gr.Blocks:
                 queue=False,
             )
             .then(list, outputs=pending_changes, queue=False)
+            # Alerts belong to the manager too: start the new one's afresh.
+            .then(lambda: ([], []), outputs=[alert_queue, alert_seen], queue=False)
             .then(fn=None, js=sidebar_ui.MANAGER_URL_JS, inputs=manager_picker),
         ).then(fn=None, js=sidebar_ui.CLOSE_SIDEBAR_ON_PHONE_JS)
         # After a hand over: switch to the next manager and open their new chat,
@@ -315,6 +351,10 @@ def build_app() -> gr.Blocks:
             outputs=[chatbot, message, active_chat, workspace],
             concurrency_id="workspace",
             concurrency_limit=1,
+        ).then(
+            summary_ui.summary_card,
+            inputs=[manager, active_chat],
+            outputs=summary_outputs,
         ).then(fn=None, js=sidebar_ui.CLOSE_SIDEBAR_ON_PHONE_JS)
         active_chat.change(
             fn=None,
@@ -322,14 +362,6 @@ def build_app() -> gr.Blocks:
             queue=False,
         )
         active_chat.change(
-            sidebar_ui.conversation_choices,
-            inputs=[manager, active_chat],
-            outputs=history_list,
-        ).then(
-            summary_ui.summary_card,
-            inputs=[manager, active_chat],
-            outputs=summary_outputs,
-        ).then(
             sidebar_ui.conversation_location,
             inputs=[manager, active_chat],
             outputs=chat_location,
@@ -353,8 +385,7 @@ def build_app() -> gr.Blocks:
             event(
                 scenarios_ui.restore_workspace,
                 outputs=[current, scenario, preview, *tables],
-                concurrency_id="workspace",
-                concurrency_limit=1,
+                concurrency_limit=4,
             ).then(
                 scenarios_ui._assistant_context,
                 inputs=current,
@@ -370,13 +401,29 @@ def build_app() -> gr.Blocks:
             queue=False,
             show_progress="hidden",
         )
+        current.change(
+            lambda context: gr.update(interactive=bool(context)),
+            inputs=current,
+            outputs=reload_scenario,
+            queue=False,
+            show_progress="hidden",
+        )
+        reload_scenario.click(
+            scenarios_ui.reload_workspace,
+            outputs=[current, scenario, preview, *tables],
+            concurrency_id="workspace",
+            concurrency_limit=1,
+        ).success(
+            scenarios_ui._assistant_context,
+            inputs=current,
+            outputs=context_banner,
+        )
         if choices:
             scenario.input(
                 scenarios_ui.prepare_scenario,
                 inputs=[scenario, current],
                 outputs=[preview, *tables],
-                concurrency_id="workspace",
-                concurrency_limit=1,
+                concurrency_limit=4,
             )
         load.click(
             scenarios_ui.load_selected_scenario,
@@ -400,9 +447,14 @@ def build_app() -> gr.Blocks:
             summary_ui.summary_card,
             inputs=[manager, active_chat],
             outputs=summary_outputs,
+        ).then(
+            alerts_ui.queue_new,
+            inputs=[manager, alert_queue, alert_seen],
+            outputs=[alert_queue, alert_seen],
+            show_progress="hidden",
         )
         for event in (submit.click, message.submit):
-            event(
+            response = event(
                 fn=None,
                 js=chat_ui.SEND_MESSAGE_JS,
                 inputs=[message, chatbot],
@@ -416,7 +468,16 @@ def build_app() -> gr.Blocks:
                 show_progress="hidden",
                 concurrency_id="workspace",
                 concurrency_limit=1,
-            ).then(
+            )
+            # A generator can yield the restored draft and then fail. Gradio
+            # does not run the ordinary JS continuation for that error path.
+            response.failure(
+                chat_ui.recover_composer,
+                outputs=[processing, submit, message],
+                queue=False,
+                show_progress="hidden",
+            )
+            response.then(
                 fn=None,
                 js=chat_ui.FINISH_CHAT_JS,
                 outputs=[processing, submit, message],
@@ -432,6 +493,13 @@ def build_app() -> gr.Blocks:
                 sidebar_ui.conversation_choices,
                 inputs=[manager, active_chat],
                 outputs=history_list,
+            ).then(
+                # Make the summary control available as soon as the answer is
+                # shown, before the separate model call that creates its title.
+                summary_ui.summary_card,
+                inputs=[manager, active_chat],
+                outputs=summary_outputs,
+                show_progress="hidden",
             ).then(
                 sidebar_ui.title_conversation,
                 inputs=[manager, active_chat],
@@ -537,6 +605,54 @@ def build_app() -> gr.Blocks:
         # A proposal belongs to the chat it was made in.
         for event in (new_chat.click, history_list.input, load.click):
             event(list, outputs=pending_changes, queue=False)
+        alert_components.timer.tick(
+            alerts_ui.queue_new,
+            inputs=[manager, alert_queue, alert_seen],
+            outputs=[alert_queue, alert_seen],
+            show_progress="hidden",
+            concurrency_id="alerts",
+            concurrency_limit=1,
+        )
+        alert_queue.change(
+            alerts_ui.card,
+            inputs=alert_queue,
+            outputs=[
+                alert_components.popup,
+                alert_components.card,
+                alert_components.details,
+                alert_open,
+                alert_components.diagnose,
+            ],
+            queue=False,
+            show_progress="hidden",
+        )
+        alert_components.close.click(
+            alerts_ui.dismiss,
+            inputs=[alert_queue, manager],
+            outputs=alert_queue,
+            show_progress="hidden",
+        )
+        alert_components.diagnose.click(
+            alerts_ui.diagnosis,
+            inputs=[alert_queue, alert_open, manager],
+            outputs=[alert_components.details, alert_open, alert_components.diagnose],
+            show_progress="hidden",
+        )
+        alert_components.chat.click(
+            alerts_ui.start_alert_chat,
+            inputs=[alert_queue, manager],
+            outputs=[chatbot, message, active_chat, workspace, alert_queue],
+            concurrency_id="workspace",
+            concurrency_limit=1,
+        ).then(list, outputs=pending_changes, queue=False).then(
+            sidebar_ui.conversation_choices,
+            inputs=[manager, active_chat],
+            outputs=history_list,
+        ).then(
+            summary_ui.summary_card,
+            inputs=[manager, active_chat],
+            outputs=summary_outputs,
+        ).then(fn=None, js=alerts_ui.SEND_ALERT_QUESTION_JS)
     return app
 
 

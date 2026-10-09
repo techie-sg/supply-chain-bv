@@ -179,8 +179,9 @@ def test_ui_entry_point_passes_preferences_through(monkeypatch) -> None:
             preferences,
             summary,
             handover,
-            memory,
+            personalization,
             tools,
+            alerts,
         ):
             seen.update(question=question, preferences=preferences)
             return "answer"
@@ -214,19 +215,22 @@ def test_summary_is_placed_before_the_retrieved_context(monkeypatch) -> None:
     ) in user
 
 
-def test_blocks_come_in_order_with_memory_after_the_handover(monkeypatch) -> None:
+def test_blocks_come_in_order_with_personalization_after_the_handover(
+    monkeypatch,
+) -> None:
     llm = FakeLLMService()
     monkeypatch.setattr(
         rag,
         "retrieve",
         lambda **kwargs: [{"chunk_id": "doc#1", "content": "Policy."}],
     )
-    RAGService(FakeEmbeddingService(), llm).answer_question(
+    embeddings = FakeEmbeddingService()
+    RAGService(embeddings, llm).answer_question(
         "Hi",
         preferences=FakePreferences(),
         summary="- Earlier.",
         handover="Handover from 8 Oct:\n- Rain.",
-        memory="- Z3 floods in heavy rain (said 6 Oct).",
+        personalization="Answer length: Brief",
     )
     _, user = llm.messages[0]
     order = [
@@ -234,13 +238,15 @@ def test_blocks_come_in_order_with_memory_after_the_handover(monkeypatch) -> Non
         for tag in (
             "<preferences>",
             "<handover_notes>",
-            "<recent_context>",
+            "<personalization>",
             "<conversation_summary>",
             "Retrieved context:",
         )
     ]
     assert order == sorted(order)
-    assert "Advisory only" in user and "- Z3 floods in heavy rain" in user
+    assert "current request" in user and "Policy, operational settings" in user
+
+    assert embeddings.questions == ["Hi"]
 
 
 class ToolLLMService(FakeLLMService):

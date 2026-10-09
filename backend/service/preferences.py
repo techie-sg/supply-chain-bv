@@ -249,7 +249,16 @@ class PreferenceService:
         options: dict[str, Any] | None = None,
     ) -> str | None:
         """Validate and store a value exactly as given; None if nothing changed."""
-        current = self.current(code)
+        saved = self._set(self.current(code), enabled, value, options)
+        return f"Saved. {describe(saved)}." if saved else None
+
+    def _set(
+        self,
+        current: EffectiveSetting,
+        enabled: bool,
+        value: Any,
+        options: dict[str, Any] | None,
+    ) -> EffectiveSetting | None:
         definition = current.definition
         enabled, value, stored_options = validate(definition, enabled, value, options)
         current_options = (
@@ -273,22 +282,31 @@ class PreferenceService:
             self.engine,
         )
         logger.info("Preference saved", code=definition.code, enabled=enabled)
-        saved = EffectiveSetting(
+        return EffectiveSetting(
             definition,
             enabled,
             value,
             AlertOptions.model_validate(stored_options) if stored_options else None,
             customized=True,
         )
-        return f"Saved. {describe(saved)}."
 
     def save(self, entries: list[dict[str, Any]]) -> list[str]:
         """Save several items; each is checked on its own and reported."""
+        if not entries:
+            return []
+        # Read once for this save, not once per field. This snapshot is local to
+        # the call: later reads still fetch fresh settings from the database.
+        current = {item.definition.code: item for item in self.effective()}
         messages = []
         for entry in entries:
             try:
-                message = self.set(
-                    entry["code"],
+                setting = current.get(entry["code"])
+                if setting is None:
+                    raise PreferenceError(
+                        f"{entry['code']} is not something that can be configured.",
+                    )
+                saved = self._set(
+                    setting,
                     entry["enabled"],
                     entry.get("value"),
                     entry.get("options"),
@@ -297,8 +315,9 @@ class PreferenceService:
                 logger.info("Preference rejected", code=entry["code"])
                 messages.append(f"Not saved: {exc}")
             else:
-                if message:
-                    messages.append(message)
+                if saved:
+                    current[entry["code"]] = saved
+                    messages.append(f"Saved. {describe(saved)}.")
         return messages
 
     def reset(self, code: str) -> str:

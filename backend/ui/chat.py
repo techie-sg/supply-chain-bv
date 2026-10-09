@@ -18,7 +18,6 @@ from domain.chat import StoredMessage
 from service.conversations import (
     add_note,
     ask_question,
-    conversation_history,
     start_new_conversation,
 )
 from service.scenarios import (
@@ -126,15 +125,6 @@ def _trace_block(trace: Mapping[str, Any] | None) -> str:
     return f"\n\n{html}" if html else ""
 
 
-def restore_chat(manager_id: str = DEMO_MANAGER_ID) -> list[dict]:
-    """Show the latest stored conversation when the page loads."""
-    try:
-        return to_display(conversation_history(manager_id=manager_id))
-    except (SQLAlchemyError, RuntimeError):
-        logger.warning("Could not restore the conversation", exc_info=True)
-        return []
-
-
 def chat_scope(manager_id: str, conversation_id: str | None) -> dict[str, Any]:
     return {
         "manager_id": manager_id,
@@ -219,6 +209,15 @@ def respond_to_pending(
     except gr.Error:
         yield previous, message, gr.skip()
         raise
+
+
+def recover_composer() -> tuple[dict, dict, dict]:
+    """Unlock the composer after a failed streamed request; retain its draft."""
+    return (
+        gr.update(visible=False),
+        gr.update(interactive=True),
+        gr.update(interactive=True),
+    )
 
 
 def pending_card(pending: list[dict] | None) -> tuple[str, dict]:

@@ -15,6 +15,7 @@ from service.conversations import (
 from service.scenarios import (
     current_scenario,
     load_scenario,
+    reload_current_scenario,
     scenario_details,
 )
 
@@ -203,6 +204,26 @@ def restore_workspace() -> tuple:
         gr.skip(),
         f'<p class="muted">{empty_message}</p>',
         *_table_views(None),
+    )
+
+
+def reload_workspace() -> tuple:
+    """Rebuild the active scenario; preserve the open chat and manager preferences."""
+    try:
+        context = reload_current_scenario()
+    except LookupError as exc:
+        raise gr.Error(str(exc)) from exc
+    except (KeyError, ValueError, SQLAlchemyError, RuntimeError) as exc:
+        logger.exception("Could not reload the current scenario")
+        raise gr.Error(
+            "The current scenario could not be reloaded. Please try again.",
+        ) from exc
+    gr.Info("Current scenario reloaded with fresh timestamps.")
+    return (
+        context,
+        gr.update(value=context["scenario_key"]),
+        _scenario_summary(context),
+        *_table_views(context),
     )
 
 

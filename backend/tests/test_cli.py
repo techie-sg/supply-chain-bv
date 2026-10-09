@@ -142,3 +142,66 @@ assert not hasattr(gradio_app, "app")
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_alerts_command_checks_every_manager_once_by_default(monkeypatch) -> None:
+    from service import alerts
+
+    calls: list[bool] = []
+
+    def check_store():
+        calls.append(True)
+        return alerts.StoreCheck(available=True, recorded={"karthik": 1})
+
+    monkeypatch.setattr(alerts, "check_store", check_store)
+    cli.main(["alerts"])
+    assert calls == [True]
+
+
+def test_alerts_command_repeats_on_the_interval_and_stops(monkeypatch) -> None:
+    from service import alerts
+
+    calls: list[bool] = []
+
+    def check_store():
+        calls.append(True)
+        return alerts.StoreCheck(True, {})
+
+    monkeypatch.setattr(alerts, "check_store", check_store)
+    waits: list[float] = []
+    monkeypatch.setattr(cli.time, "sleep", waits.append)
+    cli.main(["alerts", "--runs", "3", "--every", "60"])
+    assert len(calls) == 3
+    # Two waits between three checks, each just under a minute.
+    assert len(waits) == 2 and all(55 < wait <= 60 for wait in waits)
+
+
+def test_run_alert_checks_forever_mode_and_bad_values() -> None:
+    runs: list[int] = []
+
+    class Stop(Exception):
+        pass
+
+    def check():
+        runs.append(1)
+        if len(runs) == 4:
+            raise Stop
+
+    with pytest.raises(Stop):
+        cli.run_alert_checks(check, 0, 60, sleep=lambda seconds: None)
+    assert len(runs) == 4
+    assert cli.run_alert_checks(lambda: None, 2, 0, sleep=lambda seconds: None) == 2
+    with pytest.raises(ValueError, match="must not be negative"):
+        cli.run_alert_checks(lambda: None, -1, 60)
+
+
+def test_alerts_command_failure_fails_the_cron_run(monkeypatch) -> None:
+    from service import alerts
+
+    def failing():
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(alerts, "check_store", failing)
+    with pytest.raises(SystemExit) as error:
+        cli.main(["alerts"])
+    assert error.value.code == 1

@@ -57,8 +57,9 @@ class RAGService:
         preferences: PreferenceContext | None = None,
         summary: str | None = None,
         handover: str | None = None,
-        memory: str | None = None,
+        personalization: str | None = None,
         tools: Sequence[Tool] = (),
+        alerts: str | None = None,
     ) -> str:
         """Retrieve evidence and answer using the injected provider services.
 
@@ -66,8 +67,9 @@ class RAGService:
         With tools, the model may call them before answering; the settings tool
         only proposes changes, which the manager confirms outside the model.
         `summary` stands in for older messages that `history` no longer holds.
-        `handover` is the latest shift's handover notes; `memory` is the
-        manager's digest of recent chats from the daily review.
+        `handover` is the latest shift's handover notes; `personalization` contains
+        durable, manager-approved response preferences. It does not affect retrieval.
+        `alerts` lists the manager's alerts firing now, computed from live data.
         """
         if top_k < 1:
             raise ValueError("top_k must be positive")
@@ -97,17 +99,19 @@ class RAGService:
                 "<conversation_summary>\nEarlier in this chat (a summary; it may "
                 f"omit details):\n{summary}\n</conversation_summary>\n\n{user_message}"
             )
-        if memory:
+        if personalization:
             user_message = (
-                "<recent_context>\nEarlier chats, as remembered by the daily review. "
-                "Advisory only: policy, settings and live data take precedence, and "
-                f"its figures are not current.\n{memory}\n</recent_context>\n\n"
+                "<personalization>\nSaved response preferences. The current request "
+                "takes precedence for answer style. Policy, operational settings and "
+                f"live facts constrain all advice.\n{personalization}\n</personalization>\n\n"
                 f"{user_message}"
             )
         if handover:
             user_message = (
                 f"<handover_notes>\n{handover}\n</handover_notes>\n\n{user_message}"
             )
+        if alerts:
+            user_message = f"{alerts}\n\n{user_message}"
         if preferences is not None:
             user_message = f"{preferences.prompt_block()}\n\n{user_message}"
         system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
@@ -149,8 +153,9 @@ def answer_question(
     preferences: PreferenceContext | None = None,
     summary: str | None = None,
     handover: str | None = None,
-    memory: str | None = None,
+    personalization: str | None = None,
     tools: Sequence[Tool] = (),
+    alerts: str | None = None,
 ) -> str:
     """UI entry point composing the configured services."""
     settings = get_settings()
@@ -165,6 +170,7 @@ def answer_question(
         preferences=preferences,
         summary=summary,
         handover=handover,
-        memory=memory,
+        personalization=personalization,
         tools=tools,
+        alerts=alerts,
     )
