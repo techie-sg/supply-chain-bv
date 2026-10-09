@@ -23,7 +23,7 @@ from database.models import Conversation, Manager, Shift
 from domain.chat import StoredMessage
 from domain.managers import ShiftManager
 from domain.memory import SuggestionKind
-from queries.conversations import start_conversation
+from queries.conversations import append_message, set_title, start_conversation
 from queries.dreaming import recent_conversations, replace_handover_draft
 from queries.shifts import (
     end_shift,
@@ -334,6 +334,23 @@ class HandOver:
     ended_at: datetime
 
 
+def handover_message(giver: ShiftManager, ended: datetime, note: str) -> str:
+    """The first message of the chat a handover opens for the next manager."""
+    heading = (
+        f"**Handover from {giver.name}** · {giver.shift_name} shift, "
+        f"ended {when(ended)}"
+    )
+    if not note.strip():
+        return f"{heading}\n\nNo handover note was left for this shift."
+    return f"{heading}\n\n{note.strip()}\n\nAsk me about anything in this handover."
+
+
+def handover_title(giver: ShiftManager, ended: datetime) -> str:
+    """The chat's title: what it is, for which day, and from whom."""
+    day = ended.astimezone(TIMEZONE)
+    return f"Handover notes · {day.day} {day:%b} · from {giver.name}"
+
+
 def hand_over(
     manager_id: str,
     note: str,
@@ -342,11 +359,14 @@ def hand_over(
 ) -> HandOver:
     """End the shift, start the next one, and open their chat on the note.
 
-    A blank note still ends the shift; the new chat then has no note.
+    The note is the chat's first message and the chat is titled after the
+    handover, so it stays in the next manager's chats like any other. A blank
+    note still ends the shift; the chat then says no note was left.
     """
     following = next_manager(manager_id, store_id)
     if following is None:
         raise LookupError("There is no next shift to hand over to.")
+    giver = _manager(manager_id, store_id)
     ended, note_id = _end(manager_id, note, engine)
     start_shift(store_id, following.manager_id, engine)
     conversation = start_conversation(
@@ -355,6 +375,13 @@ def hand_over(
         engine,
         handover_note_id=note_id if note.strip() else None,
     )
+    message: StoredMessage = {
+        "who": "assistant",
+        "what": handover_message(giver, ended, note),
+        "when": datetime.now(TIMEZONE).isoformat(),
+    }
+    append_message(conversation.id, message, engine)
+    set_title(conversation.id, handover_title(giver, ended), engine)
     logger.info("Handed over", manager_id=manager_id, to=following.manager_id)
     return HandOver(following.manager_id, conversation.id, ended)
 

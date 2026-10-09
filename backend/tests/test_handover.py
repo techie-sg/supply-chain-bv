@@ -29,6 +29,8 @@ class FakeShifts:
         self.rows: list[SimpleNamespace] = []
         self.chats: list[Conversation] = []
         self.opened: list[tuple[str, object]] = []
+        self.posted: list[dict] = []
+        self.titles: list[str] = []
         self.summaries: Any = None
 
     def open(self, manager_id, engine=None):
@@ -90,6 +92,13 @@ class FakeShifts:
         self.opened.append((manager_id, handover_note_id))
         return SimpleNamespace(id=uuid4())
 
+    def append_message(self, conversation_id, message, engine=None):
+        self.posted.append(message)
+
+    def set_title(self, conversation_id, title, engine=None):
+        self.titles.append(title)
+        return True
+
     def note_for(self, shift_id, engine=None):
         row = next((row for row in self.rows if row.id == shift_id), None)
         return None if row is None else row.handover_note
@@ -144,6 +153,8 @@ def shifts(monkeypatch) -> FakeShifts:
         "note_for": fake.note_for,
         "handover_by_note": fake.by_note,
         "start_conversation": fake.start_conversation,
+        "append_message": fake.append_message,
+        "set_title": fake.set_title,
         "recent_conversations": fake.recent,
     }.items():
         monkeypatch.setattr(handover, name, method)
@@ -395,7 +406,7 @@ def test_chat_card_shows_the_note_the_chat_opened_with(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         handover_ui,
-        "conversation_handover",
+        "handover_card",
         lambda conversation_id, manager_id: view,
     )
     card = handover_ui.chat_card("karthik", "c1")
@@ -407,7 +418,7 @@ def test_chat_card_shows_the_note_the_chat_opened_with(monkeypatch) -> None:
     def down(conversation_id, manager_id):
         raise OperationalError("select", {}, Exception("database down"))
 
-    monkeypatch.setattr(handover_ui, "conversation_handover", down)
+    monkeypatch.setattr(handover_ui, "handover_card", down)
     assert handover_ui.chat_card("karthik", "c1")["visible"] is False
 
 
@@ -448,3 +459,30 @@ def test_page_reports_problems_without_failing(shifts, monkeypatch) -> None:
     assert handover_ui.save("ananya", "x")[5] == handover_ui.UNAVAILABLE
     assert handover_ui.end("ananya", "x", False)[5] == handover_ui.UNAVAILABLE
     assert handover_ui.generate("ananya")[1].startswith("Could not draft")
+
+
+def test_handing_over_opens_a_titled_chat_that_starts_with_the_note(shifts) -> None:
+    handover.ensure_shift("ananya")
+    done = handover.hand_over("ananya", "  - Rider R3 off sick.\n- Frozen stock low.  ")
+    assert done.manager_id == "karthik"
+    [(opened_for, linked)] = shifts.opened
+    assert opened_for == "karthik" and linked is not None
+    [first] = shifts.posted
+    assert first["who"] == "assistant"
+    assert first["what"] == (
+        "**Handover from Ananya Rao** · Morning shift, ended 9 Oct, 13:55\n\n"
+        "- Rider R3 off sick.\n- Frozen stock low.\n\n"
+        "Ask me about anything in this handover."
+    )
+    # A chat with a message is listed in the next manager's chats.
+    assert shifts.titles == ["Handover notes · 9 Oct · from Ananya Rao"]
+
+
+def test_handing_over_without_a_note_still_opens_a_chat_that_says_so(shifts) -> None:
+    handover.ensure_shift("ananya")
+    handover.hand_over("ananya", "   ")
+    [(_, linked)] = shifts.opened
+    assert linked is None
+    [first] = shifts.posted
+    assert first["what"].endswith("No handover note was left for this shift.")
+    assert shifts.titles == ["Handover notes · 9 Oct · from Ananya Rao"]

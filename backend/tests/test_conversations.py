@@ -904,3 +904,22 @@ def test_selected_chat_cannot_be_read_or_written_by_another_manager(store):
     with pytest.raises(LookupError):
         other.ask("Follow-up")
     assert len(owner.history()) == 2
+
+
+def test_the_handover_card_is_only_for_handover_chats_without_messages(
+    store,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(conversations, "chat_handover", lambda linked: linked)
+    note_id = uuid4()
+    started = conversations.start_new_conversation()
+    store.rows[-1].handover_note_id = note_id
+    # An older handover chat, opened with no messages, shows the card.
+    assert conversations.handover_card(started) == note_id
+    # New handover chats start with the note as a message, so no card.
+    store.rows[-1].messages.append(
+        {"who": "assistant", "what": "**Handover from Ananya Rao**", "when": "x"},
+    )
+    assert conversations.handover_card(started) is None
+    # The handover the chat was opened with is still known.
+    assert conversations.conversation_handover(started) == note_id

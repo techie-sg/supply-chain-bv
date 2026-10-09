@@ -500,6 +500,21 @@ def conversation_handover(
     return chat_handover(conversation.handover_note_id)
 
 
+def handover_card(
+    conversation_id: str,
+    manager_id: str = DEMO_MANAGER_ID,
+) -> ShiftView | None:
+    """UI entry point: the handover to show as a card above the chat, if any.
+
+    Handover chats now start with the note as their first message, so only
+    older handover chats, opened with no messages, still need the card.
+    """
+    conversation = _service(manager_id, conversation_id).selected()
+    if conversation is None or conversation.messages:
+        return None
+    return chat_handover(conversation.handover_note_id)
+
+
 def conversation_details(
     conversation_id: str,
     manager_id: str = DEMO_MANAGER_ID,

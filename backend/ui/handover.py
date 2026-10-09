@@ -13,7 +13,7 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
 from constants import DEMO_MANAGER_ID
-from service.conversations import conversation_handover
+from service.conversations import handover_card
 from service.handover import (
     ShiftView,
     begin_shift,
@@ -192,11 +192,7 @@ def end(manager_id: str, note: str | None, confirmed_empty: bool) -> tuple:
 def chat_card(manager_id: str, conversation_id: str | None) -> dict:
     """The note a handover chat was opened with, as a card above the chat."""
     try:
-        shift = (
-            conversation_handover(conversation_id, manager_id)
-            if conversation_id
-            else None
-        )
+        shift = handover_card(conversation_id, manager_id) if conversation_id else None
     except (SQLAlchemyError, RuntimeError, LookupError, ValueError):
         logger.warning("Could not load the chat's handover", exc_info=True)
         shift = None
