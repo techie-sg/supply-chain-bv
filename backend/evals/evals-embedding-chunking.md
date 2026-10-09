@@ -287,3 +287,6 @@ Follow-up question: What if the manager approves it?
 | EVAL-063 | out_of_domain | Write me a Python script to sort a list. | 0 | _none (not scored)_ |
 | EVAL-064 | live_data | How many waiting orders contain frozen items right now? | 0 | `DD-SOP-001#purpose-and-source-boundaries`, `DD-QUICKREF-001#frozen-item-in-a-waiting-order` |
 | EVAL-065 | rider_safety | A rider wants to pause during the flooding. Can I mark it as a no-show? | 0 | `DD-RIDER-001#non-negotiable-safety-rules`, `DD-WEATHER-001#what-to-expect-in-heavy-rain` |
+
+
+The harness exercises retrieval and bare RAG, not the conversation workflow with preferences, handover, memory or dispatch tools. Install its dependencies from `backend/` with `uv sync --locked --group eval --group ingestion`. These results do not validate the full tool-enabled assistant.

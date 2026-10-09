@@ -1,6 +1,6 @@
 """Validate, store and describe each manager's settings for the preference catalogue."""
 
-from dataclasses import dataclass
+from dataclasses import fields
 from typing import Any
 
 import structlog
@@ -8,7 +8,6 @@ from pydantic import ValidationError
 from sqlalchemy import Engine
 
 from constants import DEMO_MANAGER_ID, DEMO_STORE_ID
-from database.models import PreferenceDefinition
 from domain.memory import (
     AlertOperator,
     AlertOptions,
@@ -17,6 +16,7 @@ from domain.memory import (
     Unit,
     ValueType,
 )
+from domain.preferences import EffectiveSetting, SettingDefinition
 from queries.preferences import (
     active_preferences,
     list_definitions,
@@ -43,22 +43,11 @@ class PreferenceError(ValueError):
     """A value the catalogue does not allow; the message is shown to the manager."""
 
 
-@dataclass(frozen=True)
-class EffectiveSetting:
-    """The value that applies now: the manager's active row, or the default."""
-
-    definition: PreferenceDefinition
-    enabled: bool
-    value: Any
-    options: AlertOptions | None
-    customized: bool
-
-
 def _number(value: float) -> str:
     return f"{value:g}"
 
 
-def _amount(definition: PreferenceDefinition, value: float) -> str:
+def _amount(definition: SettingDefinition, value: float) -> str:
     if definition.unit == Unit.INR:
         return f"₹{_number(value)}"
     if definition.unit == Unit.PERCENT:
@@ -112,7 +101,7 @@ def describe(setting: EffectiveSetting) -> str:
     return f"{definition.name}: {setting.value}"
 
 
-def limits(definition: PreferenceDefinition) -> str:
+def limits(definition: SettingDefinition) -> str:
     if definition.locked:
         return "fixed by store policy"
     if definition.value_type == ValueType.NUMBER:
@@ -125,7 +114,7 @@ def limits(definition: PreferenceDefinition) -> str:
 
 
 def validate(
-    definition: PreferenceDefinition,
+    definition: SettingDefinition,
     enabled: bool,
     value: Any,
     options: dict[str, Any] | None,
@@ -201,15 +190,23 @@ class PreferenceService:
         self.store_id = store_id
         self.manager_id = manager_id
         self.engine = engine
-        self._catalogue: dict[str, PreferenceDefinition] | None = None
+        self._catalogue: dict[str, SettingDefinition] | None = None
 
-    def _definitions(self) -> dict[str, PreferenceDefinition]:
+    def _definitions(self) -> dict[str, SettingDefinition]:
         if self._catalogue is None:
             definitions = sorted(
                 list_definitions(self.engine),
                 key=lambda item: CATALOGUE_ORDER.get(item.code, len(CATALOGUE_ORDER)),
             )
-            self._catalogue = {item.code: item for item in definitions}
+            self._catalogue = {
+                item.code: SettingDefinition(
+                    **{
+                        field.name: getattr(item, field.name)
+                        for field in fields(SettingDefinition)
+                    },
+                )
+                for item in definitions
+            }
         return self._catalogue
 
     def effective(self) -> list[EffectiveSetting]:
@@ -343,7 +340,7 @@ class PreferenceService:
         return "\n".join(lines)
 
 
-def default_setting(definition: PreferenceDefinition) -> EffectiveSetting:
+def default_setting(definition: SettingDefinition) -> EffectiveSetting:
     return EffectiveSetting(
         definition,
         definition.default_enabled,

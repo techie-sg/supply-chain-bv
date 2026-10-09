@@ -1,28 +1,24 @@
 from collections.abc import Sequence
-from pathlib import Path
+from datetime import datetime
 from time import perf_counter
 from typing import Any, Protocol
 
 import structlog
 
 from config import get_settings
+from constants import NO_GUIDANCE_ANSWER, TIMEZONE
 from domain.chat import ChatMessage
+from domain.tools import Tool
 from queries.vector_store import retrieve
+from resources import PROMPTS
 from service.embedding_service import EmbeddingService
 from service.factory import create_embedding_service, create_llm_service
-from service.llm_service import LLMService, Tool
+from service.llm_service import LLMService
 
 logger = structlog.stdlib.get_logger(__name__)
 
-NO_GUIDANCE_ANSWER = (
-    "I could not find relevant guidance in the DispatchDesk knowledge base."
-)
-PROMPT_PATH = (
-    Path(__file__).resolve().parent
-    / "rag_data"
-    / "prompts"
-    / "dispatch_manager_system.md"
-)
+
+PROMPT_PATH = PROMPTS / "dispatch_manager_system.md"
 
 
 def retrieval_query(
@@ -115,6 +111,9 @@ class RAGService:
         if preferences is not None:
             user_message = f"{preferences.prompt_block()}\n\n{user_message}"
         system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        if tools:
+            today = datetime.now(TIMEZONE).date().isoformat()
+            system_prompt += f"\n\nToday's date is {today} (Asia/Kolkata)."
         answer = (
             self.llm_service.generate_with_tools(
                 system_prompt=system_prompt,

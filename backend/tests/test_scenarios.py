@@ -43,7 +43,9 @@ def test_normal_backlog_and_rain_have_distinct_starting_states() -> None:
     assert backlog["is_raining"] is False
     assert rain["counts"]["packed_waiting"] == 8
     assert rain["is_raining"] is True
-    assert len(rain["candidate_routes"]) == 8
+    assert (
+        "candidate_routes" not in rain
+    )  # disconnected route generation is not part of loading
 
 
 def test_each_file_can_define_its_own_data(monkeypatch, tmp_path) -> None:

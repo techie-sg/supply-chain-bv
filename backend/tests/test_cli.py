@@ -38,12 +38,13 @@ def test_cli_usage_exits_without_starting_services(tmp_path, arguments, code) ->
         )
 
 
-def test_app_launch_never_runs_summarization(monkeypatch) -> None:
+def test_app_launch_never_runs_summarization(monkeypatch, ui_app) -> None:
     summary_service = Mock()
     launch = Mock()
     monkeypatch.setattr(summaries, "summary_service", summary_service)
     monkeypatch.setattr(gradio_app, "configure_logging", lambda: None)
-    monkeypatch.setattr(gradio_app.app, "launch", launch)
+    monkeypatch.setattr(ui_app, "launch", launch)
+    monkeypatch.setattr(gradio_app, "build_app", lambda: ui_app)
     cli.main(["app"])
     summary_service.assert_not_called()
     launch.assert_called_once()
@@ -111,3 +112,33 @@ def test_review_failure_propagates_to_fail_the_cron_run(monkeypatch) -> None:
     with pytest.raises(SystemExit) as error:
         cli.main(["review"])
     assert error.value.code == 1
+
+
+def test_importing_ui_does_not_construct_blocks_or_read_scenarios(tmp_path):
+    source = Path(cli.__file__).resolve().parent
+    script = """
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from config import Settings
+Settings.model_config["env_file"] = None
+import gradio as gr
+
+def forbidden(*args, **kwargs):
+    raise AssertionError("Import attempted application construction or scenario discovery")
+
+gr.Blocks.__init__ = forbidden
+import service.scenarios
+service.scenarios.scenario_names = forbidden
+from ui import chat, sidebar, scenarios, summary, gradio_app
+assert not hasattr(gradio_app, "app")
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(source)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

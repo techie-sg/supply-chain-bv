@@ -27,6 +27,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.session import Base
+from domain.chat import StoredMessage
 
 
 class Zone(Base):
@@ -252,7 +253,7 @@ class Conversation(Base):
         String(32),
         ForeignKey("app.managers.manager_id", ondelete="RESTRICT"),
     )
-    messages: Mapped[list[dict[str, str]]] = mapped_column(
+    messages: Mapped[list[StoredMessage]] = mapped_column(
         JSONB,
         default=list,
         server_default="[]",

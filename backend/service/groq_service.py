@@ -19,7 +19,8 @@ from pydantic import SecretStr
 from config import get_settings, require
 from constants import GROQ_MODEL
 from domain.chat import ChatMessage
-from service.llm_service import LLMService, Tool
+from domain.tools import Tool
+from service.llm_service import LLMService
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -31,7 +32,8 @@ TOOLS_UNAVAILABLE = (
     "(System note: your tools could not be used for this answer. Do not say you "
     "proposed, prepared or changed anything with a tool. If the manager asked to "
     "change a setting, say it could not be prepared this time and ask them to try "
-    "again or use the Settings tab.)"
+    "again or use the Settings tab. For operational questions, say the required "
+    "dispatch data could not be reached and do not invent figures.)"
 )
 
 
@@ -83,6 +85,13 @@ class GroqService(LLMService):
             tokens=getattr(response, "usage_metadata", None),
             duration_ms=round((perf_counter() - started) * 1000, 2),
         )
+        return self._answer_text(response)
+
+    @staticmethod
+    def _answer_text(response: AIMessage) -> str:
+        if not response.text.strip():
+            logger.error("Model returned no answer")
+            raise RuntimeError("The model returned an empty answer.")
         return response.text
 
     def generate_with_tools(
@@ -122,7 +131,7 @@ class GroqService(LLMService):
                 tokens=getattr(response, "usage_metadata", None),
                 duration_ms=round((perf_counter() - started) * 1000, 2),
             )
-            return response.text
+            return self._answer_text(response)
         logger.warning("Answering without tools after rejected tool calls")
         return self.generate(
             system_prompt,

@@ -8,7 +8,6 @@ through the same `PreferenceService` path as the Settings tab.
 """
 
 import json
-from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -16,9 +15,10 @@ import structlog
 
 from constants import DEMO_MANAGER_ID
 from domain.memory import AlertOptions, PreferenceCode, ValueType, Weekday
-from service.llm_service import Tool
+from domain.preferences import EffectiveSetting
+from domain.setting_changes import SettingChange
+from domain.tools import Tool
 from service.preferences import (
-    EffectiveSetting,
     PreferenceError,
     PreferenceService,
     default_setting,
@@ -99,32 +99,6 @@ class Action(StrEnum):
     SET = "set"
     TURN_OFF = "turn_off"
     RESET = "reset"
-
-
-@dataclass(frozen=True)
-class SettingChange:
-    """A validated change waiting for the manager's confirmation."""
-
-    code: str
-    name: str
-    action: str
-    enabled: bool
-    value: Any
-    options: dict[str, Any] | None
-    before: str
-    after: str
-    # The setting when proposed; a different setting at confirm time means it
-    # changed in the meantime, so the proposal is stale.
-    proposed_over: list[Any]
-    # Whose setting this is; only that manager can confirm it.
-    manager_id: str = DEMO_MANAGER_ID
-
-    def to_state(self) -> dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_state(cls, state: dict[str, Any]) -> "SettingChange":
-        return cls(**state)
 
 
 def _snapshot(setting: EffectiveSetting) -> list[Any]:

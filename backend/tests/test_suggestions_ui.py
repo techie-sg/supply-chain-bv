@@ -7,6 +7,7 @@ import pytest
 from database.models import Suggestion
 from service.dreaming import ReviewReport
 from ui import gradio_app
+from ui import navigation as navigation_ui
 from ui import suggestions as suggestions_ui
 
 
@@ -93,23 +94,24 @@ def test_accept_and_dismiss_report_their_outcome(monkeypatch, preference_store) 
     )
     calls = []
 
-    def accept(suggestion_id, note):
+    def accept(suggestion_id, store_id, manager_id, note):
         calls.append((suggestion_id, note))
         return "Saved."
 
     monkeypatch.setattr(suggestions_ui, "accept_suggestion", accept)
-    monkeypatch.setattr(
-        suggestions_ui,
-        "dismiss_suggestion",
-        lambda suggestion_id: calls.append(suggestion_id),
-    )
+
+    def dismiss(suggestion_id, store_id, manager_id):
+        calls.append(suggestion_id)
+        return True
+
+    monkeypatch.setattr(suggestions_ui, "dismiss_suggestion", dismiss)
     target = str(SETTING.id)
     assert suggestions_ui.accept(target, "note")[-1] == "Saved."
     assert suggestions_ui.dismiss(target)[-1] == "Dismissed."
     assert suggestions_ui.accept(None, None)[-1] == "Choose a suggestion first."
     assert suggestions_ui.dismiss(None)[-1] == "Choose a suggestion first."
 
-    def rejected(suggestion_id, note):
+    def rejected(suggestion_id, store_id, manager_id, note):
         raise LookupError("That suggestion is no longer pending.")
 
     monkeypatch.setattr(suggestions_ui, "accept_suggestion", rejected)
@@ -146,11 +148,12 @@ def test_admin_report_runs_the_review_and_lists_issues(monkeypatch) -> None:
         lambda manager_id=None: [issue],
     )
     monkeypatch.setattr(suggestions_ui, "run_review", lambda: ReviewReport(chats=2))
-    monkeypatch.setattr(
-        suggestions_ui,
-        "resolve_suggestion",
-        lambda suggestion_id, status: resolved.append((suggestion_id, status)),
-    )
+
+    def mark(store_id, manager_id):
+        resolved.append((store_id, manager_id))
+        return 1
+
+    monkeypatch.setattr(suggestions_ui, "mark_answer_issues_reviewed", mark)
     monkeypatch.setattr(
         suggestions_ui,
         "pending_suggestions",
@@ -172,7 +175,7 @@ def test_admin_report_runs_the_review_and_lists_issues(monkeypatch) -> None:
     ]
     status, _ = suggestions_ui.mark_issues_reviewed()
     assert status == "Marked 1 issues as reviewed."
-    assert resolved == [(issue.id, "dismissed")]
+    assert resolved == [("DS-BLR-014", "karthik")]
 
 
 def test_admin_report_handles_storage_errors(monkeypatch) -> None:
@@ -187,12 +190,17 @@ def test_admin_report_handles_storage_errors(monkeypatch) -> None:
     monkeypatch.setattr(suggestions_ui, "run_review", unavailable)
     with pytest.raises(gr.Error, match="review could not run"):
         suggestions_ui.run_review_now()
+    monkeypatch.setattr(
+        suggestions_ui,
+        "mark_answer_issues_reviewed",
+        lambda *args: unavailable(),
+    )
     with pytest.raises(gr.Error):
         suggestions_ui.mark_issues_reviewed()
 
 
-def test_sidebar_review_opens_the_suggestions_category() -> None:
-    nav, *panels, save_row = gradio_app.show_suggestions()
+def test_sidebar_review_opens_the_suggestions_category(ui_app) -> None:
+    nav, *panels, save_row = navigation_ui.show_suggestions()
     assert nav["value"] == "suggestions"
     assert [panel["visible"] for panel in panels] == [
         False,
@@ -205,25 +213,22 @@ def test_sidebar_review_opens_the_suggestions_category() -> None:
     assert save_row["visible"] is False
     review = next(
         block
-        for block in gradio_app.app.blocks.values()
+        for block in ui_app.blocks.values()
         if isinstance(block, gr.Button) and block.elem_id == "review-suggestions"
     )
     [click] = [
         callback
-        for callback in gradio_app.app.fns.values()
+        for callback in ui_app.fns.values()
         if (review._id, "click") in callback.targets
     ]
-    assert click.fn is gradio_app.open_settings
+    assert click.fn is navigation_ui.open_settings
     [then] = [
         callback
-        for callback in gradio_app.app.fns.values()
-        if callback.fn is gradio_app.show_suggestions
+        for callback in ui_app.fns.values()
+        if callback.fn is navigation_ui.show_suggestions
     ]
     assert then.trigger_after == click._id
-    names = {
-        getattr(callback.fn, "__name__", None)
-        for callback in gradio_app.app.fns.values()
-    }
+    names = {getattr(callback.fn, "__name__", None) for callback in ui_app.fns.values()}
     assert {
         "refresh_for",
         "accept",
@@ -245,12 +250,14 @@ def test_suggestions_follow_the_selected_manager(monkeypatch, preference_store) 
     monkeypatch.setattr(
         suggestions_ui,
         "accept_suggestion",
-        lambda suggestion_id, note: pytest.fail("Must not apply another's"),
+        lambda *args: (_ for _ in ()).throw(
+            LookupError("That suggestion is not one of yours."),
+        ),
     )
     monkeypatch.setattr(
         suggestions_ui,
         "dismiss_suggestion",
-        lambda suggestion_id: pytest.fail("Must not dismiss another's"),
+        lambda *args: False,
     )
     _, _, items, *_ = suggestions_ui.refresh_for("ananya")
     assert [value for _, value in items["choices"]] == [str(SETTING.id)]
@@ -259,15 +266,15 @@ def test_suggestions_follow_the_selected_manager(monkeypatch, preference_store) 
         "Not applied: That suggestion is not one of yours."
     )
     assert suggestions_ui.dismiss(str(SETTING.id), "karthik")[-1] == (
-        "Not dismissed: that suggestion is not one of yours."
+        "Not dismissed: that suggestion is no longer pending or is not yours."
     )
     assert set(seen) == {"ananya", "karthik"}
 
 
-def test_review_panels_reload_with_the_selected_manager() -> None:
+def test_review_panels_reload_with_the_selected_manager(ui_app) -> None:
     manager = next(
         block
-        for block in gradio_app.app.blocks.values()
+        for block in ui_app.blocks.values()
         if isinstance(block, gr.State) and block.value == gradio_app.DEMO_MANAGER_ID
     )
     scoped = {
@@ -280,7 +287,7 @@ def test_review_panels_reload_with_the_selected_manager() -> None:
         suggestions_ui.mark_issues_reviewed,
     }
     seen = set()
-    for callback in gradio_app.app.fns.values():
+    for callback in ui_app.fns.values():
         if callback.fn in scoped:
             assert manager in callback.inputs, callback.fn.__name__
             seen.add(callback.fn)

@@ -16,6 +16,7 @@ from database.models import (
 )
 from database.session import get_session
 from domain.memory import SuggestionKind, SuggestionStatus
+from queries.preferences import persist_preference
 
 
 def conversations_to_review(engine: Engine | None = None) -> list[Conversation]:
@@ -49,14 +50,6 @@ def recent_conversations(
     )
     with get_session(engine) as session:
         return list(session.scalars(statement))
-
-
-def get_conversation(
-    conversation_id: UUID,
-    engine: Engine | None = None,
-) -> Conversation | None:
-    with get_session(engine) as session:
-        return session.get(Conversation, conversation_id)
 
 
 def advance_dreamed_to(
@@ -112,15 +105,25 @@ def list_suggestions(
 
 def get_suggestion(
     suggestion_id: UUID,
+    store_id: str,
+    manager_id: str,
     engine: Engine | None = None,
 ) -> Suggestion | None:
     with get_session(engine) as session:
-        return session.get(Suggestion, suggestion_id)
+        return session.scalar(
+            select(Suggestion).where(
+                Suggestion.id == suggestion_id,
+                Suggestion.store_id == store_id,
+                Suggestion.manager_id == manager_id,
+            ),
+        )
 
 
 def resolve_suggestion(
     suggestion_id: UUID,
     status: SuggestionStatus,
+    store_id: str,
+    manager_id: str,
     engine: Engine | None = None,
 ) -> bool:
     """Accept or dismiss a pending suggestion; False if it was already resolved."""
@@ -128,6 +131,8 @@ def resolve_suggestion(
         update(Suggestion)
         .where(
             Suggestion.id == suggestion_id,
+            Suggestion.store_id == store_id,
+            Suggestion.manager_id == manager_id,
             Suggestion.status == SuggestionStatus.PENDING,
         )
         .values(status=status)
@@ -137,27 +142,90 @@ def resolve_suggestion(
         return session.execute(statement).scalar_one_or_none() is not None
 
 
-def dismiss_pending_drafts(
+def replace_handover_draft(row: dict[str, Any], engine: Engine | None = None) -> None:
+    """Replace pending drafts for this manager/day without an intermediate commit."""
+    with get_session(engine) as session:
+        # Serialize draft generation for the same manager, including an empty set.
+        session.execute(
+            select(Manager)
+            .where(Manager.manager_id == row["manager_id"])
+            .with_for_update(),
+        )
+        session.execute(
+            update(Suggestion)
+            .where(
+                Suggestion.store_id == row["store_id"],
+                Suggestion.manager_id == row["manager_id"],
+                Suggestion.kind == SuggestionKind.HANDOVER_DRAFT,
+                Suggestion.status == SuggestionStatus.PENDING,
+                Suggestion.payload["shift"].astext == row["payload"]["shift"],
+            )
+            .values(status=SuggestionStatus.DISMISSED),
+        )
+        session.execute(insert(Suggestion).values(**row))
+
+
+def apply_suggestion(
+    suggestion_id: UUID,
     store_id: str,
     manager_id: str,
-    shift: str,
+    expected_payload: dict[str, Any],
+    *,
+    preference: dict[str, Any] | None = None,
+    handover: tuple[date, str] | None = None,
+    engine: Engine | None = None,
+) -> None:
+    """Persist a validated action and resolve its pending suggestion atomically."""
+    with get_session(engine) as session:
+        suggestion = session.scalar(
+            select(Suggestion)
+            .where(
+                Suggestion.id == suggestion_id,
+                Suggestion.store_id == store_id,
+                Suggestion.manager_id == manager_id,
+                Suggestion.status == SuggestionStatus.PENDING,
+            )
+            .with_for_update(),
+        )
+        if suggestion is None or suggestion.payload != expected_payload:
+            raise LookupError("That suggestion is no longer pending or is not yours.")
+        if suggestion.kind == SuggestionKind.SETTING:
+            if preference is not None:
+                persist_preference(session, store_id, manager_id, **preference)
+        elif suggestion.kind == SuggestionKind.HANDOVER_DRAFT and handover is not None:
+            shift, note = handover
+            session.add(
+                HandoverNote(
+                    store_id=store_id,
+                    manager_id=manager_id,
+                    shift=shift,
+                    note=note,
+                ),
+            )
+        else:
+            raise ValueError("The prepared action does not match the suggestion.")
+        suggestion.status = SuggestionStatus.ACCEPTED
+
+
+def review_answer_issues(
+    store_id: str,
+    manager_id: str,
     engine: Engine | None = None,
 ) -> int:
-    """Retire pending handover drafts for a day before a newer one replaces them."""
-    statement = (
-        update(Suggestion)
-        .where(
-            Suggestion.store_id == store_id,
-            Suggestion.manager_id == manager_id,
-            Suggestion.kind == SuggestionKind.HANDOVER_DRAFT,
-            Suggestion.status == SuggestionStatus.PENDING,
-            Suggestion.payload["shift"].astext == shift,
-        )
-        .values(status=SuggestionStatus.DISMISSED)
-        .returning(Suggestion.id)
-    )
+    """Review all pending answer issues in the acting manager's store scope."""
     with get_session(engine) as session:
-        return len(session.execute(statement).all())
+        rows = session.execute(
+            update(Suggestion)
+            .where(
+                Suggestion.store_id == store_id,
+                Suggestion.manager_id == manager_id,
+                Suggestion.kind == SuggestionKind.ANSWER_ISSUE,
+                Suggestion.status == SuggestionStatus.PENDING,
+            )
+            .values(status=SuggestionStatus.DISMISSED)
+            .returning(Suggestion.id),
+        )
+        return len(rows.all())
 
 
 def save_handover_note(

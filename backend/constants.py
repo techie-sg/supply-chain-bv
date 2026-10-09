@@ -1,12 +1,19 @@
-"""Shared defaults for the supported AI providers and chunking strategies."""
+"""Shared application defaults, without importing feature services."""
+
+from zoneinfo import ZoneInfo
+
+TIMEZONE = ZoneInfo("Asia/Kolkata")
+NO_GUIDANCE_ANSWER = (
+    "I could not find relevant guidance in the DispatchDesk knowledge base."
+)
 
 JINA_API_URL = "https://api.jina.ai/v1/embeddings"
 JINA_MODEL = "jina-embeddings-v5-text-nano"
-GROQ_MODEL = "openai/gpt-oss-20b"
+GROQ_MODEL = "openai/gpt-oss-120b"
 DEFAULT_CHUNK_SIZE = 1600
 DEFAULT_CHUNK_OVERLAP = 200
 
-# The demo has one store and one manager; every scenario uses this store.
+# The demo has one store and multiple managers; every scenario uses this store.
 DEMO_STORE_ID = "DS-BLR-014"
 DEMO_MANAGER_ID = "karthik"
 

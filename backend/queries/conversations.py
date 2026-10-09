@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 from database.models import Conversation
 from database.session import get_session
+from domain.chat import StoredMessage
 
 
 def latest_conversation(
@@ -46,7 +47,7 @@ def start_conversation(
 
 def append_message(
     conversation_id: UUID,
-    message: dict[str, str],
+    message: StoredMessage,
     engine: Engine | None = None,
 ) -> None:
     """Append one message atomically, so concurrent writers never lose each other."""

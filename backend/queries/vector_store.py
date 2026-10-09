@@ -1,54 +1,36 @@
 """Store and search document embeddings through the existing Postgres connection."""
 
-import re
-from datetime import date
-from pathlib import Path
 from typing import Any, cast
 
-from langchain_core.documents import Document as CorpusDocument
 from sqlalchemy import Engine, String, Table, delete, or_, select, text
 from sqlalchemy import cast as sql_cast
 from sqlalchemy.dialects.postgresql import insert
 
 from database.models import Document, DocumentChunk
 from database.session import get_session
+from domain.documents import PreparedDocument
 
 
 def insert_chunks(
-    documents: list[CorpusDocument],
-    embeddings: list[list[float]],
+    documents: list[PreparedDocument],
     engine: Engine | None = None,
 ) -> int:
-    """Upsert document rows and their chunks together in one transaction."""
-    if len(documents) != len(embeddings):
-        raise ValueError("documents and embeddings must have the same length")
+    """Persist prepared documents and replace chunks in one transaction."""
     if not documents:
         return 0
 
-    by_source: dict[str, list[tuple[CorpusDocument, list[float]]]] = {}
-    for document, embedding in zip(documents, embeddings, strict=True):
-        by_source.setdefault(document.metadata["source"], []).append(
-            (document, embedding),
-        )
-
     with get_session(engine) as session:
         session.execute(text("SET LOCAL search_path = public, extensions"))
-        for source, chunks in by_source.items():
-            metadata = chunks[0][0].metadata
-            date_match = re.search(r"\d{4}-\d{2}-\d{2}", metadata["version"])
+        for document in documents:
+            chunks = document.chunks
+            metadata = document.metadata
             values = {
-                "file_name": Path(source).name,
-                "file_hash": bytes.fromhex(metadata["file_hash"]),
-                "document_date": date.fromisoformat(date_match.group(0))
-                if date_match
-                else None,
-                "version": metadata["version"],
+                "file_name": document.file_name,
+                "file_hash": document.file_hash,
+                "document_date": document.document_date,
+                "version": document.version,
                 "status": "ingested",
-                "metadata": {
-                    "doc_id": metadata["doc_id"],
-                    "title": metadata["title"],
-                    "source": source,
-                },
+                "metadata": metadata,
             }
             document_insert = insert(cast(Table, Document.__table__)).values(values)
             statement = document_insert.on_conflict_do_update(
@@ -78,10 +60,10 @@ def insert_chunks(
                 {
                     "document_id": document_id,
                     "chunk_id": index,
-                    "content": document.page_content,
-                    "embedding": embedding,
+                    "content": chunk.content,
+                    "embedding": chunk.embedding,
                 }
-                for index, (document, embedding) in enumerate(chunks)
+                for index, chunk in enumerate(chunks)
             ]
             chunk_insert = insert(cast(Table, DocumentChunk.__table__)).values(rows)
             session.execute(
@@ -93,7 +75,7 @@ def insert_chunks(
                     },
                 ),
             )
-    return len(documents)
+    return sum(len(document.chunks) for document in documents)
 
 
 def retrieve(

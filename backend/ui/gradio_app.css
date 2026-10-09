@@ -414,6 +414,12 @@ p.settings-status { padding-left: 0; color: var(--desk-muted); }
 #conversation .message-time { position: absolute; top: calc(100% + 12px); right: 36px; display: block; margin: 0; font-size: 11px; line-height: 16px; color: var(--desk-muted); opacity: .85; white-space: nowrap; }
 #conversation .message.bot .message-time { left: 36px; right: auto; }
 
+/* Collapsed panel under an answer: the tools and settings it was built from. */
+#conversation .agent-trace { margin-top: 8px; font-size: 12px; color: var(--desk-muted); }
+#conversation .agent-trace summary { cursor: pointer; }
+#conversation .agent-trace p { margin: 6px 0 2px; font-weight: 600; }
+#conversation .agent-trace ul { margin: 0; padding-left: 18px; }
+
 @media (max-width: 768px) {
   .column:has(> #chat-sidebar:not(.open)) :is(#manager-workspace, #settings-workspace, #demo-workspace) { padding-top: 44px; }
 }

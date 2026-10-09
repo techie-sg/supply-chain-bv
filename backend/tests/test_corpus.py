@@ -3,10 +3,10 @@ from pathlib import Path
 
 import pytest
 
+from resources import BACKEND_DIR, CORPUS_DIR
 from service.chunking import FixedSizeChunkingStrategy, MarkdownSectionChunkingStrategy
 from service.corpus import CorpusService
 from service.document_parser import DoclingPdfParser, DocumentParser
-from service.ingestion import BACKEND_DIR, CORPUS_DIR
 
 
 class TextParser(DocumentParser):

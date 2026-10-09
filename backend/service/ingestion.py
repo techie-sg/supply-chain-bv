@@ -1,6 +1,5 @@
 """Parse, chunk, embed, and upsert the RAG corpus: `uv run python -m service.ingestion`."""
 
-from pathlib import Path
 from time import perf_counter
 
 import structlog
@@ -8,13 +7,12 @@ import structlog
 from config import get_settings
 from logging_config import configure_logging
 from queries.vector_store import insert_chunks
-from service.corpus import CorpusService
+from resources import BACKEND_DIR, CORPUS_DIR
+from service.corpus import CorpusService, prepare_documents
 from service.document_parser import DoclingPdfParser
 from service.embedding_service import EmbeddingService
 from service.factory import create_chunking_strategy, create_embedding_service
 
-BACKEND_DIR = Path(__file__).resolve().parents[1]
-CORPUS_DIR = BACKEND_DIR / "service" / "rag_data" / "corpus"
 logger = structlog.stdlib.get_logger(__name__)
 
 
@@ -40,7 +38,7 @@ class IngestionService:
         )
         if len(embeddings) != len(documents):
             raise ValueError("Number of embeddings does not match number of chunks")
-        stored = insert_chunks(documents=documents, embeddings=embeddings)
+        stored = insert_chunks(prepare_documents(documents, embeddings))
         logger.info(
             "Corpus ingestion completed",
             stored_chunks=stored,

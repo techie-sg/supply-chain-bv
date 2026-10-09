@@ -14,25 +14,24 @@ import gradio as gr
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
-from constants import DEMO_MANAGER_ID
-from database.models import Suggestion
-from domain.memory import AlertOptions, SuggestionKind, SuggestionStatus
-from queries.dreaming import resolve_suggestion
-from service.dreaming import (
-    accept_suggestion,
-    dismiss_suggestion,
-    open_answer_issues,
-    pending_suggestions,
-    plural,
-    run_review,
-)
+from constants import DEMO_MANAGER_ID, DEMO_STORE_ID, TIMEZONE
+from domain.memory import AlertOptions, SuggestionKind
+from domain.preferences import EffectiveSetting
+from domain.suggestions import SuggestionView
+from service.dreaming import run_review
 from service.preferences import (
-    EffectiveSetting,
     PreferenceError,
     describe,
     manager_preferences,
 )
-from service.scenarios import TIMEZONE
+from service.suggestions import (
+    accept_suggestion,
+    dismiss_suggestion,
+    mark_answer_issues_reviewed,
+    open_answer_issues,
+    pending_suggestions,
+    plural,
+)
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -45,10 +44,7 @@ ISSUE_NAMES = {
 
 
 @dataclass
-class SuggestionsPanel:
-    entry: gr.Row
-    entry_text: gr.HTML
-    review: gr.Button
+class SuggestionComponents:
     items: gr.Radio
     detail: gr.Markdown
     note: gr.Textbox
@@ -57,11 +53,10 @@ class SuggestionsPanel:
     dismiss: gr.Button
     status: gr.Markdown
 
-    def outputs(self) -> list[Any]:
-        """Everything `refresh` updates, in order."""
+    def outputs(self, entry: gr.Row, entry_text: gr.HTML) -> list[Any]:
         return [
-            self.entry,
-            self.entry_text,
+            entry,
+            entry_text,
             self.items,
             self.detail,
             self.note,
@@ -90,14 +85,14 @@ def _setting_text(payload: dict[str, Any]) -> str:
     )
 
 
-def _label(suggestion: Suggestion) -> str:
+def _label(suggestion: SuggestionView) -> str:
     if suggestion.kind == SuggestionKind.HANDOVER_DRAFT:
         day = datetime.fromisoformat(suggestion.payload["shift"])
         return f"Handover note for {day.day} {day.strftime('%b')}"
     return f"Setting: {_setting_text(suggestion.payload)}"
 
 
-def _details(suggestion: Suggestion | None) -> tuple[str, dict]:
+def _details(suggestion: SuggestionView | None) -> tuple[str, dict]:
     if suggestion is None:
         return "No suggestions right now.", gr.update(visible=False, value="")
     chats = len({item["conversation_id"] for item in suggestion.evidence})
@@ -154,14 +149,6 @@ def refresh_for(manager_id: str = DEMO_MANAGER_ID) -> tuple:
     return refresh(manager_id=manager_id)
 
 
-def _owned(suggestion_id: str, manager_id: str) -> bool:
-    """Whether the suggestion is one of this manager's pending ones."""
-    return any(
-        str(item.id) == suggestion_id
-        for item in pending_suggestions(manager_id=manager_id)
-    )
-
-
 def select(
     suggestion_id: str | None,
     manager_id: str = DEMO_MANAGER_ID,
@@ -184,9 +171,12 @@ def accept(
     if not suggestion_id:
         return refresh("Choose a suggestion first.", manager_id=manager_id)
     try:
-        if not _owned(suggestion_id, manager_id):
-            raise LookupError("That suggestion is not one of yours.")
-        message = accept_suggestion(UUID(suggestion_id), note)
+        message = accept_suggestion(
+            UUID(suggestion_id),
+            DEMO_STORE_ID,
+            manager_id,
+            note,
+        )
     except (PreferenceError, LookupError) as exc:
         return refresh(f"Not applied: {exc}", suggestion_id, manager_id)
     except (SQLAlchemyError, RuntimeError) as exc:
@@ -199,27 +189,18 @@ def dismiss(suggestion_id: str | None, manager_id: str = DEMO_MANAGER_ID) -> tup
     if not suggestion_id:
         return refresh("Choose a suggestion first.", manager_id=manager_id)
     try:
-        if not _owned(suggestion_id, manager_id):
+        if not dismiss_suggestion(UUID(suggestion_id), DEMO_STORE_ID, manager_id):
             return refresh(
-                "Not dismissed: that suggestion is not one of yours.",
+                "Not dismissed: that suggestion is no longer pending or is not yours.",
                 manager_id=manager_id,
             )
-        dismiss_suggestion(UUID(suggestion_id))
     except (SQLAlchemyError, RuntimeError) as exc:
         logger.exception("Could not dismiss suggestion")
         raise gr.Error(UNAVAILABLE) from exc
     return refresh("Dismissed.", manager_id=manager_id)
 
 
-def build_panel() -> tuple[
-    gr.Radio,
-    gr.Markdown,
-    gr.Textbox,
-    gr.Row,
-    gr.Button,
-    gr.Button,
-    gr.Markdown,
-]:
+def build_panel() -> SuggestionComponents:
     """Lay out the Suggestions category inside the Settings tab."""
     items = gr.Radio(
         choices=[],
@@ -242,7 +223,15 @@ def build_panel() -> tuple[
         dismiss_button = gr.Button("Dismiss", scale=0, min_width=120)
     # Outside the actions row, so the outcome stays visible once nothing is pending.
     status = gr.Markdown(elem_id="suggestion-status")
-    return items, detail, note, actions, accept_button, dismiss_button, status
+    return SuggestionComponents(
+        items,
+        detail,
+        note,
+        actions,
+        accept_button,
+        dismiss_button,
+        status,
+    )
 
 
 # Admin: the answer-issue report ----------------------------------------------
@@ -301,10 +290,8 @@ def mark_issues_reviewed(
     manager_id: str = DEMO_MANAGER_ID,
 ) -> tuple[str, dict[str, Any]]:
     try:
-        issues = open_answer_issues(manager_id=manager_id)
-        for issue in issues:
-            resolve_suggestion(issue.id, SuggestionStatus.DISMISSED)
+        count = mark_answer_issues_reviewed(DEMO_STORE_ID, manager_id)
     except (SQLAlchemyError, RuntimeError) as exc:
         logger.exception("Could not mark issues reviewed")
         raise gr.Error(UNAVAILABLE) from exc
-    return f"Marked {len(issues)} issues as reviewed.", issues_table(manager_id)
+    return f"Marked {count} issues as reviewed.", issues_table(manager_id)

@@ -254,7 +254,7 @@ class ToolLLMService(FakeLLMService):
 
 
 def test_tools_are_offered_to_the_model_only_when_given(monkeypatch) -> None:
-    from service.llm_service import Tool
+    from domain.tools import Tool
 
     monkeypatch.setattr(
         rag,
@@ -271,7 +271,7 @@ def test_tools_are_offered_to_the_model_only_when_given(monkeypatch) -> None:
 
 
 def test_providers_without_tool_support_answer_without_tools() -> None:
-    from service.llm_service import Tool
+    from domain.tools import Tool
 
     llm = FakeLLMService()
     tool = Tool("propose", "Propose.", {"type": "object"}, lambda args: "ok")
