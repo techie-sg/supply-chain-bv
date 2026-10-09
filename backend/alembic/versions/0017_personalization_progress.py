@@ -4,8 +4,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0016_personalization_progress"
-down_revision = "0015_merge_personalization"
+revision = "0017_personalization_progress"
+down_revision = "0016_shifts"
 
 
 def upgrade() -> None:

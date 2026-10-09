@@ -86,15 +86,13 @@ Migration `0015_merge_personalization` joins this migration with the alert
 migrations from `main`. Both existing upgrade paths converge on one head without
 changing revisions that were already applied locally.
 
-Migration `0016_personalization_progress` adds `personalization_covers_to` and
-`personalized_at` to each conversation, plus a partial index for pending reviews.
+Migration `0017_personalization_progress`, directly after `0016_shifts`, adds
+`personalization_covers_to` and `personalized_at` to each conversation, plus a
+partial index for pending reviews.
 The timestamp records the last successful batch, including no-ops. Position is
 the processing boundary; cron-run timestamps do not define the message window.
 Existing chats begin pending because a saved summary alone does not establish
 that personalization review succeeded. Review never changes chat recency.
-
-Migration `0017_merge_personalization` joins this progress migration with
-`0016_shifts`, preserving both upgrade paths under a single head.
 
 Every answer, including a new chat's first answer and replies in a resumed chat,
 reads the selected manager's current profile once and supplies active values to
