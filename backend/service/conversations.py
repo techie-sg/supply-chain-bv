@@ -36,6 +36,7 @@ from queries.conversations import (
 )
 from resources import PROMPTS
 from service.alerts import alerts_block
+from service.briefing import briefing, is_greeting
 from service.factory import create_llm_service
 from service.handover import (
     ShiftView,
@@ -43,12 +44,18 @@ from service.handover import (
     chat_handover_block,
     ensure_shift,
 )
+from service.managers import store_managers
 from service.personalization import (
     PersonalizationChanges,
     explicit,
     manager_personalization,
 )
-from service.preferences import PreferenceService, describe, manager_preferences
+from service.preferences import (
+    PreferenceError,
+    PreferenceService,
+    describe,
+    manager_preferences,
+)
 from service.rag import answer_question
 from service.setting_changes import SettingChange, SettingChanges, tidy_reply
 from service.tools import dispatch_tools, traced_tools
@@ -356,10 +363,14 @@ def ask_question(
         question,
         lambda: service.conversation_id,
     )
-    service = ConversationService(
-        DEMO_STORE_ID,
-        manager_id,
-        answer=lambda question, **kwargs: _tidied(
+
+    def reply(question: str, **kwargs: Any) -> AnswerResult:
+        if is_greeting(question):
+            greeting = _briefing(preferences, kwargs.get("handover_note_id"))
+            if greeting is not None:
+                text, calls = greeting
+                return AnswerResult(text, _trace(preferences, calls))
+        return _tidied(
             _answer(
                 question,
                 preferences=preferences,
@@ -370,12 +381,37 @@ def ask_question(
                 **kwargs,
             ),
             changes,
-        ),
+        )
+
+    service = ConversationService(
+        DEMO_STORE_ID,
+        manager_id,
+        answer=reply,
         titler=_title,
         conversation_id=conversation_id,
     )
     result = service.ask(question)
     return result.text, changes.proposals, result.trace
+
+
+def _briefing(
+    preferences: PreferenceService,
+    handover_note_id: UUID | None,
+) -> tuple[str, list[ToolCallTrace]] | None:
+    """The greeting briefing; None hands the greeting to the assistant instead."""
+    try:
+        name = next(
+            (
+                manager.name
+                for manager in store_managers(preferences.store_id)
+                if manager.manager_id == preferences.manager_id
+            ),
+            "there",
+        )
+        return briefing(preferences, name, handover_note_id)
+    except (SQLAlchemyError, RuntimeError, PreferenceError):
+        logger.warning("Could not build the greeting briefing", exc_info=True)
+        return None
 
 
 def _tidied(

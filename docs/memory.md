@@ -7,7 +7,7 @@ How DispatchDesk remembers a store's chats and a manager's settings across sessi
 | Part | Status | Storage |
 | --- | --- | --- |
 | 1. Conversations: history, sidebar, titles, timestamps | Built | `conversations` (migrations 0005, 0007) |
-| 2. Preferences: catalogue, Settings tab, sidebar summary | Built; alert evaluation and briefing rendering wait for live tools | `preference_definitions`, `store_preferences` (0006) |
+| 2. Preferences: catalogue, Settings tab, sidebar summary, greeting briefing | Built | `preference_definitions`, `store_preferences` (0006) |
 | 3. Conversation summary: rolling, plus an idle cron job | Built | columns on `conversations` (0008) |
 | 4. Shifts and handover notes | Built | `shifts` (0016), `handover_notes` (0009, linked to shifts in 0016) |
 | 5. Dreaming: daily review with suggestions | Built | `suggestions`, `conversations.dreamed_to` (0009) |
@@ -111,6 +111,8 @@ Alert `options`, all optional: `{"days": ["sat", "sun"], "start": "19:00", "end"
 **Chat:** the model can propose a change with the `propose_setting_change` tool (`service/setting_changes.py`). Code merges the request into the current setting (unmentioned fields keep their values), validates it like the Settings tab, and shows a card with the current and new value. Only **Confirm** saves it, through the same `PreferenceService` path; **Cancel** discards it. Both add a note to the chat. Details: [alerts.md](alerts.md), section 1.
 
 **Read path:** every question includes a `<preferences>` block with each item's effective value, whether it is customized, its limits and its description. The model applies operational settings and can only propose changes to them, never save them.
+
+**Greeting briefing:** a bare greeting ("hi", "good evening", "hey team") is answered by code, not the model, with the manager's chosen views in their order. Live views (rider stats, order queue, oldest order age) come from one call to the assistant's own `get_live_dispatch_status` tool, recorded in the answer's trace. The handover view is the chat's own note in a handover chat, else the store's latest. Missing or stale data is said plainly; a greeting with more in it ("hi, orders are piling up") goes to the assistant. Code: `service/briefing.py`.
 
 ## 3. Conversation summary
 
@@ -248,6 +250,7 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | 22 | Shifts are rows the manager starts and ends; the handover note is its own table, one per shift, editable until the shift ends | shifts derived from the clock and manager hours: a demo would have to wait for real time to pass; the note as a column on the shift: mixes the working period with what it leaves behind |
 | 23 | Ending is explicit; the draft comes from chats since the shift started; the nightly draft stays as a fallback | ending on the clock; drafting from today's chats only, which misses a night shift's early hours |
 | 24 | Handing over opens a new chat for the next manager that links to the note and shows it as a card | copying the note into the chat as its first message: a second copy, and a non-model message among the raw messages |
+| 25 | The greeting briefing is built in code from one traced tool call, for a bare greeting only | asking the model to follow the Greeting setting: it ignored it and treated "Hi" as off topic |
 
 ## Deferred
 
@@ -263,7 +266,6 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 1. Conversation retention: keep forever, or set a limit?
 2. Incentive cap maximum (₹500 placeholder).
 3. Alert evaluation and any fired-alert table, pending the team discussion.
-4. Briefing trigger: greeting only, or also at the start of a new chat?
 
 ## Code
 
