@@ -103,16 +103,11 @@ def resume_conversation(
     manager_id: str,
     engine: Engine | None = None,
 ) -> Conversation:
-    """Make a past conversation the latest one, so new messages continue it."""
-    statement = (
-        update(Conversation)
-        .where(
-            Conversation.id == conversation_id,
-            Conversation.store_id == store_id,
-            Conversation.manager_id == manager_id,
-        )
-        .values(updated_at=func.now())
-        .returning(Conversation)
+    """Read a past conversation without changing its message timestamp."""
+    statement = select(Conversation).where(
+        Conversation.id == conversation_id,
+        Conversation.store_id == store_id,
+        Conversation.manager_id == manager_id,
     )
     with get_session(engine) as session:
         conversation = session.scalars(statement).one_or_none()

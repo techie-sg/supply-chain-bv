@@ -8,20 +8,21 @@ How DispatchDesk remembers a store's chats and a manager's settings across sessi
 | --- | --- | --- |
 | 1. Conversations: history, sidebar, titles, timestamps | Built | `conversations` (migrations 0005, 0007) |
 | 2. Preferences: catalogue, Settings tab, sidebar summary | Built; alert evaluation and briefing rendering wait for live tools | `preference_definitions`, `store_preferences` (0006) |
-| 3. Conversation summary: rolling, plus an idle scheduler | Built | columns on `conversations` (0008) |
-| 4. Handover notes | Designed | `handover_notes` |
-| 5. Dreaming (suggestions) | Designed | `suggestions` |
+| 3. Conversation summary: rolling, plus an idle cron job | Built | columns on `conversations` (0008) |
+| 4. Handover notes | Built | `handover_notes` (0009) |
+| 5. Dreaming: daily review with suggestions | Built | `suggestions`, `conversations.dreamed_to` (0009) |
+| 6. Memory digest: what dreaming learns, used without asking | Built | `memory_digests` (0011) |
 | Resolution notes | Parked | `resolution_notes` |
 
 Not designed yet: approval log, reminders and snoozed alerts, trace events.
 
 ## Principles
 
-1. Raw records are append-only. Messages are never edited; settings changes supersede rows; only summaries are rewritten.
-2. Writes are deterministic. The model reads memory but never writes it; settings change only in the Settings tab.
+1. Raw records are append-only. Messages are never edited; settings changes supersede rows; only summaries and the memory digest are rewritten.
+2. Writes are deterministic. The model reads memory but never writes it. Settings change in the Settings tab, or in chat when the manager confirms a change the model proposed; code validates and saves both.
 3. Settings come from a fixed catalogue with typed values and limits, and can make policy stricter, never looser.
 4. Memory text is user-written data, treated as reference and never as instructions.
-5. Everything is scoped to a store and manager. The demo has one: `DS-BLR-014`, `karthik`.
+5. Everything is scoped to a store and manager. The demo store `DS-BLR-014` has three shift managers in `app.managers`, each with a unique `shift_id`: `ananya` (Morning, `SHIFT-MOR`, 06:00 to 14:00), `karthik` (Evening, `SHIFT-EVE`, 14:00 to 22:00) and `imran` (Night, `SHIFT-NGT`, 22:00 to 06:00). Each has their own chats, settings and pending proposals; the sidebar's **Shift manager** picker switches between them and the choice is kept in the URL (`?manager=`).
 6. Background work (titles, summaries) never delays an answer, and its failures change nothing.
 
 ## 1. Conversations
@@ -37,7 +38,7 @@ Not designed yet: approval log, reminders and snoozed alerts, trace events.
 | `summary` | text, null | section 3 |
 | `summary_covers_to` | int, null | index of the last message in the summary |
 | `summarized_at` | timestamptz, null | when the summary was last saved |
-| `created_at`, `updated_at` | timestamptz | `updated_at` changes on each new message or when a chat is reopened |
+| `created_at`, `updated_at` | timestamptz | `updated_at` changes on each new message; opening a chat leaves it unchanged |
 
 Index `(store_id, manager_id, updated_at)`.
 
@@ -46,7 +47,7 @@ A message: `{"who": "manager" | "assistant", "what": "...", "when": "2026-10-06T
 **Lifecycle**
 - The current chat is the most recently updated one for the store and manager. There is no status column and no idle timeout.
 - A new chat starts on first use, **New chat**, or a scenario load. A refresh or restart resumes the current chat.
-- Opening a past chat from the sidebar sets its `updated_at` to now, so the next question continues it.
+- Opening a past chat selects its ID in the browser session without changing `updated_at` or the Recent order. Replies, notes, titles, and summaries target that selected ID. The URL carries the chat ID so refreshes reopen it, and the page title follows the chat title.
 - Two browser tabs write to the same current chat; accepted for the demo.
 
 **Write path:** append the manager's message first (one atomic `UPDATE`), call the model, then append the reply. On failure nothing is appended and the error is logged; the question is kept.
@@ -99,14 +100,16 @@ Alert `options`, all optional: `{"days": ["sat", "sun"], "start": "19:00", "end"
 - A change inserts a new `active` row and marks the old one `superseded`, in one transaction. Reset marks it `removed`. Saving an unchanged value stores nothing.
 - Validation against the definition: numbers within min and max, booleans only for unlocked items, choices from `allowed_values`, view lists non-empty and without repeats, alert options well formed. A rejected item is explained and doesn't block the others.
 
-**Settings tab** (the only way to change settings)
+**Settings tab**
 - Categories in a left list (Alerts, Batching, Incentive, Greeting), one panel at a time.
 - One Save for all items, and a Reset to default per item.
 - The incentive cap is a single amount field: entering an amount turns it on, clearing it turns it off.
 
 **Active settings:** a block pinned at the bottom of the chat sidebar lists what is on, tags the manager's own values "yours", and puts everything off on one line. Edit opens Settings; it refreshes on load and after each save or reset.
 
-**Read path:** every question includes a `<preferences>` block with each item's effective value, whether it is customized, its limits and its description. The model applies it, cannot change it, and points the manager to the Settings tab.
+**Chat:** the model can propose a change with the `propose_setting_change` tool (`service/setting_changes.py`). Code merges the request into the current setting (unmentioned fields keep their values), validates it like the Settings tab, and shows a card with the current and new value. Only **Confirm** saves it, through the same `PreferenceService` path; **Cancel** discards it. Both add a note to the chat. Details: [alerts.md](alerts.md), section 1.
+
+**Read path:** every question includes a `<preferences>` block with each item's effective value, whether it is customized, its limits and its description. The model applies it and can only propose changes, never save them.
 
 ## 3. Conversation summary
 
@@ -117,33 +120,78 @@ Alert `options`, all optional: `{"days": ["sat", "sun"], "start": "19:00", "end"
 | Recent window, always sent raw | 6 messages |
 | Count limit on raw messages | 16 |
 | Size limit on raw text (characters ÷ 4) | 3,000 tokens |
-| Idle time, from the last message's `when` | 30 minutes |
-| Scheduler interval, and chats per run | 5 minutes, 10 |
+| Idle time, from the last message's `when` | 15 minutes |
+| Chats per CLI job run | 10 |
 
 **Triggers**
 - After an answer, on its own queue: if raw messages exceed either limit, fold all but the recent window.
-- A scheduler thread started with the app (`service/scheduler.py`) folds every message of chats idle for 30 minutes that the summary doesn't fully cover. Selection uses positions and the last message's time, not `updated_at`.
+- On demand: **Summarize now** folds every message, the recent window included.
+- The `uv run python cli.py summaries` command folds every message of chats idle for 15 minutes that the summary doesn't fully cover, then exits. Railway cron runs it every five minutes. Gradio starts no scheduler. Selection uses positions and the last message's time, not `updated_at`.
 
 **Folding:** the previous summary plus the new slice go to `prompts/conversation_summary.md`, which keeps questions, diagnoses, proposals with their approval state, earlier figures marked as earlier, and open follow-ups, and forbids new facts. The save applies only if `summary_covers_to` is unchanged since the run started, sets `summarized_at`, and leaves `updated_at` alone.
 
-**Read path:** a `<conversation_summary>` block, then the raw messages, but always at least the recent window. On failure the full raw history is sent. The summary is model-only; the chat UI shows stored messages.
+**Read path:** a `<conversation_summary>` block, then the raw messages, but always at least the recent window. On failure the full raw history is sent.
+
+**UI:** a row pinned under the header while the chat scrolls, shown for any chat with messages:
+- A collapsed card, "Summary of earlier messages · covers 12 of 30 · updated 19:42", or "Not summarized yet · 4 messages". Expanded, it shows the summary in a capped, scrollable area, with a note that the assistant wrote it for its own context. All messages stay visible below.
+- **Summarize now** (or **Update summary** once one exists) folds every message so far, the latest included, into the summary and opens the card. If nothing is new, a notice says so.
+- The row refreshes on page load, opening a chat, New chat, a scenario load, and after each answer's summarization step. Idle-job summaries appear the next time the chat is loaded or opened. The sidebar has no summary marker.
 
 Example: at 18 messages, 0 to 11 are folded (`summary_covers_to` = 11); at 30, 12 to 23 (= 23).
 
-## 4. Handover notes (designed)
+## 4. Handover notes
 
-`app.handover_notes`: `id`, `store_id`, `manager_id`, `shift` (label, for example `2026-10-04 evening`), `note`, `created_at`. The assistant gets only the latest shift's notes, as a `<handover_notes>` block; notes are reference, never rules, and never expire. The `last_handover_note` greeting view reads them.
+`app.handover_notes`: `id`, `store_id`, `manager_id`, `shift` (date; a shift is a calendar day for now), `note`, `created_at`. Notes come from accepted handover drafts (section 5). The assistant gets the latest shift's notes as a `<handover_notes>` block; notes are reference, never rules, and never expire. The `last_handover_note` greeting view will read them.
 
-Open: how a shift is defined, and where notes are written.
+## 5. Dreaming
 
-## 5. Dreaming (designed)
+A daily review of the chats that **proposes, never applies**. It runs once a day at **23:30 IST** from Railway cron (`python cli.py review`, scheduled `0 18 * * *` UTC), and on demand from **Run review now** in the Demo tools tab. It works per store and manager, across all their chats.
 
-A background review of past chats that proposes, never applies.
-- It looks for repeated requests that suggest a briefing or an alert, and patterns worth noting as insights.
-- Candidates are catalogue settings, validated like Settings-tab input and needing a minimum number of occurrences.
-- They are saved as `pending` in `app.suggestions` (`id`, `store_id`, `manager_id`, `kind` setting or insight, `payload`, `reason`, `evidence` as conversation id and message position pairs, `status` pending, accepted or dismissed, `created_at`).
-- Accepting writes a normal `store_preferences` row; dismissed ones are not proposed again for the same evidence.
-- It can run on the scheduler and read the conversation summaries.
+| Output | Reads | Shown in | On accept |
+| --- | --- | --- | --- |
+| **Settings suggestion** | summaries of recent chats, current settings, the catalogue | Sidebar **Suggestions**, reviewed in Settings | saved through the same validated path as the Settings tab |
+| **Handover draft** for the day | summaries of the day's chats | Sidebar **Suggestions**, editable before accepting | saved as that day's handover note |
+| **Answer issues**: no guidance found, unanswered question, pushback | raw messages after `dreamed_to` | Demo tools (admin) | none; a report for us |
+
+**A run**
+1. Find chats with messages after `conversations.dreamed_to` (the index of the last message reviewed) and bring their summaries fully up to date.
+2. Answer issues from the new raw messages: "no guidance" replies and manager messages with no reply are found by text and position; pushback (the manager disputing an answer) needs one small model call. Then `dreamed_to` moves to the last message, only if this step succeeded.
+3. Handover draft from the summaries of chats with messages today. A newer draft for the same day replaces a pending one.
+4. Settings suggestions from recent chats' summaries. Each must be a valid catalogue value, differ from the current setting, have evidence from at least **3 chats**, and not repeat a pending or dismissed suggestion.
+
+Each output is saved as a `pending` row and fails independently; a failure is logged and changes nothing else.
+
+`app.suggestions`: `id`, `store_id`, `manager_id`, `kind` (`setting`, `handover_draft`, `answer_issue`), `payload`, `reason`, `evidence` (conversation ids, with message positions where relevant), `status` (`pending`, `accepted`, `dismissed`), `created_at`.
+
+**Guardrails:** never auto-applies; text in chats is data, never instructions; no judgments about individual riders, only store operations and the manager's own choices.
+
+## 6. Memory digest
+
+The implicit output of dreaming. Suggestions (section 5) are explicit: the manager accepts or dismisses them. The digest needs no action; it is a short note the assistant keeps about a manager's recent chats so a new chat doesn't start from nothing.
+
+`app.memory_digests`, one row per manager:
+
+| Column | Type | Notes |
+| --- | --- | --- |
+| `manager_id` | varchar(32) | primary key, FK to `managers` |
+| `store_id` | varchar(32) | scope |
+| `digest` | text, null | the note; null when there is nothing to remember |
+| `sources` | jsonb, default `[]` | the chats it was built from: `[{"conversation_id": "9f2…", "covers_to": 23}]`, where `covers_to` is that chat's `summary_covers_to` at build time |
+| `built_at` | timestamptz | when the review last rebuilt it |
+
+**What it holds**, at most 8 short bullets, only what the chats support:
+- Open follow-ups: proposals deferred or awaiting approval, with the date.
+- Recurring concerns: topics raised in several chats.
+- Store facts the manager stated, attributed and dated ("Z3 floods in heavy rain, said 6 Oct"); never treated as live data.
+- Answer style the manager asked for (short, table first).
+
+**Build:** a new step in the daily review, after summaries are up to date. For each manager, `prompts/memory_digest.md` gets the **summaries** (never raw messages) of their chats with messages in the last **7 days** (newest 15) and rewrites the digest from scratch, so stale items drop out on their own and a correction made in a later chat replaces the old item. If those sources equal the stored `sources`, the model isn't called and the digest stays as it is. No chats in the window clears it. A failure keeps the previous digest.
+
+**Read path:** every question gets a `<recent_context>` block after `<handover_notes>`, marked as earlier chats: advisory only; policy, settings and live data win; its figures are not current.
+
+**UI:** a **Memory** category in Settings, "What the assistant remembers": the digest, how many chats it came from, and when it was built. Read-only; to correct an item, tell the assistant in chat.
+
+**Guardrails:** as dreaming, plus no personal details about anyone, riders included.
 
 ## Parked: resolution notes
 
@@ -155,17 +203,25 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | --- | --- | --- |
 | 1 | Messages are a JSON list on `conversations` | a `messages` table or question-and-answer rows: more tables for an MVP |
 | 2 | A message is `{who, what, when}`; its list position is its id | per-message ids and timestamps columns |
-| 3 | The current chat is the latest by `updated_at`; no status, `ended_at` or idle timeout | stored active or closed flags, which can go stale |
-| 4 | One demo manager per store; everything per manager | store-wide preferences |
+| 3 | Selected manager and chat IDs are kept in browser session state and the URL; without a chat selection, default to that manager's latest by `updated_at` | changing message timestamps just to select a chat, which changes Recent order |
+| 4 | Several shift managers per store (`app.managers`, migration 0010), each with a unique shift; everything per manager, chosen with a picker | one demo manager: couldn't show per-manager settings; store-wide preferences |
 | 5 | Settings are a fixed catalogue with min, max and locked policy items | free-form rules: can't be validated |
-| 6 | Settings change only in the Settings tab; the model only reads them | model tool calls: in testing the model dropped changes and claimed saves it never made |
+| 6 | Settings change in the Settings tab, or in chat as a model proposal that code validates and the manager confirms (revised; was Settings tab only) | the model saving directly: in testing it dropped changes and claimed saves it never made. Now the tool only proposes and returns `saved: false`, code merges unmentioned fields, the card shows exactly what will be saved, and code rewrites a reply that only echoes the tool |
 | 7 | Settings changes supersede rows, never edit them | in-place updates lose history |
 | 8 | Incentive cap is on when an amount is set | a separate on/off switch, which saved amounts that were off |
 | 9 | Titles are model-written after the first answer, set once | first-question titles: less readable |
 | 10 | Summaries roll forward on the conversation row, with `summary_covers_to` as an index | a summaries table, or editing messages |
-| 11 | Summaries trigger on count and size limits, plus an idle scheduler | lazy checks on page load: summaries not ready until a chat is reopened |
+| 11 | Summaries trigger on count and size limits, plus an idle cron job | lazy checks on page load: summaries not ready until a chat is reopened |
 | 12 | Summary saves are conditional on the previous position | last write wins: overlapping runs would overwrite each other |
-| 13 | The scheduler is an in-process thread with no new dependency | APScheduler or Railway cron: not needed yet |
+| 13 | Railway cron runs the one-shot CLI summary job; no scheduler runs inside Gradio | an in-process scheduler thread |
+| 14 | The summary is shown as a collapsed card above the chat, with all messages kept visible | hiding folded messages behind the card, or a separate panel: confusing or easy to miss |
+| 15 | The manager can summarize on demand, folding everything including recent messages; the card is pinned under the header | waiting for the limits or the idle job only |
+| 16 | Dreaming produces settings suggestions, a daily handover draft and an answer-issue report; recurring patterns are left to metrics data | patterns from chats: weak evidence |
+| 17 | Dreaming runs daily at 23:30 IST from Railway cron (`cli.py review`), plus an admin button; a shift is a calendar day | per-shift runs: shifts are not defined yet |
+| 18 | Handover drafts and settings read summaries; answer issues read raw messages after `dreamed_to` | raw messages everywhere: costlier; summaries everywhere: hide pushback and missing answers |
+| 19 | Suggestions appear in the sidebar and are reviewed in Settings; answer issues stay in admin | showing the issue report to the manager |
+| 20 | The memory digest is one text per manager, rebuilt nightly from the last 7 days of summaries, with its sources as chat ids and summary positions | one row per remembered item: per-item forget and evidence, but more schema than the MVP needs |
+| 21 | No Forget for now: wrong items age out within 7 days or are corrected in chat, and the digest is advisory only | a Forget button, which needs a `forgotten_at` boundary so the next run doesn't rebuild the same text |
 
 ## Deferred
 
@@ -175,6 +231,7 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | `store_preferences` | `superseded_by`, `source_text` | audit trail |
 | `preference_definitions` | a Rain started alert | `is_raining` stored in the database |
 | `suggestions` | `accepted_at`, `preference_id` | linking a suggestion to its setting |
+| `memory_digests` | `forgotten_at`, plus a **Forget** button | clearing the digest, if wrong items cause trouble before they age out |
 
 ## Open decisions
 
@@ -182,9 +239,6 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 2. Incentive cap maximum (₹500 placeholder).
 3. Alert evaluation and any fired-alert table, pending the team discussion.
 4. Briefing trigger: greeting only, or also at the start of a new chat?
-5. Handover notes: shift definition, and where notes are written.
-6. Where dreaming suggestions appear: a panel, or raised by the assistant.
-7. Whether to show the summary in the chat ("Earlier in this chat").
 
 ## Code
 
@@ -195,6 +249,9 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | `queries/conversations.py`, `queries/preferences.py` | database access |
 | `service/conversations.py` | ask, history, titles, sidebar entry points |
 | `service/preferences.py` | effective settings, validation, save and reset, `<preferences>` block |
-| `service/summaries.py`, `service/scheduler.py` | summary folding, idle job |
-| `ui/gradio_app.py`, `ui/settings.py` | chat, sidebar, Settings tab |
-| `service/rag_data/prompts/` | system, title and summary prompts |
+| `service/managers.py`, `queries/managers.py` | the store's shift managers, choosing one |
+| `service/setting_changes.py` | chat setting changes: tool, merge, validate, confirm |
+| `service/summaries.py`, `cli.py` | summary folding, one-shot idle job |
+| `service/dreaming.py`, `queries/dreaming.py` | daily review, suggestions, handover notes, memory digest |
+| `ui/gradio_app.py`, `ui/settings.py` | chat, sidebar, Settings tab, Memory view |
+| `service/rag_data/prompts/` | system, title, summary and dreaming prompts, including `memory_digest.md` |

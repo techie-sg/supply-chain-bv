@@ -1,12 +1,23 @@
 from datetime import datetime
+from types import SimpleNamespace
 
 import gradio as gr
 import pytest
 
 from service import scenarios
-from ui import gradio_app
+from service.managers import ShiftManager
+from ui import gradio_app, settings
 
 NOW = datetime(2026, 10, 7, 19, 42, tzinfo=gradio_app.TIMEZONE)
+
+
+def manager_state() -> gr.State:
+    """The app's selected-manager state."""
+    return next(
+        block
+        for block in gradio_app.app.blocks.values()
+        if isinstance(block, gr.State) and block.value == gradio_app.DEMO_MANAGER_ID
+    )
 
 
 def timed(text: str, label: str = "19:42") -> str:
@@ -60,7 +71,7 @@ def test_loading_uses_service_and_clears_chat_only_on_success(monkeypatch) -> No
     context = scenarios.scenario_details("backlog")
     called = []
 
-    def load(key):
+    def load(key, manager_id=None):
         called.append(key)
         return context
 
@@ -68,7 +79,7 @@ def test_loading_uses_service_and_clears_chat_only_on_success(monkeypatch) -> No
     monkeypatch.setattr(
         gradio_app,
         "start_new_conversation",
-        lambda: called.append("new conversation"),
+        lambda manager_id=None: called.append("new conversation"),
     )
     current, history, draft, summary, *tables = gradio_app.load_selected_scenario(
         "backlog",
@@ -78,7 +89,7 @@ def test_loading_uses_service_and_clears_chat_only_on_success(monkeypatch) -> No
     assert context["title"] in summary
     assert history == [] and draft == ""
 
-    def fail(key):
+    def fail(key, manager_id=None):
         raise RuntimeError("internal connection details")
 
     monkeypatch.setattr(gradio_app, "load_scenario", fail)
@@ -90,9 +101,13 @@ def test_loading_uses_service_and_clears_chat_only_on_success(monkeypatch) -> No
 
 def test_loaded_scenario_survives_a_conversation_start_failure(monkeypatch) -> None:
     context = scenarios.scenario_details("backlog")
-    monkeypatch.setattr(gradio_app, "load_scenario", lambda key: context)
+    monkeypatch.setattr(
+        gradio_app,
+        "load_scenario",
+        lambda key, manager_id=None: context,
+    )
 
-    def unavailable():
+    def unavailable(manager_id=None):
         raise RuntimeError("database down")
 
     monkeypatch.setattr(gradio_app, "start_new_conversation", unavailable)
@@ -107,7 +122,7 @@ def test_invalid_preview_has_friendly_error() -> None:
 
 def test_new_session_restores_saved_scenario_for_chat_and_tables(monkeypatch) -> None:
     context = scenarios.scenario_details("rain")
-    monkeypatch.setattr(gradio_app, "current_scenario", lambda: context)
+    monkeypatch.setattr(gradio_app, "current_scenario", lambda manager_id=None: context)
     current, selection, summary, *tables = gradio_app.restore_workspace()
     assert current == context
     assert context["title"] in summary
@@ -119,12 +134,12 @@ def test_new_session_restores_saved_scenario_for_chat_and_tables(monkeypatch) ->
 def test_restore_distinguishes_empty_database_from_unavailable_database(
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(gradio_app, "current_scenario", lambda: None)
+    monkeypatch.setattr(gradio_app, "current_scenario", lambda manager_id=None: None)
     current, _, summary, *tables = gradio_app.restore_workspace()
     assert "No saved scenario" in summary
     assert current is None and all(table["data"] == [] for table in tables)
 
-    def unavailable():
+    def unavailable(manager_id=None):
         raise RuntimeError("private connection information")
 
     monkeypatch.setattr(gradio_app, "current_scenario", unavailable)
@@ -139,9 +154,9 @@ def test_current_scenario_preview_reads_fresh_database_rows(monkeypatch) -> None
     context = scenarios.scenario_details("normal")
     table = context["tables"]["orders"]
     table["data"][0][table["headers"].index("status")] = "delivered"
-    monkeypatch.setattr(gradio_app, "current_scenario", lambda: context)
+    monkeypatch.setattr(gradio_app, "current_scenario", lambda manager_id=None: context)
 
-    def no_yaml(key):
+    def no_yaml(key, manager_id=None):
         raise AssertionError("Current data must come from the database")
 
     monkeypatch.setattr(gradio_app, "scenario_details", no_yaml)
@@ -161,7 +176,7 @@ def test_refresh_updates_current_data_without_touching_chat(monkeypatch) -> None
         if (refresh._id, "click") in callback.targets
     )
     context = scenarios.scenario_details("backlog")
-    monkeypatch.setattr(gradio_app, "current_scenario", lambda: context)
+    monkeypatch.setattr(gradio_app, "current_scenario", lambda manager_id=None: context)
     assert callback.fn is gradio_app.restore_workspace
     assert callback.inputs == []
     assert not any(
@@ -177,10 +192,10 @@ def test_refresh_updates_current_data_without_touching_chat(monkeypatch) -> None
 def test_chat_failure_preserves_existing_history(monkeypatch) -> None:
     history = [{"role": "user", "content": "earlier question"}]
 
-    def fail(message):
+    def fail(message, manager_id=None):
         raise RuntimeError("internal API details")
 
-    monkeypatch.setattr(gradio_app, "ask_question_traced", fail)
+    monkeypatch.setattr(gradio_app, "ask_question", fail)
     with pytest.raises(gr.Error, match="assistant is unavailable") as error:
         gradio_app.chat("new question", history)
     assert history == [{"role": "user", "content": "earlier question"}]
@@ -193,17 +208,17 @@ def test_reply_uses_pending_message_once_and_keeps_previous_history(
 ) -> None:
     calls = []
 
-    def answer(question):
+    def answer(question, manager_id=None):
         calls.append(question)
-        return "reply", None
+        return "reply", []
 
-    monkeypatch.setattr(gradio_app, "ask_question_traced", answer)
+    monkeypatch.setattr(gradio_app, "ask_question", answer)
     previous = [
         {"role": "user", "content": "Earlier question"},
         {"role": "assistant", "content": "Earlier reply"},
     ]
     pending = previous + [{"role": "user", "content": "Follow-up"}]
-    finished, draft = next(gradio_app.respond_to_pending("Follow-up", pending))
+    finished, draft, _ = next(gradio_app.respond_to_pending("Follow-up", pending))
     assert calls == ["Follow-up"]
     assert finished == previous + [
         {"role": "user", "content": timed("Follow-up")},
@@ -216,14 +231,14 @@ def test_reply_uses_pending_message_once_and_keeps_previous_history(
 def test_failed_generation_restores_draft_without_duplicate_user_message(
     monkeypatch,
 ) -> None:
-    def fail(question):
+    def fail(question, manager_id=None):
         raise RuntimeError("provider unavailable")
 
-    monkeypatch.setattr(gradio_app, "ask_question_traced", fail)
+    monkeypatch.setattr(gradio_app, "ask_question", fail)
     previous = [{"role": "assistant", "content": "Earlier reply"}]
     pending = previous + [{"role": "user", "content": "Try this"}]
     stream = gradio_app.respond_to_pending("Try this", pending)
-    assert next(stream) == (previous, "Try this")
+    assert next(stream)[:2] == (previous, "Try this")
     with pytest.raises(gr.Error, match="assistant is unavailable"):
         next(stream)
 
@@ -234,20 +249,20 @@ def test_chat_passes_only_the_question_without_reading_scenario_data(
 ) -> None:
     seen = []
 
-    def answer(question):
+    def answer(question, manager_id=None):
         seen.append(question)
-        return "reply", None
+        return "reply", []
 
     def no_scenario(*args, **kwargs):
         raise AssertionError("Chat must not read scenario data")
 
-    monkeypatch.setattr(gradio_app, "ask_question_traced", answer)
+    monkeypatch.setattr(gradio_app, "ask_question", answer)
     monkeypatch.setattr(gradio_app, "current_scenario", no_scenario)
     earlier = [
         {"role": "user", "content": "Earlier"},
         {"role": "assistant", "content": "Earlier reply"},
     ]
-    history, _ = gradio_app.chat("What should we do?", earlier)
+    history, _, _ = gradio_app.chat("What should we do?", earlier)
     assert seen == ["What should we do?"]
     assert history == earlier + [
         {"role": "user", "content": timed("What should we do?")},
@@ -262,11 +277,14 @@ def test_chat_callbacks_receive_no_scenario_state() -> None:
         if callback.fn is gradio_app.respond_to_pending
     ]
     assert len(callbacks) == 2
-    assert all(len(callback.inputs) == 2 for callback in callbacks)
+    # The message, displayed chat, selected manager, and selected chat ID.
+    assert all(len(callback.inputs) == 4 for callback in callbacks)
+    manager = manager_state()
+    assert all(callback.inputs[2] is manager for callback in callbacks)
     assert all(
         not isinstance(component, gr.State)
         for callback in callbacks
-        for component in callback.inputs
+        for component in callback.inputs[:2]
     )
 
 
@@ -308,7 +326,11 @@ def test_page_load_restores_the_stored_conversation(monkeypatch, frozen_now) -> 
             "when": "2026-10-07T08:10:00+05:30",
         },
     ]
-    monkeypatch.setattr(gradio_app, "conversation_history", lambda: stored)
+    monkeypatch.setattr(
+        gradio_app,
+        "conversation_history",
+        lambda manager_id=None: stored,
+    )
     assert gradio_app.restore_chat() == [
         {
             "role": "user",
@@ -317,14 +339,14 @@ def test_page_load_restores_the_stored_conversation(monkeypatch, frozen_now) -> 
         {"role": "assistant", "content": timed("No. Safety comes first.", "08:10")},
     ]
     assert any(
-        callback.fn is gradio_app.restore_chat
+        callback.fn is gradio_app.restore_conversation
         and any(isinstance(component, gr.Chatbot) for component in callback.outputs)
         for callback in gradio_app.app.fns.values()
     )
 
 
 def test_page_load_starts_empty_when_storage_is_unavailable(monkeypatch) -> None:
-    def unavailable():
+    def unavailable(manager_id=None):
         raise RuntimeError("database down")
 
     monkeypatch.setattr(gradio_app, "conversation_history", unavailable)
@@ -338,7 +360,7 @@ def test_sidebar_lists_past_chats_and_marks_the_open_one(monkeypatch) -> None:
     monkeypatch.setattr(
         gradio_app,
         "past_conversations",
-        lambda: [
+        lambda manager_id=None: [
             {
                 "id": open_id,
                 "first_question": "  Orders are backing up,\nwhat should I do "
@@ -347,18 +369,28 @@ def test_sidebar_lists_past_chats_and_marks_the_open_one(monkeypatch) -> None:
             {"id": other_id, "first_question": "Rain plan?"},
         ],
     )
-    monkeypatch.setattr(gradio_app, "current_conversation_id", lambda: str(open_id))
+    monkeypatch.setattr(
+        gradio_app,
+        "current_conversation_id",
+        lambda manager_id=None: str(open_id),
+    )
     update = gradio_app.conversation_choices()
     (title, value), other = update["choices"]
     assert value == str(open_id) and update["value"] == str(open_id)
-    assert title == "Orders are backing up, what should I do…"
+    assert title == (
+        "Orders are backing up, what should I do first and who should I call in?"
+    )
     assert other == ("Rain plan?", str(other_id))
 
     # A new, empty chat is current but not listed, so nothing is marked.
-    monkeypatch.setattr(gradio_app, "current_conversation_id", lambda: "new-chat")
+    monkeypatch.setattr(
+        gradio_app,
+        "current_conversation_id",
+        lambda manager_id=None: "new-chat",
+    )
     assert gradio_app.conversation_choices()["value"] is None
 
-    def unavailable():
+    def unavailable(manager_id=None):
         raise RuntimeError("database down")
 
     monkeypatch.setattr(gradio_app, "past_conversations", unavailable)
@@ -371,7 +403,7 @@ def test_opening_a_past_conversation_shows_and_continues_it(
 ) -> None:
     opened = []
 
-    def resume(conversation_id):
+    def resume(conversation_id, manager_id=None):
         opened.append(conversation_id)
         return [
             {
@@ -385,12 +417,14 @@ def test_opening_a_past_conversation_shows_and_continues_it(
     assert gradio_app.open_conversation("abc") == (
         [{"role": "user", "content": timed("Rain plan?", "19:30")}],
         "",
+        "abc",
+        gr.update(selected="assistant"),
     )
     assert opened == ["abc"]
     skipped = gradio_app.open_conversation(None)
     assert all(item == gr.skip() for item in skipped)
 
-    def missing(conversation_id):
+    def missing(conversation_id, manager_id=None):
         raise LookupError("private detail")
 
     monkeypatch.setattr(gradio_app, "resume_past_conversation", missing)
@@ -410,7 +444,7 @@ def test_opening_a_past_conversation_shows_and_continues_it(
 
 
 def test_clear_chat_failure_keeps_the_conversation(monkeypatch) -> None:
-    def unavailable():
+    def unavailable(manager_id=None):
         raise RuntimeError("private connection information")
 
     monkeypatch.setattr(gradio_app, "start_new_conversation", unavailable)
@@ -419,29 +453,79 @@ def test_clear_chat_failure_keeps_the_conversation(monkeypatch) -> None:
     assert "private connection information" not in str(error.value)
 
 
+def test_linked_chat_is_restored_without_using_the_latest_chat(monkeypatch):
+    from types import SimpleNamespace
+
+    opened = []
+    monkeypatch.setattr(
+        gradio_app,
+        "open_conversation",
+        lambda chat_id, manager_id=None: (
+            opened.append(chat_id) or [{"role": "user", "content": "Rain?"}],
+            "",
+            chat_id,
+            gr.update(selected="assistant"),
+        ),
+    )
+    history, chat_id = gradio_app.restore_conversation(
+        gradio_app.DEMO_MANAGER_ID,
+        SimpleNamespace(query_params={"chat": "older-chat", "view": "settings"}),
+    )
+    assert opened == ["older-chat"] and chat_id == "older-chat"
+    assert history == [{"role": "user", "content": "Rain?"}]
+
+
+def test_chat_browser_metadata_uses_selected_chat(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        gradio_app,
+        "conversation_details",
+        lambda chat_id, manager_id=None: (
+            seen.append(chat_id) or {"id": chat_id, "title": "Rain response"}
+        ),
+    )
+    assert gradio_app.conversation_location(
+        gradio_app.DEMO_MANAGER_ID,
+        "older-chat",
+    ) == {
+        "id": "older-chat",
+        "title": "Rain response",
+    }
+    assert seen == ["older-chat"]
+    assert gradio_app.conversation_location(gradio_app.DEMO_MANAGER_ID, None) == {
+        "id": None,
+        "title": "New chat",
+    }
+
+
 def test_chat_preserves_nonblank_message_whitespace(monkeypatch) -> None:
     seen = []
 
-    def answer(question):
+    def answer(question, manager_id=None):
         seen.append(question)
-        return "reply", None
+        return "reply", []
 
-    monkeypatch.setattr(gradio_app, "ask_question_traced", answer)
+    monkeypatch.setattr(gradio_app, "ask_question", answer)
     message = "  Should riders speed?\n"
-    history, draft = gradio_app.chat(message, [])
+    history, draft, _ = gradio_app.chat(message, [])
     assert seen == [message]
     assert history[0]["content"].startswith(message)
     assert draft == ""
-    assert gradio_app.chat(" \n\t", history) == (history, "")
+    assert gradio_app.chat(" \n\t", history)[:2] == (history, "")
     assert seen == [message]
 
 
 def test_new_chat_waits_for_outstanding_workspace_callbacks(monkeypatch) -> None:
     started = []
+
+    def start_new(manager_id=None):
+        started.append(True)
+        return "new-chat-id"
+
     monkeypatch.setattr(
         gradio_app,
         "start_new_conversation",
-        lambda: started.append(True),
+        start_new,
     )
     clear = next(
         item
@@ -458,7 +542,7 @@ def test_new_chat_waits_for_outstanding_workspace_callbacks(monkeypatch) -> None
     assert callback.concurrency_limit == 1
     assert callback.fn is not None
     assert callback.fn is gradio_app.clear_chat
-    assert callback.fn() == ([], "")
+    assert callback.fn() == ([], "", "new-chat-id", gr.update(selected="assistant"))
     assert started == [True]
     assert all(
         chat_callback.queue
@@ -474,7 +558,7 @@ def test_unavailable_scenarios_do_not_prevent_assistant_startup(
     monkeypatch,
     error,
 ) -> None:
-    def unavailable():
+    def unavailable(manager_id=None):
         raise error
 
     monkeypatch.setattr(gradio_app, "scenario_names", unavailable)
@@ -577,13 +661,17 @@ def test_title_runs_after_the_answer_and_refreshes_the_sidebar(monkeypatch) -> N
     monkeypatch.setattr(
         gradio_app,
         "title_latest_conversation",
-        lambda: titled.append(True),
+        lambda manager_id=None: titled.append(True),
     )
-    monkeypatch.setattr(gradio_app, "conversation_choices", lambda: "choices")
+    monkeypatch.setattr(
+        gradio_app,
+        "conversation_choices",
+        lambda manager_id=None: "choices",
+    )
     assert gradio_app.title_conversation() == "choices"
     assert titled == [True]
 
-    def unavailable():
+    def unavailable(manager_id=None):
         raise RuntimeError("database down")
 
     monkeypatch.setattr(gradio_app, "title_latest_conversation", unavailable)
@@ -602,12 +690,12 @@ def test_summary_runs_after_the_answer_on_its_own_queue(monkeypatch) -> None:
     monkeypatch.setattr(
         gradio_app,
         "summarize_latest_conversation",
-        lambda: ran.append(True),
+        lambda manager_id=None: ran.append(True),
     )
     gradio_app.summarize_conversation()
     assert ran == [True]
 
-    def unavailable():
+    def unavailable(manager_id=None):
         raise RuntimeError("database down")
 
     monkeypatch.setattr(gradio_app, "summarize_latest_conversation", unavailable)
@@ -621,56 +709,425 @@ def test_summary_runs_after_the_answer_on_its_own_queue(monkeypatch) -> None:
     assert all(callback.concurrency_id == "summaries" for callback in callbacks)
 
 
-def test_launch_starts_the_idle_summary_job(monkeypatch) -> None:
-    started = []
-
-    class Job:
-        def start(self):
-            started.append(True)
-
-    monkeypatch.setattr(gradio_app, "idle_summary_job", Job)
-    monkeypatch.setattr(gradio_app.app, "launch", lambda **kwargs: None)
-    gradio_app.main()
-    assert started == [True]
-
-
-def test_an_answer_shows_its_tool_calls_and_settings_in_a_collapsed_panel() -> None:
-    trace = {
-        "tools": [
-            {
-                "tool": "get_live_dispatch_status",
-                "arguments": '{"store_id": "S-1"}',
-                "as_of": "2026-10-07T15:11:42+05:30",
-                "stale": True,
-                "error": None,
-            },
-            {"tool": "get_delivery_metrics", "arguments": "{}", "error": "BAD"},
-        ],
-        "preferences": ["Rider shortage alert: on, above 2 <script>"],
-    }
-    html = gradio_app._trace_html(trace)
-    assert "<details" in html and "2 tool calls" in html
-    assert (
-        "get_live_dispatch_status(store_id=S-1) — data as of 15:11 IST (stale)" in html
+def test_summary_trigger_is_hidden_for_an_empty_chat(monkeypatch) -> None:
+    monkeypatch.setattr(
+        gradio_app,
+        "conversation_summary",
+        lambda manager_id=None: None,
     )
-    assert "error BAD" in html
-    assert "Rider shortage alert" in html
-    assert "<script>" not in html  # escaped
+    trigger, status, text, _ = gradio_app.summary_card()
+    assert trigger == gr.update(visible=False) and status == text == ""
+
+    def unavailable(manager_id=None):
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(gradio_app, "conversation_summary", unavailable)
+    assert gradio_app.summary_card()[0] == gr.update(visible=False)
 
 
-def test_an_answer_with_nothing_to_show_has_no_panel() -> None:
-    assert gradio_app._trace_html(None) == ""
-    assert gradio_app._trace_html({"tools": [], "preferences": []}) == ""
+def test_unsummarized_chat_offers_to_summarize(monkeypatch) -> None:
+    monkeypatch.setattr(
+        gradio_app,
+        "conversation_summary",
+        lambda manager_id=None: {
+            "summary": None,
+            "covered": 0,
+            "total": 4,
+            "summarized_at": None,
+        },
+    )
+    trigger, status, text, button = gradio_app.summary_card()
+    assert trigger == gr.update(visible=True)
+    assert status == "4 messages · No summary yet"
+    assert "key decisions and details" in text
+    assert button == gr.update(value="Create summary")
 
 
-def test_stored_traces_are_shown_again_when_a_chat_is_reopened() -> None:
-    when = "2026-10-07T16:08:34+05:30"
-    trace = {"tools": [], "preferences": ["Incentive cap: ₹300"]}
-    shown = gradio_app.to_display(
+def test_summary_card_shows_coverage_and_update_time(monkeypatch, frozen_now) -> None:
+    monkeypatch.setattr(
+        gradio_app,
+        "conversation_summary",
+        lambda manager_id=None: {
+            "summary": "- Standby rider approved.",
+            "covered": 12,
+            "total": 30,
+            "summarized_at": datetime(2026, 10, 7, 19, 30, tzinfo=gradio_app.TIMEZONE),
+        },
+    )
+    _, status, text, button = gradio_app.summary_card()
+    assert status == "12 of 30 messages · Updated 19:30"
+    assert text.startswith("- Standby rider approved.")
+    assert "Your full conversation stays in the chat." in text
+    assert button == gr.update(value="Update summary")
+
+
+def test_summarize_now_updates_the_popover_content(monkeypatch, frozen_now) -> None:
+    views = iter(
         [
-            {"who": "manager", "what": "Hi", "when": when},
-            {"who": "assistant", "what": "Hello", "when": when, "trace": trace},
+            {
+                "summary": "- Now includes the latest exchange.",
+                "covered": 30,
+                "total": 30,
+                "summarized_at": datetime(
+                    2026,
+                    10,
+                    7,
+                    19,
+                    42,
+                    tzinfo=gradio_app.TIMEZONE,
+                ),
+            },
         ],
     )
-    assert "agent-trace" not in shown[0]["content"]
-    assert "Incentive cap: ₹300" in shown[1]["content"]
+    monkeypatch.setattr(
+        gradio_app,
+        "summarize_open_conversation",
+        lambda manager_id=None: True,
+    )
+    monkeypatch.setattr(
+        gradio_app,
+        "conversation_summary",
+        lambda manager_id=None: next(views),
+    )
+    _, status, text, _ = gradio_app.summarize_now()
+    assert status == "30 of 30 messages · Updated 19:42"
+    assert text.startswith("- Now includes the latest exchange.")
+
+
+def test_summarize_now_reports_when_nothing_is_new(monkeypatch) -> None:
+    notices: list[str] = []
+    monkeypatch.setattr(gradio_app.gr, "Info", notices.append)
+    monkeypatch.setattr(
+        gradio_app,
+        "summarize_open_conversation",
+        lambda manager_id=None: False,
+    )
+    monkeypatch.setattr(
+        gradio_app,
+        "conversation_summary",
+        lambda manager_id=None: None,
+    )
+    gradio_app.summarize_now()
+    assert notices == ["The summary already covers every message."]
+
+    def failing(manager_id=None):
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(gradio_app, "summarize_open_conversation", failing)
+    with pytest.raises(gr.Error, match="Could not summarize this chat"):
+        gradio_app.summarize_now()
+
+
+def test_summary_popover_is_refreshed_with_the_chat() -> None:
+    def block(kind, elem_id):
+        return next(
+            item
+            for item in gradio_app.app.blocks.values()
+            if isinstance(item, kind) and item.elem_id == elem_id
+        )
+
+    trigger = block(gr.Button, "summary-trigger")
+    button = block(gr.Button, "summarize-now")
+    assert trigger.visible is False
+    refreshers = [
+        callback
+        for callback in gradio_app.app.fns.values()
+        if callback.fn is gradio_app.summary_card
+    ]
+    # Page load, switching manager, opening a chat, a scenario load, New chat,
+    # and after each answer.
+    assert len(refreshers) == 7
+    assert all(trigger in callback.outputs for callback in refreshers)
+    [click] = [
+        callback
+        for callback in gradio_app.app.fns.values()
+        if (button._id, "click") in callback.targets
+    ]
+    assert click.fn is gradio_app.summarize_now
+    assert click.concurrency_id == "workspace"
+
+
+CHANGE = {
+    "code": "sla_dip_alert",
+    "name": "SLA dip",
+    "action": "set",
+    "enabled": True,
+    "value": 85,
+    "options": None,
+    "before": "off",
+    "after": "on, below 85% <b>",
+    "proposed_over": [False, 80, None],
+    "manager_id": "karthik",
+}
+
+
+def test_chat_hands_proposed_changes_to_the_confirmation_card(
+    monkeypatch,
+    frozen_now,
+) -> None:
+    from service.setting_changes import SettingChange
+
+    change = SettingChange.from_state(CHANGE)
+    monkeypatch.setattr(
+        gradio_app,
+        "ask_question",
+        lambda q, manager_id=None: ("Proposed.", [change]),
+    )
+    _, _, pending = gradio_app.chat("Alert me below 85", [])
+    assert pending == [CHANGE]
+    monkeypatch.setattr(
+        gradio_app,
+        "ask_question",
+        lambda q, manager_id=None: ("No change.", []),
+    )
+    assert gradio_app.chat("Thanks", [])[2] == gr.skip()
+
+
+def test_pending_card_shows_old_and_new_values_escaped() -> None:
+    html, box = gradio_app.pending_card([CHANGE])
+    assert "Proposed setting change" in html and "Not saved until you confirm" in html
+    assert "SLA dip" in html and "off" in html
+    assert "on, below 85% &lt;b&gt;" in html
+    assert box["visible"] is True
+    two, _ = gradio_app.pending_card([CHANGE, CHANGE])
+    assert "2 proposed setting changes" in two
+    assert gradio_app.pending_card([]) == ("", gr.update(visible=False))
+
+
+def test_confirm_saves_records_a_note_and_clears_the_card(
+    monkeypatch,
+    frozen_now,
+) -> None:
+    saved: list[dict] = []
+    notes: list[str] = []
+
+    def confirm(states, manager_id=None):
+        saved.extend(states)
+        return ["Saved. SLA dip: on, below 85%."]
+
+    def note(text, manager_id=None):
+        notes.append(text)
+        return {"when": NOW.isoformat()}
+
+    monkeypatch.setattr(gradio_app, "confirm_proposals", confirm)
+    monkeypatch.setattr(gradio_app, "add_note", note)
+    history, pending = gradio_app.confirm_pending([CHANGE], [])
+    assert saved == [CHANGE] and pending == []
+    assert notes == ["Saved. SLA dip: on, below 85%."]
+    assert history == [
+        {"role": "assistant", "content": timed("Saved. SLA dip: on, below 85%.")},
+    ]
+    assert gradio_app.confirm_pending([], history) == (history, [])
+
+
+def test_confirm_failure_keeps_the_card(monkeypatch) -> None:
+    def fail(states, manager_id=None):
+        raise RuntimeError("database password in message")
+
+    monkeypatch.setattr(gradio_app, "confirm_proposals", fail)
+    with pytest.raises(gr.Error, match="Could not save the settings") as error:
+        gradio_app.confirm_pending([CHANGE], [])
+    assert "password" not in str(error.value)
+
+
+def test_cancel_saves_nothing_and_still_shows_a_note_when_storage_fails(
+    monkeypatch,
+    frozen_now,
+) -> None:
+    def unavailable(text, manager_id=None):
+        raise RuntimeError("no database")
+
+    monkeypatch.setattr(gradio_app, "add_note", unavailable)
+    monkeypatch.setattr(
+        gradio_app,
+        "confirm_proposals",
+        lambda states, manager_id=None: pytest.fail("Cancel must not save"),
+    )
+    history, pending = gradio_app.cancel_pending([CHANGE], [])
+    assert pending == []
+    assert history == [
+        {
+            "role": "assistant",
+            "content": timed("Cancelled. Nothing was changed (SLA dip)."),
+        },
+    ]
+    assert gradio_app.cancel_pending(None, None) == ([], [])
+
+
+def test_confirmation_buttons_and_card_are_wired() -> None:
+    def callbacks(fn):
+        return [c for c in gradio_app.app.fns.values() if c.fn is fn]
+
+    [confirm] = callbacks(gradio_app.confirm_pending)
+    [cancel] = callbacks(gradio_app.cancel_pending)
+    for callback in (confirm, cancel):
+        assert callback.concurrency_id == "workspace"
+        assert isinstance(callback.inputs[0], gr.State)
+        assert isinstance(callback.outputs[1], gr.State)
+    [card] = callbacks(gradio_app.pending_card)
+    assert card.inputs == [confirm.inputs[0]]
+    replies = callbacks(gradio_app.respond_to_pending)
+    assert all(reply.outputs[2] is confirm.inputs[0] for reply in replies)
+
+
+MANAGERS = [
+    ShiftManager("ananya", "Ananya Rao", "SHIFT-MOR", "Morning", "06:00", "14:00"),
+    ShiftManager("karthik", "Karthik Reddy", "SHIFT-EVE", "Evening", "14:00", "22:00"),
+    ShiftManager("imran", "Imran Shaikh", "SHIFT-NGT", "Night", "22:00", "06:00"),
+]
+
+
+def request(**params):
+    return SimpleNamespace(query_params=params)
+
+
+def test_page_load_picks_the_manager_from_the_url(monkeypatch) -> None:
+    monkeypatch.setattr(gradio_app, "store_managers", lambda: MANAGERS)
+    manager_id, picker, badge = gradio_app.restore_manager(request(manager="imran"))
+    assert manager_id == "imran" and picker["value"] == "imran"
+    assert [value for _, value in picker["choices"]] == ["ananya", "karthik", "imran"]
+    assert picker["choices"][2][0] == "Imran Shaikh\nNight shift · 22:00–06:00"
+    assert "Imran Shaikh" in badge and "SHIFT-NGT" in badge
+    # Unknown or missing ids fall back to the demo manager.
+    assert gradio_app.restore_manager(request(manager="nobody"))[0] == "karthik"
+    assert gradio_app.restore_manager(request())[0] == "karthik"
+
+
+def test_page_load_without_managers_keeps_working(monkeypatch) -> None:
+    def unavailable():
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(gradio_app, "store_managers", unavailable)
+    manager_id, picker, badge = gradio_app.restore_manager(request(manager="imran"))
+    assert manager_id == gradio_app.DEMO_MANAGER_ID
+    assert picker["choices"] == [] and "No manager available" in badge
+
+
+def test_switching_manager_accepts_only_the_store_managers(monkeypatch) -> None:
+    monkeypatch.setattr(gradio_app, "store_managers", lambda: MANAGERS)
+    manager_id, badge = gradio_app.select_manager("ananya")
+    assert manager_id == "ananya" and "Morning shift" in badge
+    with pytest.raises(gr.Error, match="not available"):
+        gradio_app.select_manager("someone-else")
+
+
+def test_chat_and_confirmation_use_the_selected_manager(
+    monkeypatch,
+    frozen_now,
+) -> None:
+    seen = []
+
+    def answer(question, manager_id=None):
+        seen.append(("ask", manager_id))
+        return "reply", []
+
+    def confirm(states, manager_id=None):
+        seen.append(("confirm", manager_id))
+        return ["Saved."]
+
+    def note(text, manager_id=None):
+        seen.append(("note", manager_id))
+
+    monkeypatch.setattr(gradio_app, "ask_question", answer)
+    monkeypatch.setattr(gradio_app, "confirm_proposals", confirm)
+    monkeypatch.setattr(gradio_app, "add_note", note)
+    next(gradio_app.respond_to_pending("Hi", [], "imran"))
+    gradio_app.confirm_pending([CHANGE], [], "imran")
+    gradio_app.cancel_pending([CHANGE], [], "imran")
+    assert seen == [
+        ("ask", "imran"),
+        ("confirm", "imran"),
+        ("note", "imran"),
+        ("note", "imran"),
+    ]
+
+
+def test_every_manager_scoped_callback_receives_the_selected_manager() -> None:
+    manager = manager_state()
+    scoped = {
+        gradio_app.restore_conversation,
+        gradio_app.restore_latest_conversation,
+        gradio_app.conversation_choices,
+        gradio_app.open_conversation,
+        gradio_app.title_conversation,
+        gradio_app.summary_card,
+        gradio_app.summarize_now,
+        gradio_app.summarize_conversation,
+        gradio_app.clear_chat,
+        gradio_app.respond_to_pending,
+        gradio_app.confirm_pending,
+        gradio_app.cancel_pending,
+        gradio_app.load_selected_scenario,
+        settings.load_settings,
+        settings.load_summary,
+        settings.save_settings,
+    }
+    seen = set()
+    for callback in gradio_app.app.fns.values():
+        if callback.fn in scoped:
+            assert manager in callback.inputs, callback.fn.__name__
+            seen.add(callback.fn)
+    assert seen == scoped
+    resets = [
+        callback
+        for callback in gradio_app.app.fns.values()
+        if callback.fn is not None
+        and callback.fn.__name__ == "<lambda>"
+        and callback.inputs == [manager]
+        and callback.outputs
+        and len(callback.outputs) > 10
+    ]
+    assert len(resets) == len(settings.ALERT_CODES) + 3
+
+
+def test_switching_manager_clears_the_card_and_reloads_their_workspace() -> None:
+    picker = next(
+        block
+        for block in gradio_app.app.blocks.values()
+        if isinstance(block, gr.Dropdown) and block.elem_id == "manager-picker"
+    )
+    [switch] = [
+        callback
+        for callback in gradio_app.app.fns.values()
+        if (picker._id, "input") in callback.targets
+    ]
+    assert switch.fn is gradio_app.select_manager
+    loaders = [
+        callback.fn
+        for callback in gradio_app.app.fns.values()
+        if callback.fn
+        in (
+            gradio_app.restore_conversation,
+            gradio_app.restore_latest_conversation,
+            gradio_app.conversation_choices,
+            settings.load_settings,
+            settings.load_summary,
+        )
+        and callback.trigger_after is not None
+    ]
+    # Page load and switching manager each reload chat, chats and settings.
+    assert loaders.count(gradio_app.restore_conversation) == 1
+    assert loaders.count(gradio_app.restore_latest_conversation) == 1
+    assert loaders.count(settings.load_settings) >= 2
+    # The pending-change card is cleared right after the switch.
+    [clear] = [
+        callback
+        for callback in gradio_app.app.fns.values()
+        if callback.fn is list and callback.trigger_after == switch._id
+    ]
+    assert isinstance(clear.outputs[0], gr.State)
+
+
+def test_switching_manager_records_the_choice_in_the_url() -> None:
+    picker = next(
+        block
+        for block in gradio_app.app.blocks.values()
+        if isinstance(block, gr.Dropdown) and block.elem_id == "manager-picker"
+    )
+    [url] = [
+        callback
+        for callback in gradio_app.app.fns.values()
+        if callback.js == gradio_app.MANAGER_URL_JS
+    ]
+    # State values never reach the browser, so the URL reads the picker.
+    assert url.inputs == [picker]

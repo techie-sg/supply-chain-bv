@@ -170,7 +170,18 @@ def test_ui_entry_point_passes_preferences_through(monkeypatch) -> None:
         def __init__(self, **kwargs) -> None:
             pass
 
-        def answer_question(self, question, top_k, *, history, preferences, summary):
+        def answer_question(
+            self,
+            question,
+            top_k,
+            *,
+            history,
+            preferences,
+            summary,
+            handover,
+            memory,
+            tools,
+        ):
             seen.update(question=question, preferences=preferences)
             return "answer"
 
@@ -201,3 +212,75 @@ def test_summary_is_placed_before_the_retrieved_context(monkeypatch) -> None:
         "details):\n- Standby rider approved.\n</conversation_summary>\n\n"
         "Retrieved context:"
     ) in user
+
+
+def test_blocks_come_in_order_with_memory_after_the_handover(monkeypatch) -> None:
+    llm = FakeLLMService()
+    monkeypatch.setattr(
+        rag,
+        "retrieve",
+        lambda **kwargs: [{"chunk_id": "doc#1", "content": "Policy."}],
+    )
+    RAGService(FakeEmbeddingService(), llm).answer_question(
+        "Hi",
+        preferences=FakePreferences(),
+        summary="- Earlier.",
+        handover="Handover from 8 Oct:\n- Rain.",
+        memory="- Z3 floods in heavy rain (said 6 Oct).",
+    )
+    _, user = llm.messages[0]
+    order = [
+        user.index(tag)
+        for tag in (
+            "<preferences>",
+            "<handover_notes>",
+            "<recent_context>",
+            "<conversation_summary>",
+            "Retrieved context:",
+        )
+    ]
+    assert order == sorted(order)
+    assert "Advisory only" in user and "- Z3 floods in heavy rain" in user
+
+
+class ToolLLMService(FakeLLMService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tools: list = []
+
+    def generate_with_tools(self, system_prompt, user_message, tools, history=None):
+        self.tools = list(tools)
+        return self.generate(system_prompt, user_message, history)
+
+
+def test_tools_are_offered_to_the_model_only_when_given(monkeypatch) -> None:
+    from service.llm_service import Tool
+
+    monkeypatch.setattr(
+        rag,
+        "retrieve",
+        lambda **kwargs: [{"chunk_id": "doc#1", "content": "Policy."}],
+    )
+    tool = Tool("propose", "Propose.", {"type": "object"}, lambda args: "ok")
+    llm = ToolLLMService()
+    RAGService(FakeEmbeddingService(), llm).answer_question("set it", tools=[tool])
+    assert llm.tools == [tool]
+    plain = ToolLLMService()
+    RAGService(FakeEmbeddingService(), plain).answer_question("why?")
+    assert plain.tools == [] and len(plain.messages) == 1
+
+
+def test_providers_without_tool_support_answer_without_tools() -> None:
+    from service.llm_service import Tool
+
+    llm = FakeLLMService()
+    tool = Tool("propose", "Propose.", {"type": "object"}, lambda args: "ok")
+    assert llm.generate_with_tools("system", "question", [tool]) == "answer"
+    assert tool.schema() == {
+        "type": "function",
+        "function": {
+            "name": "propose",
+            "description": "Propose.",
+            "parameters": {"type": "object"},
+        },
+    }

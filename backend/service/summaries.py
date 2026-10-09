@@ -5,13 +5,14 @@ the last message folded in) change. Two triggers fold messages:
 
 - After an answer: when the raw messages (those after `summary_covers_to`)
   exceed the count or size limit, everything except the recent window is folded.
-- Idle: a scheduled job folds every message of chats whose last message is
+- Idle: the CLI cron job folds every message of chats whose last message is
   older than the idle time, so a complete summary exists once a chat goes quiet.
 """
 
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 
 import requests
 import structlog
@@ -23,7 +24,6 @@ from constants import (
     DEMO_STORE_ID,
     SUMMARY_IDLE_MINUTES,
     SUMMARY_JOB_BATCH,
-    SUMMARY_JOB_INTERVAL_SECONDS,
     SUMMARY_MAX_RAW_MESSAGES,
     SUMMARY_MAX_RAW_TOKENS,
     SUMMARY_RECENT_MESSAGES,
@@ -32,11 +32,11 @@ from database.models import Conversation
 from queries.conversations import (
     idle_unsummarized,
     latest_conversation,
+    resume_conversation,
     save_summary,
 )
 from service.factory import create_llm_service
 from service.scenarios import TIMEZONE
-from service.scheduler import IntervalJob
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -130,12 +130,47 @@ class SummaryService:
         )
         return saved
 
-    def after_answer(self, store_id: str, manager_id: str) -> bool:
+    def after_answer(
+        self,
+        store_id: str,
+        manager_id: str,
+        conversation_id: str | None = None,
+    ) -> bool:
         """Fold older messages of the open chat if it exceeds a limit."""
-        conversation = latest_conversation(store_id, manager_id, self.engine)
+        conversation = (
+            resume_conversation(
+                UUID(conversation_id),
+                store_id,
+                manager_id,
+                self.engine,
+            )
+            if conversation_id
+            else latest_conversation(store_id, manager_id, self.engine)
+        )
         if conversation is None or not needs_folding(conversation):
             return False
         return self.fold(conversation, keep_recent=SUMMARY_RECENT_MESSAGES)
+
+    def summarize_now(
+        self,
+        store_id: str,
+        manager_id: str,
+        conversation_id: str | None = None,
+    ) -> bool:
+        """Fold every message of the open chat, recent ones included, on request."""
+        conversation = (
+            resume_conversation(
+                UUID(conversation_id),
+                store_id,
+                manager_id,
+                self.engine,
+            )
+            if conversation_id
+            else latest_conversation(store_id, manager_id, self.engine)
+        )
+        if conversation is None:
+            return False
+        return self.fold(conversation, keep_recent=0)
 
     def summarize_idle(self, now: datetime | None = None) -> int:
         """Summarize chats idle for the idle time in full; returns how many."""
@@ -174,15 +209,17 @@ def summary_service() -> SummaryService:
     return SummaryService(summarize=_summarize)
 
 
-def summarize_latest_conversation() -> bool:
+def summarize_latest_conversation(
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> bool:
     """UI entry point: fold the open chat after an answer if it is over a limit."""
-    return summary_service().after_answer(DEMO_STORE_ID, DEMO_MANAGER_ID)
+    return summary_service().after_answer(DEMO_STORE_ID, manager_id, conversation_id)
 
 
-def idle_summary_job() -> IntervalJob:
-    """Every few minutes, summarize chats that have gone idle."""
-    return IntervalJob(
-        "idle-conversation-summaries",
-        SUMMARY_JOB_INTERVAL_SECONDS,
-        lambda: summary_service().summarize_idle(),
-    )
+def summarize_open_conversation(
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> bool:
+    """UI entry point: bring the open chat's summary up to its latest message."""
+    return summary_service().summarize_now(DEMO_STORE_ID, manager_id, conversation_id)

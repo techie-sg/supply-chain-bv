@@ -48,13 +48,23 @@ class FakeStore:
             {"id": row.id, "first_question": row.messages[0]["what"]}
             for row in reversed(self.rows)
             if row.messages
+            and row.store_id == store_id
+            and row.manager_id == manager_id
         ][:limit]
 
     def resume(self, conversation_id, store_id, manager_id, engine=None):
-        row = next((row for row in self.rows if row.id == conversation_id), None)
+        row = next(
+            (
+                row
+                for row in self.rows
+                if row.id == conversation_id
+                and row.store_id == store_id
+                and row.manager_id == manager_id
+            ),
+            None,
+        )
         if row is None:
             raise LookupError(conversation_id)
-        self.touch(row)
         return row
 
 
@@ -64,6 +74,9 @@ def store(monkeypatch) -> FakeStore:
     monkeypatch.setattr(conversations, "latest_conversation", fake.latest)
     monkeypatch.setattr(conversations, "start_conversation", fake.start)
     monkeypatch.setattr(conversations, "append_message", fake.append)
+    # Keep tests off any real database: no handover notes.
+    monkeypatch.setattr(conversations, "handover_block", lambda store_id: None)
+    monkeypatch.setattr(conversations, "memory_block", lambda manager_id: None)
     monkeypatch.setattr(conversations, "list_conversations", fake.list)
     monkeypatch.setattr(conversations, "resume_conversation", fake.resume)
     return fake
@@ -159,12 +172,22 @@ def no_scenario_loaded(monkeypatch) -> None:
 def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> None:
     seen = []
 
-    def answer(question, *, history, preferences, summary=None):
+    def answer(
+        question,
+        *,
+        history,
+        preferences,
+        summary=None,
+        handover=None,
+        memory=None,
+        tools=(),
+    ):
         seen.append(preferences)
+        assert [tool.name for tool in tools] == ["propose_setting_change"]
         return "reply"
 
     monkeypatch.setattr(conversations, "answer_question", answer)
-    assert conversations.ask_question("Hello") == "reply"
+    assert conversations.ask_question("Hello") == ("reply", [])
     assert conversations.conversation_history()[0]["what"] == "Hello"
     conversations.start_new_conversation()
     assert conversations.conversation_history() == []
@@ -197,6 +220,10 @@ def test_resumed_conversation_is_continued_by_the_next_question(store) -> None:
         ("manager", "Rain plan?"),
         ("assistant", "reply to Rain plan?"),
     ]
+    assert [item["first_question"] for item in chat.past()] == [
+        "Batching?",
+        "Rain plan?",
+    ]
     chat.ask("And now?")
     assert seen[-1][0]["content"] == "Rain plan?"
     assert [m["what"] for m in store.rows[-1].messages][-1] == "reply to And now?"
@@ -208,11 +235,36 @@ def test_resuming_an_unknown_conversation_fails(store) -> None:
         service(lambda question, *, history: "unused").resume(uuid4())
 
 
+def test_explicit_chat_selection_survives_newer_activity_in_another_chat(store):
+    first = service(lambda question, **kwargs: "First answer")
+    first.ask("Rain plan?")
+    first_id = first.current_id()
+    second = service(lambda question, **kwargs: "Second answer")
+    second.start_new()
+    second.ask("Backlog plan?")
+    second_id = second.current_id()
+    selected = conversations.ConversationService(
+        "DS-1",
+        "karthik",
+        answer=lambda question, **kwargs: "Rain follow-up",
+        conversation_id=str(first_id),
+    )
+    assert selected.history()[0]["what"] == "Rain plan?"
+    assert selected.past()[0]["id"] == second_id
+    assert selected.current_id() == first_id
+    selected.ask("What next?")
+    assert selected.past()[0]["id"] == first_id
+    assert second.history()[0]["what"] == "Backlog plan?"
+    assert len(second.history()) == 2
+
+
 def test_ui_browse_entry_points(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None: "reply",
+        lambda question, *, history, preferences, summary=None, handover=None, memory=None, tools=(): (
+            "reply"
+        ),
     )
     conversations.ask_question("Earlier")
     earlier_id = conversations.current_conversation_id()
@@ -310,7 +362,7 @@ def test_ui_title_entry_point_uses_the_configured_model(store, monkeypatch) -> N
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None: (
+        lambda question, *, history, preferences, summary=None, handover=None, memory=None, tools=(): (
             "Use the standby rider."
         ),
     )
@@ -401,3 +453,102 @@ def test_the_reply_is_stored_with_its_trace_and_returned_to_the_ui(store) -> Non
     assert chat.ask_traced("Queue?") == ("tool reply", trace)
     assert chat.history()[-1]["trace"] == trace
     assert "trace" not in chat.history()[0]
+
+
+def test_summary_view_reports_coverage(store) -> None:
+    chat = service(lambda question, *, history, summary=None: "reply")
+    assert chat.summary_view() is None
+    chat.start_new()
+    assert chat.summary_view() is None
+    for index in range(5):
+        chat.ask(f"q{index}")
+    assert chat.summary_view() == {
+        "summary": None,
+        "covered": 0,
+        "total": 10,
+        "summarized_at": None,
+    }
+    row = store.rows[-1]
+    when = datetime(2026, 10, 7, 19, 42, tzinfo=conversations.TIMEZONE)
+    row.summary, row.summary_covers_to, row.summarized_at = "- Rain plan.", 5, when
+    assert chat.summary_view() == {
+        "summary": "- Rain plan.",
+        "covered": 6,
+        "total": 10,
+        "summarized_at": when,
+    }
+
+
+def test_ui_summary_entry_point_uses_the_open_chat(store, monkeypatch) -> None:
+    monkeypatch.setattr(
+        conversations,
+        "answer_question",
+        lambda question, *, history, preferences, summary=None, handover=None, memory=None, tools=(): (
+            "reply"
+        ),
+    )
+    conversations.ask_question("Rain plan?")
+    view = conversations.conversation_summary()
+    assert view is not None and view["summary"] is None and view["total"] == 2
+    store.rows[-1].summary, store.rows[-1].summary_covers_to = "- Rain plan.", 1
+    view = conversations.conversation_summary()
+    assert view is not None and view["covered"] == 2
+
+
+def test_note_is_stored_as_an_assistant_message_in_the_open_chat(store) -> None:
+    chat = service(lambda question, history: "reply")
+    assert chat.note("Saved.") is None
+    chat.ask("Hello")
+    note = chat.note("Saved. SLA dip: on, below 85%.")
+    assert note is not None and note["who"] == "assistant"
+    assert [message["what"] for message in chat.history()] == [
+        "Hello",
+        "reply",
+        "Saved. SLA dip: on, below 85%.",
+    ]
+
+
+def test_ui_ask_returns_the_changes_the_assistant_proposed(
+    store,
+    preference_store,
+    monkeypatch,
+) -> None:
+    def answer(
+        question,
+        *,
+        history,
+        preferences,
+        summary=None,
+        handover=None,
+        memory=None,
+        tools=(),
+    ):
+        [tool] = tools
+        tool.run({"code": "sla_dip_alert", "action": "set", "value": 85})
+        return "Proposed: SLA dip below 85%. Press Confirm to save it."
+
+    monkeypatch.setattr(conversations, "answer_question", answer)
+    reply, [change] = conversations.ask_question("Alert me if SLA drops below 85")
+    assert reply.startswith("Proposed")
+    assert (change.code, change.value) == ("sla_dip_alert", 85)
+    # Nothing is saved until the manager confirms.
+    assert preference_store.rows == []
+    conversations.add_note("Saved.")
+    assert conversations.conversation_history()[-1]["what"] == "Saved."
+
+
+def test_selected_chat_cannot_be_read_or_written_by_another_manager(store):
+    owner = service(lambda question, **kwargs: "Answer")
+    owner.ask("Rain plan?")
+    conversation_id = str(owner.current_id())
+    other = conversations.ConversationService(
+        "DS-1",
+        "other-manager",
+        answer=lambda question, **kwargs: "Wrong answer",
+        conversation_id=conversation_id,
+    )
+    with pytest.raises(LookupError):
+        other.history()
+    with pytest.raises(LookupError):
+        other.ask("Follow-up")
+    assert len(owner.history()) == 2

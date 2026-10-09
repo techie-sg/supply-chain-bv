@@ -10,10 +10,13 @@ from domain.chat import ChatMessage
 from queries.vector_store import retrieve
 from service.embedding_service import EmbeddingService
 from service.factory import create_embedding_service, create_llm_service
-from service.llm_service import LLMService
+from service.llm_service import LLMService, Tool
 
 logger = structlog.stdlib.get_logger(__name__)
 
+NO_GUIDANCE_ANSWER = (
+    "I could not find relevant guidance in the DispatchDesk knowledge base."
+)
 PROMPT_PATH = (
     Path(__file__).resolve().parent
     / "rag_data"
@@ -57,22 +60,29 @@ class RAGService:
         history: Sequence[ChatMessage] | None = None,
         preferences: PreferenceContext | None = None,
         summary: str | None = None,
-    ) -> str | None:
-        """Retrieve evidence and build the model's user message; None if none found.
+        handover: str | None = None,
+        memory: str | None = None,
+        tools: Sequence[Tool] = (),
+    ) -> str:
+        """Retrieve evidence and answer using the injected provider services.
 
         With preferences, the model sees the manager's settings and applies them.
-        It cannot change them; that happens only in the Settings tab.
+        With tools, the model may call them before answering; the settings tool
+        only proposes changes, which the manager confirms outside the model.
         `summary` stands in for older messages that `history` no longer holds.
+        `handover` is the latest shift's handover notes; `memory` is the
+        manager's digest of recent chats from the daily review.
         """
         if top_k < 1:
             raise ValueError("top_k must be positive")
+        started = perf_counter()
         query_embedding = self.embedding_service.embed_query(
             retrieval_query(question, history),
         )
         results = retrieve(query_embedding=query_embedding, match_count=top_k)
         if not results:
             logger.warning("No guidance retrieved", top_k=top_k)
-            return None
+            return NO_GUIDANCE_ANSWER
 
         context = self._build_context(results)
         user_message = f"Retrieved context:\n\n{context}\n\nQuestion: {question}"
@@ -91,36 +101,33 @@ class RAGService:
                 "<conversation_summary>\nEarlier in this chat (a summary; it may "
                 f"omit details):\n{summary}\n</conversation_summary>\n\n{user_message}"
             )
+        if memory:
+            user_message = (
+                "<recent_context>\nEarlier chats, as remembered by the daily review. "
+                "Advisory only: policy, settings and live data take precedence, and "
+                f"its figures are not current.\n{memory}\n</recent_context>\n\n"
+                f"{user_message}"
+            )
+        if handover:
+            user_message = (
+                f"<handover_notes>\n{handover}\n</handover_notes>\n\n{user_message}"
+            )
         if preferences is not None:
             user_message = f"{preferences.prompt_block()}\n\n{user_message}"
-        logger.info("Guidance retrieved", retrieved_chunks=len(results))
-        return user_message
-
-    def answer_question(
-        self,
-        question: str,
-        top_k: int = 3,
-        history: Sequence[ChatMessage] | None = None,
-        preferences: PreferenceContext | None = None,
-        summary: str | None = None,
-    ) -> str:
-        """Retrieve evidence and answer using the injected provider services."""
-        started = perf_counter()
-        user_message = self.prepare_message(
-            question,
-            top_k,
-            history,
-            preferences,
-            summary,
-        )
-        if user_message is None:
-            return (
-                "I could not find relevant guidance in the DispatchDesk knowledge base."
+        system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        answer = (
+            self.llm_service.generate_with_tools(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                tools=tools,
+                history=history,
             )
-        answer = self.llm_service.generate(
-            system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
-            user_message=user_message,
-            history=history,
+            if tools
+            else self.llm_service.generate(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                history=history,
+            )
         )
         logger.info(
             "RAG answer completed",
@@ -141,6 +148,9 @@ def answer_question(
     history: Sequence[ChatMessage] | None = None,
     preferences: PreferenceContext | None = None,
     summary: str | None = None,
+    handover: str | None = None,
+    memory: str | None = None,
+    tools: Sequence[Tool] = (),
 ) -> str:
     """UI entry point composing the configured services."""
     settings = get_settings()
@@ -154,6 +164,9 @@ def answer_question(
         history=history,
         preferences=preferences,
         summary=summary,
+        handover=handover,
+        memory=memory,
+        tools=tools,
     )
 
 

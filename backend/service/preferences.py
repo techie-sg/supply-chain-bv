@@ -222,7 +222,7 @@ class PreferenceService:
         for code, definition in self._definitions().items():
             row = None if definition.locked else rows.get(code)
             if row is None:
-                settings.append(_default(definition))
+                settings.append(default_setting(definition))
             else:
                 settings.append(
                     EffectiveSetting(
@@ -237,7 +237,8 @@ class PreferenceService:
                 )
         return settings
 
-    def _current(self, code: str) -> EffectiveSetting:
+    def current(self, code: str) -> EffectiveSetting:
+        """The setting that applies now for one catalogue item."""
         for setting in self.effective():
             if setting.definition.code == code:
                 return setting
@@ -251,7 +252,7 @@ class PreferenceService:
         options: dict[str, Any] | None = None,
     ) -> str | None:
         """Validate and store a value exactly as given; None if nothing changed."""
-        current = self._current(code)
+        current = self.current(code)
         definition = current.definition
         enabled, value, stored_options = validate(definition, enabled, value, options)
         current_options = (
@@ -305,12 +306,12 @@ class PreferenceService:
 
     def reset(self, code: str) -> str:
         """Return an item to its default by marking the manager's value removed."""
-        definition = self._current(code).definition
+        definition = self.current(code).definition
         if definition.locked:
             raise PreferenceError(
                 f"{definition.name} is store policy and can't be changed.",
             )
-        default = _default(definition)
+        default = default_setting(definition)
         if not remove_preference(
             self.store_id,
             self.manager_id,
@@ -326,7 +327,8 @@ class PreferenceService:
         lines = [
             "<preferences>",
             (
-                "The manager's current settings, changed only in the Settings tab. "
+                "The manager's current settings. They change only in the Settings "
+                "tab or when the manager confirms a change proposed in chat. "
                 "'customized' means the manager set it; otherwise it is the default."
             ),
         ]
@@ -341,7 +343,7 @@ class PreferenceService:
         return "\n".join(lines)
 
 
-def _default(definition: PreferenceDefinition) -> EffectiveSetting:
+def default_setting(definition: PreferenceDefinition) -> EffectiveSetting:
     return EffectiveSetting(
         definition,
         definition.default_enabled,
@@ -351,6 +353,6 @@ def _default(definition: PreferenceDefinition) -> EffectiveSetting:
     )
 
 
-def demo_preferences() -> PreferenceService:
-    """The demo manager's settings, used by the UI and the assistant."""
-    return PreferenceService(DEMO_STORE_ID, DEMO_MANAGER_ID)
+def manager_preferences(manager_id: str = DEMO_MANAGER_ID) -> PreferenceService:
+    """One manager's settings at the demo store, used by the UI and the assistant."""
+    return PreferenceService(DEMO_STORE_ID, manager_id)

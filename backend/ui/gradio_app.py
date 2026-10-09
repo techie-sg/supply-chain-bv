@@ -14,16 +14,22 @@ import requests
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
-from logging_config import configure_logging
+from constants import DEMO_MANAGER_ID
+from logging_config import configure_logging, configure_uvicorn_logging
 from service.conversations import (
+    add_note,
+    ask_question,
+    conversation_details,
     ask_question_traced,
     conversation_history,
+    conversation_summary,
     current_conversation_id,
     past_conversations,
     resume_past_conversation,
     start_new_conversation,
     title_latest_conversation,
 )
+from service.managers import ShiftManager, choose_manager, store_managers
 from service.scenarios import (
     TIMEZONE,
     current_scenario,
@@ -31,70 +37,74 @@ from service.scenarios import (
     scenario_details,
     scenario_names,
 )
-from service.summaries import idle_summary_job, summarize_latest_conversation
+from service.setting_changes import confirm_proposals
+from service.summaries import (
+    summarize_latest_conversation,
+    summarize_open_conversation,
+)
 from ui import settings
+from ui import suggestions as suggestions_ui
 
 logger = structlog.stdlib.get_logger(__name__)
 CSS_PATH = Path(__file__).with_name("gradio_app.css")
 THEME = gr.themes.Base(
-    primary_hue="indigo",
-    secondary_hue="violet",
-    neutral_hue="slate",
+    primary_hue="rose",
+    secondary_hue="rose",
+    neutral_hue="gray",
     # Gradio 6.29 compares the first font with built-in Font objects at launch.
     font=[gr.themes.GoogleFont("DM Sans", weights=[400, 500, 600, 700]), "sans-serif"],
 ).set(
-    body_background_fill="#18181a",
-    body_background_fill_dark="#18181a",
-    body_text_color="#eeedf0",
-    body_text_color_dark="#eeedf0",
-    body_text_color_subdued="#c0bec7",
-    body_text_color_subdued_dark="#c0bec7",
-    block_background_fill="#232325",
-    block_background_fill_dark="#232325",
-    block_border_color="#363539",
-    block_border_color_dark="#363539",
+    color_accent="#87364b",
+    color_accent_soft="#34272c",
+    color_accent_soft_dark="#34272c",
+    body_background_fill="#191919",
+    body_background_fill_dark="#191919",
+    body_text_color="#f2eee9",
+    body_text_color_dark="#f2eee9",
+    body_text_color_subdued="#bcb7b1",
+    body_text_color_subdued_dark="#bcb7b1",
+    block_background_fill="#222222",
+    block_background_fill_dark="#222222",
+    block_border_color="#3d3a38",
+    block_border_color_dark="#3d3a38",
     block_radius="12px",
     block_label_background_fill="transparent",
     block_label_background_fill_dark="transparent",
-    block_label_text_color="#c0bec7",
-    block_label_text_color_dark="#c0bec7",
-    input_background_fill="#232325",
-    input_background_fill_dark="#232325",
-    input_border_color="#3e3c43",
-    input_border_color_dark="#3e3c43",
-    button_primary_background_fill="#b4a3de",
-    button_primary_background_fill_dark="#b4a3de",
-    button_primary_background_fill_hover="#c5b6e9",
-    button_primary_background_fill_hover_dark="#c5b6e9",
-    button_primary_text_color="#211c2c",
-    button_primary_text_color_dark="#211c2c",
-    button_primary_border_color="#b4a3de",
-    button_primary_border_color_dark="#b4a3de",
-    button_secondary_background_fill="#232325",
-    button_secondary_background_fill_dark="#232325",
-    button_secondary_background_fill_hover="#302c38",
-    button_secondary_background_fill_hover_dark="#302c38",
-    button_secondary_text_color="#ded9e7",
-    button_secondary_text_color_dark="#ded9e7",
+    block_label_text_color="#bcb7b1",
+    block_label_text_color_dark="#bcb7b1",
+    input_background_fill="#222222",
+    input_background_fill_dark="#222222",
+    input_border_color="#3d3a38",
+    input_border_color_dark="#3d3a38",
+    input_border_color_focus="#79505c",
+    input_border_color_focus_dark="#79505c",
+    link_text_color="#d3a3af",
+    link_text_color_dark="#d3a3af",
+    link_text_color_hover="#e7bcc7",
+    link_text_color_hover_dark="#e7bcc7",
+    button_primary_background_fill="#87364b",
+    button_primary_background_fill_dark="#87364b",
+    button_primary_background_fill_hover="#9b4058",
+    button_primary_background_fill_hover_dark="#9b4058",
+    button_primary_text_color="#fbf7f3",
+    button_primary_text_color_dark="#fbf7f3",
+    button_primary_border_color="#87364b",
+    button_primary_border_color_dark="#87364b",
+    button_primary_border_color_hover="#9b4058",
+    button_primary_border_color_hover_dark="#9b4058",
+    button_secondary_background_fill="#282828",
+    button_secondary_background_fill_dark="#282828",
+    button_secondary_background_fill_hover="#2e2e2e",
+    button_secondary_background_fill_hover_dark="#2e2e2e",
+    button_secondary_text_color="#f2eee9",
+    button_secondary_text_color_dark="#f2eee9",
+    button_secondary_border_color="#3d3a38",
+    button_secondary_border_color_dark="#3d3a38",
+    button_secondary_border_color_hover="#79505c",
+    button_secondary_border_color_hover_dark="#79505c",
     button_border_width="1px",
     button_large_radius="10px",
 )
-
-
-def _icon(name: str) -> str:
-    """Small, local line icons; no external font or image dependency."""
-    paths = {
-        "box": '<path d="m12 3 9 5v8l-9 5-9-5V8l9-5Z"/><path d="m3 8 9 5 9-5M12 13v8M7.5 5.5l9 5"/>',
-        "riders": '<circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 4a3 3 0 0 1 0 6M21 21v-3a6 6 0 0 0-4-5.7"/>',
-        "clock": '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-        "zones": '<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6ZM9 3v15M15 6v15"/>',
-        "spark": '<path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4L12 3Z"/>',
-    }
-    return (
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-        'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" '
-        f'aria-hidden="true">{paths[name]}</svg>'
-    )
 
 
 CHAT_PLACEHOLDER = """
@@ -144,6 +154,57 @@ FINISH_CHAT_JS = """
     {__type__: 'update', interactive: true},
     {__type__: 'update', interactive: true}
 ]
+"""
+
+
+SUMMARY_POPOVER_JS = """
+() => {
+    const panel = document.querySelector('#chat-summary-panel');
+    const dock = document.querySelector('#composer-dock');
+    if (!panel || !dock || panel.dataset.popoverReady) return;
+    panel.dataset.popoverReady = 'true';
+    panel.popover = 'auto';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-labelledby', 'chat-summary-title');
+    panel.tabIndex = -1;
+    const prepare = (button) => {
+        if (!button) return;
+        button.setAttribute('popovertarget', panel.id);
+        button.setAttribute('aria-controls', panel.id);
+        button.setAttribute('aria-haspopup', 'dialog');
+        button.title = 'Conversation summary';
+        button.setAttribute('aria-expanded', String(panel.matches(':popover-open')));
+    };
+    const position = () => {
+        const bounds = dock.getBoundingClientRect();
+        const width = Math.min(560, innerWidth - 24);
+        panel.style.left = `${Math.max(12, Math.min(bounds.right - width, innerWidth - width - 12))}px`;
+        panel.style.bottom = `${Math.max(12, innerHeight - bounds.top + 12)}px`;
+    };
+    prepare(document.querySelector('#summary-trigger'));
+    for (const event of ['focusin', 'pointerover', 'click']) {
+        document.addEventListener(event, (e) => {
+            const button = e.target.closest('#summary-trigger');
+            if (!button) return;
+            prepare(button);
+            position();
+        }, true);
+    }
+    panel.addEventListener('toggle', () => {
+        prepare(document.querySelector('#summary-trigger'));
+        if (panel.matches(':popover-open')) panel.focus({preventScroll: true});
+    });
+    const reposition = () => {
+        if (panel.matches(':popover-open')) position();
+    };
+    new ResizeObserver(reposition).observe(dock);
+    window.addEventListener('resize', reposition);
+}
+"""
+
+
+CLOSE_SUMMARY_JS = """
+() => document.querySelector('#chat-summary-panel:popover-open')?.hidePopover()
 """
 
 
@@ -283,6 +344,7 @@ def prepare_scenario(
 
 def load_selected_scenario(
     key: str,
+    manager_id: str = DEMO_MANAGER_ID,
 ) -> tuple[dict[str, Any], list[dict], str, str, dict, dict, dict, dict]:
     """Load through the existing service, starting a new conversation on success."""
     try:
@@ -293,7 +355,7 @@ def load_selected_scenario(
             "Scenario could not be loaded. Check the database connection and migrations.",
         ) from exc
     try:
-        start_new_conversation()
+        start_new_conversation(manager_id=manager_id)
     except (SQLAlchemyError, RuntimeError):
         # The scenario is loaded; the next question continues the previous chat.
         logger.exception("Could not start a conversation after loading %s", key)
@@ -395,32 +457,40 @@ def to_display(messages: Sequence[dict[str, Any]]) -> list[dict]:
         for message in messages
     ]
 
-
 def _trace_block(trace: dict[str, Any] | None) -> str:
     html = _trace_html(trace)
     return f"\n\n{html}" if html else ""
 
 
-def restore_chat() -> list[dict]:
+def restore_chat(manager_id: str = DEMO_MANAGER_ID) -> list[dict]:
     """Show the latest stored conversation when the page loads."""
     try:
-        return to_display(conversation_history())
+        return to_display(conversation_history(manager_id=manager_id))
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not restore the conversation", exc_info=True)
         return []
 
 
 def _conversation_title(item: dict[str, Any]) -> str:
-    """The chat's title, or its first question until titled; one short line."""
-    label = " ".join((item.get("title") or item["first_question"] or "").split())
-    return label if len(label) <= 40 else label[:39] + "…"
+    """Keep the full title for hover; CSS clips it to one line in the list."""
+    return " ".join((item.get("title") or item["first_question"] or "").split())
 
 
-def conversation_choices() -> dict:
-    """Sidebar list of past chats, highlighting the open one; empty if unavailable."""
+def _chat_scope(manager_id: str, conversation_id: str | None) -> dict[str, Any]:
+    return {
+        "manager_id": manager_id,
+        **({"conversation_id": conversation_id} if conversation_id else {}),
+    }
+
+
+def conversation_choices(
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> dict:
+    """Sidebar list of the manager's past chats, highlighting the open one."""
     try:
-        items = past_conversations()
-        current = current_conversation_id()
+        items = past_conversations(manager_id=manager_id)
+        current = conversation_id or current_conversation_id(manager_id=manager_id)
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not list past conversations", exc_info=True)
         items, current = [], None
@@ -431,57 +501,170 @@ def conversation_choices() -> dict:
     )
 
 
-def open_conversation(conversation_id: str | None) -> tuple[list[dict], str]:
+def open_conversation(
+    conversation_id: str | None,
+    manager_id: str = DEMO_MANAGER_ID,
+) -> tuple[list[dict], str, str, dict]:
     """Show a past conversation and make it the one new questions continue."""
     if not conversation_id:
-        return gr.skip(), gr.skip()
+        return gr.skip(), gr.skip(), gr.skip(), gr.skip()
     try:
-        messages = resume_past_conversation(conversation_id)
+        messages = resume_past_conversation(conversation_id, manager_id=manager_id)
     except (SQLAlchemyError, RuntimeError, LookupError, ValueError) as exc:
         logger.exception("Could not open conversation %s", conversation_id)
         raise gr.Error("Could not open that conversation. Please try again.") from exc
-    return to_display(messages), ""
+    return to_display(messages), "", conversation_id, gr.update(selected="assistant")
 
 
-def title_conversation() -> dict:
+def restore_latest_conversation(manager_id: str) -> tuple[list[dict], str | None]:
+    history = restore_chat(manager_id)
+    try:
+        return history, current_conversation_id(manager_id=manager_id)
+    except (SQLAlchemyError, RuntimeError):
+        return history, None
+
+
+def restore_conversation(
+    manager_id: str,
+    request: gr.Request,
+) -> tuple[list[dict], str | None]:
+    conversation_id = request.query_params.get("chat")
+    if conversation_id:
+        history, _, _, _ = open_conversation(conversation_id, manager_id)
+        return history, conversation_id
+    return restore_latest_conversation(manager_id)
+
+
+def conversation_location(
+    manager_id: str,
+    conversation_id: str | None,
+) -> dict[str, str | None]:
+    try:
+        item = (
+            conversation_details(conversation_id, manager_id=manager_id)
+            if conversation_id
+            else {}
+        )
+    except (SQLAlchemyError, RuntimeError, LookupError, ValueError):
+        logger.warning("Could not load the chat title", exc_info=True)
+        item = {}
+    return {"id": conversation_id, "title": item.get("title") or "New chat"}
+
+
+def title_conversation(
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> dict:
     """Title the open chat after its first answer, then refresh the sidebar."""
     try:
-        title_latest_conversation()
+        title_latest_conversation(**_chat_scope(manager_id, conversation_id))
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not title the conversation", exc_info=True)
-    return conversation_choices()
+    return conversation_choices(**_chat_scope(manager_id, conversation_id))
 
 
-def summarize_conversation() -> None:
+SUMMARY_NOTE = (
+    '\n\n<p class="summary-note">Your full conversation stays in the chat.</p>'
+)
+
+
+def summary_card(
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> tuple[dict, str, str, dict]:
+    """Show the summary trigger for a saved chat and refresh its popover content."""
+    hidden = (gr.update(visible=False), "", "", gr.skip())
+    try:
+        view = conversation_summary(**_chat_scope(manager_id, conversation_id))
+    except (SQLAlchemyError, RuntimeError):
+        logger.warning("Could not load the conversation summary", exc_info=True)
+        return hidden
+    if view is None:
+        return hidden
+    if view["summary"] is None:
+        return (
+            gr.update(visible=True),
+            f"{view['total']} messages · No summary yet",
+            "Bring the key decisions and details from this conversation into one place.",
+            gr.update(value="Create summary"),
+        )
+    status = f"{view['covered']} of {view['total']} messages"
+    if view["summarized_at"] is not None:
+        status += (
+            f" · Updated {_time_label(view['summarized_at'], datetime.now(TIMEZONE))}"
+        )
+    return (
+        gr.update(visible=True),
+        status,
+        view["summary"] + SUMMARY_NOTE,
+        gr.update(value="Update summary"),
+    )
+
+
+def summarize_now(
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> tuple[dict, str, str, dict]:
+    """Summarize the open chat and refresh the content inside its open popover."""
+    try:
+        updated = summarize_open_conversation(
+            **_chat_scope(manager_id, conversation_id),
+        )
+    except (
+        SQLAlchemyError,
+        RuntimeError,
+        ValueError,
+        requests.RequestException,
+    ) as exc:
+        logger.exception("Could not summarize the conversation on request")
+        raise gr.Error("Could not summarize this chat. Please try again.") from exc
+    if not updated:
+        gr.Info("The summary already covers every message.")
+    return summary_card(**_chat_scope(manager_id, conversation_id))
+
+
+def summarize_conversation(
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> None:
     """After an answer, fold older messages into the summary if over a limit."""
     try:
-        summarize_latest_conversation()
+        summarize_latest_conversation(**_chat_scope(manager_id, conversation_id))
     except (SQLAlchemyError, RuntimeError, ValueError, requests.RequestException):
         logger.warning("Could not summarize the conversation", exc_info=True)
 
 
-def clear_chat() -> tuple[list[dict], str]:
+def clear_chat(manager_id: str = DEMO_MANAGER_ID) -> tuple[list[dict], str, str, dict]:
     """Start a new stored conversation; the previous one is kept."""
     try:
-        start_new_conversation()
+        conversation_id = start_new_conversation(manager_id=manager_id)
     except (SQLAlchemyError, RuntimeError) as exc:
         logger.exception("Could not start a new conversation")
         raise gr.Error("Could not start a new chat. Please try again.") from exc
-    return [], ""
+    return [], "", conversation_id, gr.update(selected="assistant")
 
 
 def chat(
     message: str,
     history: list[dict] | None,
-) -> tuple[list[dict], str]:
-    """Answer from stored history; keep the draft and display intact on failure."""
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> tuple[list[dict], str, Any]:
+    """Answer from stored history; keep the draft and display intact on failure.
+
+    The third value is the setting changes the answer proposed, for the
+    confirmation card; it is left as it was when the answer proposed none.
+    """
     history = history or []
     if not message.strip():
-        return history, ""
+        return history, "", gr.skip()
     request_id = uuid4().hex
     try:
         with structlog.contextvars.bound_contextvars(request_id=request_id):
-            answer, trace = ask_question_traced(message)
+            answer, proposals = ask_question(
+                message,
+                **_chat_scope(manager_id, conversation_id),
+            )
     except (
         requests.RequestException,
         SQLAlchemyError,
@@ -494,38 +677,191 @@ def chat(
             "The assistant is unavailable right now. Please try again.",
         ) from exc
     now = datetime.now(TIMEZONE)
-    return history + [
-        {"role": "user", "content": _with_time(message, now, now)},
-        {
-            "role": "assistant",
-            "content": _with_time(answer + _trace_block(trace), now, now),
-        },
-    ], ""
+    pending = [change.to_state() for change in proposals] if proposals else gr.skip()
+    return (
+        history
+        + [
+            {"role": "user", "content": _with_time(message, now, now)},
+            {"role": "assistant", "content": _with_time(answer, now, now)},
+        ],
+        "",
+        pending,
+    )
 
 
 def respond_to_pending(
     message: str,
     history: list[dict] | None,
-) -> Iterator[tuple[list[dict], str]]:
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> Iterator[tuple[list[dict], str, Any]]:
     """Answer the message already displayed by the browser without duplicating it."""
     history = history or []
     if not message.strip():
-        yield history, ""
+        yield history, "", gr.skip()
         return
     previous = (
         history[:-1] if history and history[-1].get("role") == "user" else history
     )
     try:
-        yield chat(message, previous)
+        yield chat(message, previous, manager_id, conversation_id)
     except gr.Error:
-        yield previous, message
+        yield previous, message, gr.skip()
         raise
+
+
+def pending_card(pending: list[dict] | None) -> tuple[str, dict]:
+    """The proposed setting changes, old to new, waiting for Confirm or Cancel."""
+    if not pending:
+        return "", gr.update(visible=False)
+    items = "".join(
+        f"<li><strong>{escape(change['name'])}</strong>"
+        f'<span class="change-from">{escape(change["before"])}</span>'
+        '<span class="change-arrow" aria-label="changes to">→</span>'
+        f'<span class="change-to">{escape(change["after"])}</span></li>'
+        for change in pending
+    )
+    title = (
+        "Proposed setting change"
+        if len(pending) == 1
+        else f"{len(pending)} proposed setting changes"
+    )
+    card = (
+        f'<div class="pending-card"><p class="pending-title">{title}'
+        "<span>Not saved until you confirm</span></p>"
+        f"<ul>{items}</ul></div>"
+    )
+    return card, gr.update(visible=True)
+
+
+def _with_note(
+    history: list[dict] | None,
+    text: str,
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> list[dict]:
+    """Store an assistant note in the manager's open chat and show it."""
+    now = datetime.now(TIMEZONE)
+    try:
+        stored = add_note(text, **_chat_scope(manager_id, conversation_id))
+    except (SQLAlchemyError, RuntimeError, LookupError):
+        logger.warning("Could not store the note in the conversation", exc_info=True)
+        stored = None
+    when = datetime.fromisoformat(stored["when"]) if stored else now
+    return (history or []) + [
+        {"role": "assistant", "content": _with_time(text, when, now)},
+    ]
+
+
+def confirm_pending(
+    pending: list[dict] | None,
+    history: list[dict] | None,
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> tuple[list[dict], list]:
+    """Save the proposed setting changes the manager confirmed."""
+    if not pending:
+        return history or [], []
+    try:
+        results = confirm_proposals(pending, manager_id=manager_id)
+    except (SQLAlchemyError, RuntimeError) as exc:
+        logger.exception("Could not save confirmed setting changes")
+        raise gr.Error("Could not save the settings. Please try again.") from exc
+    return _with_note(history, "\n\n".join(results), manager_id, conversation_id), []
+
+
+def cancel_pending(
+    pending: list[dict] | None,
+    history: list[dict] | None,
+    manager_id: str = DEMO_MANAGER_ID,
+    conversation_id: str | None = None,
+) -> tuple[list[dict], list]:
+    """Discard the proposed setting changes; nothing is saved."""
+    if not pending:
+        return history or [], []
+    names = ", ".join(change["name"] for change in pending)
+    return (
+        _with_note(
+            history,
+            f"Cancelled. Nothing was changed ({names}).",
+            manager_id,
+            conversation_id,
+        ),
+        [],
+    )
+
+
+def _manager_label(manager: ShiftManager) -> str:
+    return (
+        f"{manager.name}\n{manager.shift_name} shift · "
+        f"{manager.shift_start}–{manager.shift_end}"
+    )
+
+
+def manager_badge(manager: ShiftManager | None) -> str:
+    """Who is signed in to the workspace, and their shift."""
+    if manager is None:
+        return '<div class="manager-badge"><span>No manager available</span></div>'
+    return (
+        '<div class="manager-badge"><span>Manager</span>'
+        f"<strong>{escape(manager.name)}</strong>"
+        f'<em data-shift-id="{escape(manager.shift_id)}">'
+        f"{escape(manager.shift_name)} shift · {escape(manager.shift_start)}–"
+        f"{escape(manager.shift_end)}</em></div>"
+    )
+
+
+def _managers() -> list[ShiftManager]:
+    try:
+        return store_managers()
+    except (SQLAlchemyError, RuntimeError):
+        logger.warning("Could not list managers", exc_info=True)
+        return []
+
+
+def restore_manager(request: gr.Request) -> tuple[str, dict, str]:
+    """Pick the manager from the URL (?manager=), else the demo manager."""
+    managers = _managers()
+    manager = choose_manager(request.query_params.get("manager"), managers)
+    manager_id = manager.manager_id if manager else DEMO_MANAGER_ID
+    return (
+        manager_id,
+        gr.update(
+            choices=[(_manager_label(item), item.manager_id) for item in managers],
+            value=manager.manager_id if manager else None,
+        ),
+        manager_badge(manager),
+    )
+
+
+def select_manager(requested: str | None) -> tuple[str, str]:
+    """Switch the workspace to another manager of the store."""
+    managers = _managers()
+    manager = choose_manager(requested, managers)
+    if manager is None or manager.manager_id != requested:
+        raise gr.Error("That manager is not available. Please choose another.")
+    logger.info("Manager selected", manager_id=manager.manager_id)
+    return manager.manager_id, manager_badge(manager)
+
+
+# Reads the picker, not the manager state: state values never reach the browser.
+MANAGER_URL_JS = """
+(manager) => {
+    if (!manager) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set('manager', manager);
+    window.history.replaceState(null, '', url);
+}
+"""
 
 
 def _assistant_context(context: dict[str, Any] | None) -> str:
     """Identify the loaded scenario, independently of the demo preview."""
     if not context:
-        return '<div class="current-scenario"><span>Scenario unavailable</span></div>'
+        return (
+            '<div class="current-scenario"><span>Current scenario</span>'
+            "<strong>Not available</strong></div>"
+        )
     return (
         '<div class="current-scenario"><span>Current scenario</span>'
         f"<strong>{escape(context['title'])}</strong></div>"
@@ -534,6 +870,15 @@ def _assistant_context(context: dict[str, Any] | None) -> str:
 
 def open_settings() -> dict:
     return gr.update(selected="settings")
+
+
+def show_suggestions() -> tuple[dict, ...]:
+    """Select the Suggestions category and show its panel.
+
+    Runs after the Settings tab is selected: updates sent before the tab first
+    renders would be lost.
+    """
+    return (gr.update(value="suggestions"), *settings.show_category("suggestions"))
 
 
 def _restore_tab(request: gr.Request) -> dict:
@@ -549,9 +894,56 @@ async () => {
     );
     const view = tab?.dataset.tabId;
     if (!['assistant', 'settings', 'demo'].includes(view)) return;
+    const navigation = {assistant: 'new-chat', settings: 'edit-settings', demo: 'sidebar-demo'};
+    for (const [name, id] of Object.entries(navigation)) {
+        const button = document.getElementById(id);
+        if (name === view) button?.setAttribute('aria-current', 'page');
+        else button?.removeAttribute('aria-current');
+    }
     const url = new URL(window.location.href);
     url.searchParams.set('view', view);
     window.history.replaceState(null, '', url);
+    document.title = view === 'assistant'
+        ? (document.documentElement.dataset.chatTitle || 'DispatchDesk')
+        : `${view === 'settings' ? 'Settings' : 'Scenarios'} | DispatchDesk`;
+}
+"""
+
+
+CHAT_URL_JS = """
+(chat) => {
+    if (!chat) return;
+    const url = new URL(window.location.href);
+    if (chat.id) url.searchParams.set('chat', chat.id);
+    else url.searchParams.delete('chat');
+    window.history.replaceState(null, '', url);
+    const title = chat.title ? `${chat.title} | DispatchDesk` : 'DispatchDesk';
+    document.documentElement.dataset.chatTitle = title;
+    if (!url.searchParams.has('view') || url.searchParams.get('view') === 'assistant') {
+        document.title = title;
+    }
+}
+"""
+
+
+CHAT_NAVIGATION_JS = """
+() => {
+    const list = document.querySelector('#history-list');
+    if (!list || list.dataset.navigationReady) return;
+    list.dataset.navigationReady = 'true';
+    const showTitle = (event) => {
+        const label = event.target.closest('label');
+        if (label) label.title = label.querySelector('span')?.textContent.trim() || '';
+    };
+    list.addEventListener('pointerover', showTitle);
+    list.addEventListener('focusin', showTitle);
+    list.addEventListener('click', (event) => {
+        if (!event.target.closest('label')) return;
+        // Radio input doesn't fire again when the already selected chat is clicked.
+        document.querySelector(
+            '#workspace-tabs [role="tab"][data-tab-id="assistant"]'
+        )?.click();
+    });
 }
 """
 
@@ -592,84 +984,169 @@ def build_app() -> gr.Blocks:
         choices[0][1] if choices else None,
     )
     with gr.Blocks(title="DispatchDesk", delete_cache=(3600, 86400)) as app:
-        gr.HTML(
-            '<header class="desk-header"><a href="/?view=assistant" class="brand" aria-label="Reload Assistant"><span class="brand-mark">'
-            f'{_icon("box")}</span><span>Dispatch<span class="brand-light">Desk</span></span>'
-            "</a></header>",
-            apply_default_css=False,
-            elem_id="brand-home",
-        )
         current = gr.State(None)
-        with gr.Sidebar(label="Chats", width=272, elem_id="chat-sidebar"):
-            new_chat = gr.Button(
-                "New chat",
-                size="sm",
-                variant="secondary",
-                elem_id="new-chat",
-            )
-            gr.HTML(
-                '<p class="sidebar-heading">Recent</p>',
-                apply_default_css=False,
-            )
-            history_list = gr.Radio(
-                choices=[],
-                value=None,
-                label="Past conversations",
-                show_label=False,
-                container=False,
-                elem_id="history-list",
-            )
+        active_chat = gr.State(None)
+        chat_location = gr.JSON(visible=False)
+        # The selected manager's id; chats, settings and proposals follow it.
+        manager = gr.State(DEMO_MANAGER_ID)
+        # Setting changes proposed in chat, waiting for Confirm or Cancel.
+        pending_changes = gr.State([])
+        with gr.Sidebar(label="Workspace", width=288, elem_id="chat-sidebar"):
+            with gr.Column(elem_id="sidebar-top"):
+                gr.HTML(
+                    '<a href="/?view=assistant" class="sidebar-brand" '
+                    'aria-label="Reload Assistant">DispatchDesk</a>',
+                    apply_default_css=False,
+                    elem_id="sidebar-brand",
+                )
+                with gr.Column(elem_id="sidebar-navigation"):
+                    new_chat = gr.Button(
+                        "New chat",
+                        size="sm",
+                        variant="secondary",
+                        elem_id="new-chat",
+                        elem_classes="sidebar-nav-item",
+                    )
+                    edit_settings = gr.Button(
+                        "Settings",
+                        size="sm",
+                        elem_id="edit-settings",
+                        elem_classes="sidebar-nav-item",
+                    )
+                    demo_navigation = gr.Button(
+                        "Demo tools",
+                        size="sm",
+                        elem_id="sidebar-demo",
+                        elem_classes="sidebar-nav-item",
+                    )
+            with gr.Column(elem_id="sidebar-history"):
+                gr.HTML(
+                    '<p class="sidebar-heading">Recent chats</p>',
+                    apply_default_css=False,
+                )
+                history_list = gr.Radio(
+                    choices=[],
+                    value=None,
+                    label="Past conversations",
+                    show_label=False,
+                    container=False,
+                    elem_id="history-list",
+                )
             with gr.Column(elem_id="settings-summary-block"):
-                with gr.Row(elem_id="settings-summary-heading"):
+                with gr.Row(
+                    visible=False,
+                    elem_id="suggestions-entry",
+                ) as suggestions_entry:
+                    suggestions_entry_text = gr.HTML(
+                        '<p class="sidebar-heading">Suggestions</p>',
+                        apply_default_css=False,
+                    )
+                    review_suggestions = gr.Button(
+                        "Review",
+                        size="sm",
+                        scale=0,
+                        min_width=0,
+                        elem_id="review-suggestions",
+                    )
+                with gr.Column(elem_id="sidebar-settings"):
                     gr.HTML(
                         '<p class="sidebar-heading">Active settings</p>',
                         apply_default_css=False,
                     )
-                    edit_settings = gr.Button(
-                        "Edit",
-                        size="sm",
-                        scale=0,
-                        min_width=0,
-                        elem_id="edit-settings",
+                    settings_summary = gr.HTML(
+                        apply_default_css=False,
+                        elem_id="settings-summary",
                     )
-                settings_summary = gr.HTML(
+                context_banner = gr.HTML(
+                    '<div class="current-scenario"><span>Current scenario</span>'
+                    "<strong>Checking…</strong></div>",
                     apply_default_css=False,
-                    elem_id="settings-summary",
+                    elem_id="sidebar-scenario",
                 )
+                with gr.Column(elem_id="manager-profile"):
+                    manager_picker = gr.Dropdown(
+                        choices=[],
+                        value=None,
+                        label="Shift manager",
+                        show_label=False,
+                        container=False,
+                        filterable=False,
+                        interactive=True,
+                        elem_id="manager-picker",
+                    )
+                    badge = gr.HTML(
+                        manager_badge(None),
+                        apply_default_css=False,
+                        elem_id="assistant-manager",
+                    )
         with gr.Tabs(selected="assistant", elem_id="workspace-tabs") as workspace:
             with (
                 gr.Tab("Assistant", id="assistant"),
                 gr.Column(elem_id="manager-workspace", min_width=0),
                 gr.Column(elem_id="assistant-panel", min_width=0),
             ):
-                with gr.Row(elem_id="assistant-heading"):
-                    context_banner = gr.HTML(
-                        '<div class="current-scenario"><span>Checking scenario…</span></div>'
-                        if choices
-                        else _assistant_context(None),
-                        apply_default_css=False,
-                        elem_id="assistant-context",
-                        scale=0,
-                        min_width=0,
-                    )
                 chatbot = gr.Chatbot(
                     label="Conversation",
                     show_label=False,
                     height="auto",
                     autoscroll=False,
                     layout="bubble",
+                    group_consecutive_messages=False,
                     placeholder=CHAT_PLACEHOLDER,
                     buttons=["copy"],
                     elem_id="conversation",
                 )
                 pending_message = gr.Textbox(visible="hidden", interactive=False)
                 with gr.Column(elem_id="composer-dock", min_width=0):
+                    with gr.Column(
+                        visible=False,
+                        elem_id="pending-changes",
+                        min_width=0,
+                    ) as pending_box:
+                        pending_html = gr.HTML(apply_default_css=False)
+                        with gr.Row(elem_id="pending-actions"):
+                            confirm_changes = gr.Button(
+                                "Confirm",
+                                variant="primary",
+                                size="sm",
+                                scale=0,
+                                min_width=96,
+                                elem_id="confirm-changes",
+                            )
+                            cancel_changes = gr.Button(
+                                "Cancel",
+                                size="sm",
+                                scale=0,
+                                min_width=96,
+                                elem_id="cancel-changes",
+                            )
                     processing = gr.HTML(
                         PROCESSING_STATUS,
                         visible=False,
                         apply_default_css=False,
                         elem_id="chat-processing",
                     )
+                    with gr.Column(elem_id="chat-summary-panel", min_width=0):
+                        gr.HTML(
+                            '<div class="summary-heading">'
+                            '<h3 id="chat-summary-title">Conversation summary</h3>'
+                            '<button type="button" aria-label="Close summary" '
+                            'popovertarget="chat-summary-panel" popovertargetaction="hide">'
+                            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                            'stroke-width="1.5" aria-hidden="true">'
+                            '<path d="m6 6 12 12M6 18 18 6"/></svg></button></div>',
+                            apply_default_css=False,
+                        )
+                        summary_status = gr.HTML(
+                            apply_default_css=False,
+                            elem_id="chat-summary-status",
+                        )
+                        summary_text = gr.Markdown(elem_id="chat-summary-text")
+                        summarize_button = gr.Button(
+                            "Create summary",
+                            size="sm",
+                            elem_id="summarize-now",
+                        )
                     with gr.Row(elem_id="message-composer"):
                         message = gr.Textbox(
                             label="Ask your dispatch assistant",
@@ -679,6 +1156,14 @@ def build_app() -> gr.Blocks:
                             max_lines=6,
                             container=False,
                             elem_id="message-input",
+                        )
+                        summary_trigger = gr.Button(
+                            "Summary",
+                            size="sm",
+                            scale=0,
+                            min_width=0,
+                            visible=False,
+                            elem_id="summary-trigger",
                         )
                         submit = gr.Button(
                             "Send",
@@ -701,9 +1186,9 @@ def build_app() -> gr.Blocks:
                 gr.Tab("Settings", id="settings"),
                 gr.Column(elem_id="settings-workspace", min_width=0),
             ):
-                settings_form = settings.build(summary=settings_summary)
+                settings_form = settings.build(manager, summary=settings_summary)
             with (
-                gr.Tab("Demo tools", id="demo"),
+                gr.Tab("Demo tools", id="demo", render_children=True),
                 gr.Column(elem_id="demo-workspace", min_width=0),
             ):
                 with gr.Row(elem_id="demo-heading"):
@@ -795,16 +1280,117 @@ def build_app() -> gr.Blocks:
                             "Synthetic starting snapshots · Refresh to see saved changes",
                             elem_classes="panel-note",
                         )
+                with gr.Column(elem_id="review-admin", min_width=0):
+                    gr.HTML(
+                        '<div class="loader-heading"><h2>Daily review (admin)</h2>'
+                        "<p>Runs every day at 23:30 IST. Drafts the handover note, "
+                        "proposes settings, and lists answers that need a look.</p></div>",
+                        apply_default_css=False,
+                    )
+                    with gr.Row(elem_id="review-actions"):
+                        run_review_button = gr.Button(
+                            "Run review now",
+                            variant="primary",
+                            scale=0,
+                            min_width=160,
+                        )
+                        mark_reviewed_button = gr.Button(
+                            "Mark all reviewed",
+                            scale=0,
+                            min_width=160,
+                        )
+                        review_status = gr.Markdown(elem_id="review-status")
+                    answer_issues = gr.Dataframe(
+                        value={"headers": [], "data": []},
+                        label="Answer issues",
+                        interactive=False,
+                        type="array",
+                        wrap=True,
+                        show_search="filter",
+                        elem_id="answer-issues",
+                    )
         app.load(_restore_tab, outputs=workspace, queue=False)
-        app.load(
+        (
+            suggestion_items,
+            suggestion_detail,
+            suggestion_note,
+            suggestion_actions,
+            accept_suggestion,
+            dismiss_suggestion,
+            suggestion_status,
+        ) = settings_form.suggestions
+        memory_view = settings_form.memory
+        suggestion_outputs = [
+            suggestions_entry,
+            suggestions_entry_text,
+            suggestion_items,
+            suggestion_detail,
+            suggestion_note,
+            suggestion_actions,
+            suggestion_status,
+        ]
+        assert settings_form.nav is not None
+        review_suggestions.click(
+            open_settings,
+            outputs=workspace,
+            js=CLOSE_SIDEBAR_ON_PHONE_JS,
+            queue=False,
+            show_progress="hidden",
+        ).then(
+            show_suggestions,
+            outputs=[settings_form.nav, *settings_form.category_outputs],
+            queue=False,
+            show_progress="hidden",
+        )
+        suggestion_items.input(
+            suggestions_ui.select,
+            inputs=[suggestion_items, manager],
+            outputs=[suggestion_detail, suggestion_note],
+        )
+        accept_suggestion.click(
+            suggestions_ui.accept,
+            inputs=[suggestion_items, suggestion_note, manager],
+            outputs=suggestion_outputs,
+            concurrency_id="settings",
+            concurrency_limit=1,
+        ).then(
             settings.load_settings,
+            inputs=manager,
             outputs=settings_form.outputs(),
+        ).then(settings.load_summary, inputs=manager, outputs=settings_summary)
+        dismiss_suggestion.click(
+            suggestions_ui.dismiss,
+            inputs=[suggestion_items, manager],
+            outputs=suggestion_outputs,
             concurrency_id="settings",
             concurrency_limit=1,
         )
-        app.load(settings.load_summary, outputs=settings_summary)
-        # Selecting the tab from the server works even when narrow screens fold
-        # the tab into the "More tabs" menu.
+        run_review_button.click(
+            suggestions_ui.run_review_now,
+            inputs=manager,
+            outputs=[review_status, answer_issues],
+            concurrency_id="review",
+            concurrency_limit=1,
+        ).then(
+            suggestions_ui.refresh_for,
+            inputs=manager,
+            outputs=suggestion_outputs,
+        ).then(settings.load_memory, inputs=manager, outputs=memory_view)
+        mark_reviewed_button.click(
+            suggestions_ui.mark_issues_reviewed,
+            inputs=manager,
+            outputs=[review_status, answer_issues],
+            concurrency_id="review",
+            concurrency_limit=1,
+        )
+        # Sidebar navigation selects the same workspace panels and URL state.
+        demo_navigation.click(
+            lambda: gr.update(selected="demo"),
+            outputs=workspace,
+            js=CLOSE_SIDEBAR_ON_PHONE_JS,
+            queue=False,
+            show_progress="hidden",
+        )
         edit_settings.click(
             open_settings,
             outputs=workspace,
@@ -812,23 +1398,126 @@ def build_app() -> gr.Blocks:
             queue=False,
             show_progress="hidden",
         )
-        app.load(
-            restore_chat,
-            outputs=chatbot,
+        summary_outputs = [
+            summary_trigger,
+            summary_status,
+            summary_text,
+            summarize_button,
+        ]
+        summarize_button.click(
+            summarize_now,
+            inputs=[manager, active_chat],
+            outputs=summary_outputs,
+            # A manual update must finish before switching to another chat.
             concurrency_id="workspace",
             concurrency_limit=1,
-        ).then(conversation_choices, outputs=history_list)
+            show_progress="hidden",
+            js="""(...args) => {
+                const button = document.querySelector('#summarize-now');
+                button.setAttribute('aria-busy', 'true');
+                button.disabled = true;
+                return args;
+            }""",
+        ).then(
+            fn=None,
+            js="""() => {
+                const button = document.querySelector('#summarize-now');
+                button.removeAttribute('aria-busy');
+                button.disabled = false;
+            }""",
+            queue=False,
+            show_progress="hidden",
+        )
+
+        def show_manager(event, linked=False):
+            """After the manager is set: their chat, chats, summary and settings."""
+            return (
+                event.then(
+                    restore_conversation if linked else restore_latest_conversation,
+                    inputs=manager,
+                    outputs=[chatbot, active_chat],
+                    concurrency_id="workspace",
+                    concurrency_limit=1,
+                )
+                .then(
+                    conversation_choices,
+                    inputs=[manager, active_chat],
+                    outputs=history_list,
+                )
+                .then(
+                    summary_card,
+                    inputs=[manager, active_chat],
+                    outputs=summary_outputs,
+                )
+                .then(
+                    settings.load_settings,
+                    inputs=manager,
+                    outputs=settings_form.outputs(),
+                    concurrency_id="settings",
+                    concurrency_limit=1,
+                )
+                .then(settings.load_summary, inputs=manager, outputs=settings_summary)
+                .then(
+                    suggestions_ui.refresh_for,
+                    inputs=manager,
+                    outputs=suggestion_outputs,
+                )
+                .then(
+                    suggestions_ui.issues_table,
+                    inputs=manager,
+                    outputs=answer_issues,
+                )
+                .then(settings.load_memory, inputs=manager, outputs=memory_view)
+            )
+
+        show_manager(
+            app.load(
+                restore_manager,
+                outputs=[manager, manager_picker, badge],
+                queue=False,
+            ),
+            linked=True,
+        )
+        # A proposal belongs to the manager it was made for.
+        show_manager(
+            manager_picker.input(
+                select_manager,
+                inputs=manager_picker,
+                outputs=[manager, badge],
+                queue=False,
+            )
+            .then(list, outputs=pending_changes, queue=False)
+            .then(fn=None, js=MANAGER_URL_JS, inputs=manager_picker),
+        ).then(fn=None, js=CLOSE_SIDEBAR_ON_PHONE_JS)
         app.load(fn=None, js=CLOSE_SIDEBAR_ON_PHONE_JS)
+        app.load(fn=None, js=CHAT_NAVIGATION_JS)
+        app.load(fn=None, js=SUMMARY_POPOVER_JS)
         history_list.input(
             open_conversation,
-            inputs=history_list,
-            outputs=[chatbot, message],
+            inputs=[history_list, manager],
+            outputs=[chatbot, message, active_chat, workspace],
             concurrency_id="workspace",
             concurrency_limit=1,
-        ).then(conversation_choices, outputs=history_list).then(
+        ).then(fn=None, js=CLOSE_SIDEBAR_ON_PHONE_JS)
+        active_chat.change(
             fn=None,
-            js=CLOSE_SIDEBAR_ON_PHONE_JS,
+            js=CLOSE_SUMMARY_JS,
+            queue=False,
         )
+        active_chat.change(
+            conversation_choices,
+            inputs=[manager, active_chat],
+            outputs=history_list,
+        ).then(
+            summary_card,
+            inputs=[manager, active_chat],
+            outputs=summary_outputs,
+        ).then(
+            conversation_location,
+            inputs=[manager, active_chat],
+            outputs=chat_location,
+        )
+        chat_location.change(fn=None, js=CHAT_URL_JS, inputs=chat_location)
         workspace.change(fn=None, js=TAB_URL_JS)
         for button, question in zip(prompt_buttons, prompts, strict=True):
             button.click(lambda q=question: q, outputs=message, queue=False).then(
@@ -862,14 +1551,19 @@ def build_app() -> gr.Blocks:
             )
         load.click(
             load_selected_scenario,
-            inputs=scenario,
+            inputs=[scenario, manager],
             outputs=[current, chatbot, message, preview, *tables],
             concurrency_id="workspace",
             concurrency_limit=1,
         ).success(_assistant_context, inputs=current, outputs=context_banner).then(
+            current_conversation_id,
+            inputs=manager,
+            outputs=active_chat,
+        ).then(
             conversation_choices,
+            inputs=[manager, active_chat],
             outputs=history_list,
-        )
+        ).then(summary_card, inputs=[manager, active_chat], outputs=summary_outputs)
         for event in (submit.click, message.submit):
             event(
                 fn=None,
@@ -880,8 +1574,8 @@ def build_app() -> gr.Blocks:
                 show_progress="hidden",
             ).then(
                 respond_to_pending,
-                inputs=[pending_message, chatbot],
-                outputs=[chatbot, message],
+                inputs=[pending_message, chatbot, manager, active_chat],
+                outputs=[chatbot, message, pending_changes],
                 show_progress="hidden",
                 concurrency_id="workspace",
                 concurrency_limit=1,
@@ -891,16 +1585,37 @@ def build_app() -> gr.Blocks:
                 outputs=[processing, submit, message],
                 queue=False,
                 show_progress="hidden",
-            ).then(conversation_choices, outputs=history_list).then(
+            ).then(
+                lambda manager_id, selected: (
+                    selected or current_conversation_id(manager_id=manager_id)
+                ),
+                inputs=[manager, active_chat],
+                outputs=active_chat,
+            ).then(
+                conversation_choices,
+                inputs=[manager, active_chat],
+                outputs=history_list,
+            ).then(
                 title_conversation,
+                inputs=[manager, active_chat],
                 outputs=history_list,
                 concurrency_id="titles",
                 concurrency_limit=1,
                 show_progress="hidden",
             ).then(
+                conversation_location,
+                inputs=[manager, active_chat],
+                outputs=chat_location,
+            ).then(
                 summarize_conversation,
+                inputs=[manager, active_chat],
                 concurrency_id="summaries",
                 concurrency_limit=1,
+                show_progress="hidden",
+            ).then(
+                summary_card,
+                inputs=[manager, active_chat],
+                outputs=summary_outputs,
                 show_progress="hidden",
             )
         chatbot.change(
@@ -923,28 +1638,68 @@ def build_app() -> gr.Blocks:
                 const latest = messages[messages.length - 1];
                 if (!latest) return;
                 const bounds = latest.getBoundingClientRect();
+                const actions = latest.closest('.message-row')?.nextElementSibling;
+                const messageBottom = actions?.classList.contains('message-buttons')
+                    ? actions.getBoundingClientRect().bottom : bounds.bottom;
                 const dock = document.querySelector('#composer-dock').getBoundingClientRect();
                 const bottom = dock.top - 24;
-                // Leave room for the pinned header above the message.
-                const header = document.querySelector('#brand-home')?.getBoundingClientRect().height || 0;
-                const top = header + 24;
-                const target = bounds.height > bottom - top
+                const top = 24;
+                const target = messageBottom - bounds.top > bottom - top
                     ? scrollY + bounds.top - top
-                    : scrollY + bounds.bottom - bottom;
+                    : scrollY + messageBottom - bottom;
                 window.scrollTo({top: Math.max(0, target), behavior:
                     matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth'});
             }""",
         )
         new_chat.click(
             clear_chat,
-            outputs=[chatbot, message],
+            inputs=manager,
+            outputs=[chatbot, message, active_chat, workspace],
             queue=True,
             concurrency_id="workspace",
             concurrency_limit=1,
-        ).then(conversation_choices, outputs=history_list).then(
+        ).then(
+            conversation_choices,
+            inputs=[manager, active_chat],
+            outputs=history_list,
+        ).then(
+            summary_card,
+            inputs=[manager, active_chat],
+            outputs=summary_outputs,
+        ).then(
             fn=None,
             js=CLOSE_SIDEBAR_ON_PHONE_JS,
         )
+        pending_changes.change(
+            pending_card,
+            inputs=pending_changes,
+            outputs=[pending_html, pending_box],
+            queue=False,
+            show_progress="hidden",
+        )
+        confirm_changes.click(
+            confirm_pending,
+            inputs=[pending_changes, chatbot, manager, active_chat],
+            outputs=[chatbot, pending_changes],
+            concurrency_id="workspace",
+            concurrency_limit=1,
+        ).then(
+            settings.load_settings,
+            inputs=manager,
+            outputs=settings_form.outputs(),
+            concurrency_id="settings",
+            concurrency_limit=1,
+        ).then(settings.load_summary, inputs=manager, outputs=settings_summary)
+        cancel_changes.click(
+            cancel_pending,
+            inputs=[pending_changes, chatbot, manager, active_chat],
+            outputs=[chatbot, pending_changes],
+            concurrency_id="workspace",
+            concurrency_limit=1,
+        )
+        # A proposal belongs to the chat it was made in.
+        for event in (new_chat.click, history_list.input, load.click):
+            event(list, outputs=pending_changes, queue=False)
     return app
 
 
@@ -956,7 +1711,7 @@ app = build_app()
 
 def main() -> None:
     configure_logging()
-    idle_summary_job().start()
+    configure_uvicorn_logging()
     port = int(os.environ.get("PORT", "7860"))
     logger.info("DispatchDesk starting", host="0.0.0.0", port=port)
     app.launch(

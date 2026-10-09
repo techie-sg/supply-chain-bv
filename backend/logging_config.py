@@ -41,5 +41,30 @@ def configure_logging(stream: TextIO = sys.stdout) -> None:
         ),
     )
     logging.basicConfig(level=get_settings().log_level, handlers=[handler], force=True)
+    # Library-owned console handlers bypass the root JSON/stdout handler.
+    for candidate in list(logging.Logger.manager.loggerDict.values()):
+        if not isinstance(candidate, logging.Logger):
+            continue
+        for existing in candidate.handlers[:]:
+            if isinstance(existing, logging.StreamHandler) and not isinstance(
+                existing,
+                logging.FileHandler,
+            ):
+                candidate.removeHandler(existing)
+                existing.close()
+                candidate.propagate = True
+    logging.captureWarnings(True)
     for name in ("httpx", "httpcore", "urllib3"):
         logging.getLogger(name).setLevel(logging.WARNING)
+
+
+def configure_uvicorn_logging() -> None:
+    """Keep Gradio's server startup from reinstalling stderr handlers."""
+    from uvicorn.config import LOGGING_CONFIG
+
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        LOGGING_CONFIG["loggers"][name] = {
+            "handlers": [],
+            "level": "NOTSET",
+            "propagate": True,
+        }

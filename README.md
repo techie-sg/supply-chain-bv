@@ -6,7 +6,7 @@ A dispatch assistant that answers questions using a simulated operating playbook
 
 Demo tools load **normal**, **backlog**, and **rain** starting snapshots and inspect orders, riders, hourly metrics, and zones. Current data comes from PostgreSQL; Refresh reads saved changes. Other scenarios preview their YAML definitions. Loading a scenario replaces operational rows and clears chat.
 
-Chat uses the question, the stored conversation history, the manager's settings, and retrieved policy passages. Conversations are saved in PostgreSQL, so a page refresh or restart resumes the latest chat; long chats are summarized so prompts stay small. With a scenario loaded, the assistant can also call two read-only tools for the live queue and rider status and for historical hourly metrics. Each answer has a collapsed **Agent trace** panel listing the tool calls (with the data's "as of" time) and the settings applied. Without a scenario, answers come from the playbook alone. Guardrail checks, caching, and action execution are planned work; the assistant only proposes actions.
+Chat uses the question, the stored conversation history, and retrieved policy passages. Conversations are saved in PostgreSQL; the URL identifies the selected chat so a refresh reopens it. Without a chat ID, the latest chat opens. Operational scenario rows are not sent to the chat model. Operational tools, persistent preference memory, and action execution are planned work.
 
 Settings (alert thresholds, batching, incentive cap, greeting) are changed only in the **Settings** tab. Design: [docs/memory.md](docs/memory.md).
 
@@ -32,20 +32,28 @@ Set these values in `backend/.env` or the process environment. Environment varia
 
 Example database URL: `postgresql+psycopg://user:password@localhost:5432/dispatchdesk`.
 
+To use an existing local PostgreSQL database without changing `.env`, export its URL before running the CLI:
+
+```bash
+export DATABASE_URL='postgresql+psycopg://user:password@localhost:5432/dispatchdesk'
+```
+
+The local server needs the pgvector extension. The same migrations and commands work with local PostgreSQL.
+
 Run from `backend/`:
 
 ```bash
-uv run alembic upgrade head
-uv run python -m service.ingestion
-uv run python -m ui.gradio_app
+uv run python cli.py migrate
+uv run python cli.py ingest
+uv run python cli.py app
 ```
 
-Open http://localhost:7860. Load a scenario in **Demo tools** to give the assistant live data. Migrations (0001 to 0008) are manual and run from your local machine. Application startup does not migrate, ingest documents, or load a scenario.
+Open http://localhost:7860. The CLI runs only the selected command. Application startup does not migrate, ingest documents, or load a scenario. Use `uv run python cli.py --help` to list commands.
 
 To change the listening port, set `PORT` in the process environment:
 
 ```bash
-PORT=8080 uv run python -m ui.gradio_app
+PORT=8080 uv run python cli.py app
 ```
 
 `PORT` defaults to `7860`; adding it to `.env` does not change the listening port.
@@ -92,13 +100,44 @@ Retrieval metrics: `hit@k` (any relevant chunk in top k), `recall@k` (share of e
 | --- | --- |
 | Root directory | `/backend` |
 | Builder | Railpack |
-| Start command | `python -m ui.gradio_app` |
+| Start command | `python cli.py app` |
+| Pre-deploy command | `python cli.py migrate` |
 | Healthcheck path | `/` |
 | Watch paths | `/backend/**` |
 | Variable `PORT` | `8080` |
 | Domain target port | `8080` |
 
-Set `DATABASE_URL`, `JINA_API_KEY`, and `GROQ_API_KEY` on the application service in its production environment, then deploy the variable changes. Gradio binds to `0.0.0.0:$PORT`. The `/` healthcheck verifies that the homepage responds; it does not check database connectivity or AI credentials. Schema changes require local migrations before deployment.
+Set `DATABASE_URL`, `JINA_API_KEY`, and `GROQ_API_KEY` on the application service in its production environment, then deploy the variable changes. Gradio binds to `0.0.0.0:$PORT`. The `/` healthcheck verifies that the homepage responds; it does not check database connectivity or AI credentials. The pre-deploy command applies pending migrations before the app starts; migrations can also be run locally with `uv run python cli.py migrate`.
+
+Install dependencies during the build. Use the `python` commands above at runtime so app startup and cron runs do not trigger `uv run` dependency synchronization. Installer progress is written to stderr, which Railway can display as errors even when installation succeeds. Application logs use JSON on stdout with an explicit severity; failed CLI jobs log an error and exit with status 1.
+
+### Scheduled conversation summaries
+
+Idle-conversation summarization runs through the `summaries` CLI command. In chat, **Summary** beside the composer opens the saved summary and its **Create summary** or **Update summary** action. Gradio keeps existing after-answer folding, but does not start a scheduler. Create a separate Railway cron service from the same repository with root `/backend`:
+
+| Setting | Value |
+| --- | --- |
+| Start command | `python cli.py summaries` |
+| Cron schedule | `*/5 * * * *` |
+| Variables | `DATABASE_URL`, `GROQ_API_KEY` |
+| Healthcheck and public domain | None |
+
+Keep the web service's start command as `python cli.py app`. The cron command runs one batch of up to ten conversations idle for at least fifteen minutes, then exits. Railway schedules use UTC. Locally, run the same task with `uv run python cli.py summaries`.
+
+### Daily review
+
+The daily review (dreaming) runs from cron once a day; admins can also run it from **Run review now** in Demo tools. Create a second cron service from the same repository with root `/backend`:
+
+| Setting | Value |
+| --- | --- |
+| Start command | `python cli.py review` |
+| Cron schedule | `0 18 * * *` (18:00 UTC = 23:30 IST) |
+| Variables | `DATABASE_URL`, `GROQ_API_KEY` |
+| Healthcheck and public domain | None |
+
+Each run also rebuilds every manager's memory digest (shown in Settings → Memory) from the last 7 days of chat summaries; see [memory.md](docs/memory.md), section 6.
+
+Locally: `uv run python cli.py review`.
 
 ## Code layout
 
@@ -112,6 +151,7 @@ Set `DATABASE_URL`, `JINA_API_KEY`, and `GROQ_API_KEY` on the application servic
 | `backend/database/` | SQLAlchemy models and sessions |
 | `backend/alembic/` | Migrations |
 | `backend/config.py` | Pydantic settings |
+| `backend/cli.py` | App, migrations, ingestion, and one-shot summary commands |
 | `backend/service/factory.py` | Provider and chunking composition |
 
 ## Development checks
@@ -127,4 +167,4 @@ uv run pytest --cov=. --cov-report=term-missing
 
 CI requires 90% coverage. Vector-store integration tests need `TEST_DATABASE_URL` pointing to a disposable PostgreSQL/pgvector database; they clear its document tables. Without that variable, those tests are skipped.
 
-See the [code overview](docs/code-overview.md), [tool spec](docs/tools.md), [memory design](docs/memory.md), [team](docs/team.md), [scenario guide](docs/scenarios.md), and [original requirements](docs/initial/requirements.md).
+See the [team](docs/team.md), [scenario guide](docs/scenarios.md), and [original requirements](docs/initial/requirements.md).

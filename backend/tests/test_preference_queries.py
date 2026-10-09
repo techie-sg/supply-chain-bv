@@ -5,6 +5,7 @@ from collections.abc import Iterator
 
 import pytest
 from catalogue import DEFINITIONS
+from conftest import ensure_managers
 from sqlalchemy import Engine, delete, insert, select, text
 from sqlalchemy.exc import IntegrityError
 
@@ -27,6 +28,7 @@ def preference_engine() -> Iterator[Engine]:
     try:
         with engine.begin() as connection:
             connection.execute(text("CREATE SCHEMA IF NOT EXISTS app"))
+            ensure_managers(connection)
             for table in ("app.preference_definitions", "app.store_preferences"):
                 Base.metadata.tables[table].create(connection, checkfirst=True)
             connection.execute(delete(StorePreference))
