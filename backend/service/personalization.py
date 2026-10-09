@@ -1,8 +1,8 @@
-"""Change durable preferences only on explicit requests or approved suggestions.
+"""Save explicit preferences and learn unset preferences during dreaming.
 
 Summary review sees only new manager messages. Ordinary dispatch questions do
 not read evidence, call an extraction model, or write personalization. Repeated
-style requests need three distinct chats; extraction only creates proposals.
+style requests need three distinct chats; verified extraction saves automatically.
 """
 
 import json
@@ -205,7 +205,7 @@ class PersonalizationService:
         conversation: Conversation,
         generate: Callable[[str, str], str],
     ) -> int:
-        """Review bounded batches after this chat's own marker, never apply a profile."""
+        """Save verified preferences from bounded batches after this chat's marker."""
         if (conversation.store_id, conversation.manager_id) != (
             self.store_id,
             self.manager_id,
@@ -220,7 +220,7 @@ class PersonalizationService:
             if start > conversation.summary_covers_to:
                 break
             end = self._batch_end(conversation, start)
-            proposals = self._proposals(
+            updates = self._updates(
                 conversation,
                 start,
                 end,
@@ -233,7 +233,7 @@ class PersonalizationService:
                 self.manager_id,
                 expected,
                 end,
-                proposals,
+                updates,
                 self.engine,
             )
             if count is None:
@@ -244,7 +244,7 @@ class PersonalizationService:
                 "Personalization batch reviewed",
                 conversation_id=str(conversation.id),
                 covers_to=end,
-                proposals=count,
+                preferences_saved=count,
             )
         return saved
 
@@ -269,7 +269,7 @@ class PersonalizationService:
                 return index - 1
         return end
 
-    def _proposals(
+    def _updates(
         self,
         conversation: Conversation,
         start: int,
@@ -277,7 +277,7 @@ class PersonalizationService:
         summary: str,
         generate: Callable[[str, str], str],
     ) -> list[dict[str, Any]]:
-        """Extract proposals outside any write transaction, from exact user evidence."""
+        """Extract updates outside any write transaction, from exact user evidence."""
         batch = conversation.messages[start : end + 1]
         fresh = [
             (index, message)
@@ -304,7 +304,11 @@ class PersonalizationService:
         ]
         if not fresh:
             return []
+        adapter = TypeAdapter(list[PersonalizationCandidate])
         prompt = (PROMPTS / "personalization.md").read_text(encoding="utf-8")
+        prompt += "\n\nRequired output JSON schema:\n" + json.dumps(
+            adapter.json_schema(),
+        )
         fresh_keys = {(str(conversation.id), index) for index, _ in fresh}
         messages: dict[tuple[str, int], str] = {
             (str(conversation.id), index): message["what"] for index, message in fresh
@@ -349,7 +353,7 @@ class PersonalizationService:
                     messages[key] = message["what"]
                     if not fits():
                         del messages[key]
-        # A single explicit request is enough for a proposal. Otherwise, require
+        # A single explicit request is enough for an update. Otherwise, require
         # three chats with matching style requests before paying for extraction.
         if not any(explicit(message["what"]) for _, message in fresh) and not any(
             len(
@@ -369,12 +373,12 @@ class PersonalizationService:
             return []
         raw = generate(prompt, payload())
         try:
-            candidates = TypeAdapter(list[PersonalizationCandidate]).validate_json(raw)
+            candidates = adapter.validate_json(raw)
         except (ValidationError, ValueError) as exc:
             raise ValueError(
                 "Invalid personalization extraction; batch remains pending.",
             ) from exc
-        proposals = []
+        updates: list[dict[str, Any]] = []
         for candidate in candidates[: len(FIELDS)]:
             if (
                 candidate.code not in allowed
@@ -408,7 +412,9 @@ class PersonalizationService:
                 < PERSONALIZATION_MIN_CHATS
             ):
                 continue
-            proposals.append(
+            if any(row["payload"]["code"] == candidate.code for row in updates):
+                continue
+            updates.append(
                 {
                     "store_id": self.store_id,
                     "manager_id": self.manager_id,
@@ -418,7 +424,7 @@ class PersonalizationService:
                     "evidence": [entry.model_dump() for entry in evidence],
                 },
             )
-        return proposals
+        return updates
 
 
 class PersonalizationChanges:
@@ -458,6 +464,50 @@ class PersonalizationChanges:
             },
             self.run,
         )
+
+    def direct_requests(self) -> list[dict[str, Any]]:
+        """Recognize unambiguous preference-only turns without asking a model."""
+        parts = [
+            part.strip()
+            for part in re.split(r"[.!?\n]+", self.question)
+            if part.strip()
+        ]
+        clauses = request_clauses(self.question)
+        if (
+            not parts
+            or parts != clauses
+            or not all(explicit(clause) for clause in clauses)
+            or re.search(
+                r"\b(?:what|which|why|where|who|how|check|inspect|tell me|orders?|riders?)\b",
+                self.question,
+                re.IGNORECASE,
+            )
+        ):
+            return []
+        requests: dict[str, dict[str, Any]] = {}
+        for clause in clauses:
+            matches = [
+                (code, value)
+                for code, choices in SIGNALS.items()
+                for value in choices
+                if supports(code, value, clause)
+            ]
+            if not matches or len({code for code, _ in matches}) != len(matches):
+                return []
+            for code, value in matches:
+                requested_value: str | None = (
+                    None
+                    if re.search(r"\b(?:forget|remove|reset)\b", clause, re.IGNORECASE)
+                    else value
+                )
+                if code in requests and requests[code]["value"] != requested_value:
+                    return []
+                requests[code] = {
+                    "code": code,
+                    "value": requested_value,
+                    "quote": self.question.strip() if len(clauses) == 1 else clause,
+                }
+        return list(requests.values())
 
     def run(self, args: dict[str, Any]) -> str:
         try:

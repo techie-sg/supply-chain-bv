@@ -68,7 +68,7 @@ class RAGService:
         only proposes changes, which the manager confirms outside the model.
         `summary` stands in for older messages that `history` no longer holds.
         `handover` is the latest shift's handover notes; `personalization` contains
-        durable, manager-approved response preferences. It does not affect retrieval.
+        durable saved response preferences. It does not affect retrieval.
         `alerts` lists the manager's alerts firing now, computed from live data.
         """
         if top_k < 1:

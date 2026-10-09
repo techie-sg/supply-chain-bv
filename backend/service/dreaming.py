@@ -1,13 +1,13 @@
-"""Dreaming: a daily review of chats that proposes, never applies.
+"""Dreaming: review chats, learn preferences, and propose operational changes.
 
 A run brings each reviewed chat's summary up to date, then produces:
 
 - answer issues from raw messages after `dreamed_to` (for the admin report),
 - a handover draft for each open shift with chats and no note yet,
 - settings suggestions from recent chat summaries,
-- personalization proposals while refreshing summaries, only with new evidence.
+- automatic personalization while refreshing summaries, only with new evidence.
 
-Suggestions are saved as pending rows; personalization never changes in review.
+Operational suggestions remain pending; verified response preferences save directly.
 Each output fails on its own.
 """
 

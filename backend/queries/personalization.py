@@ -1,6 +1,7 @@
 """Small, manager-scoped profiles and raw evidence for personalization."""
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -8,11 +9,20 @@ from sqlalchemy import Engine, cast, func, select, update
 from sqlalchemy.dialects.postgresql import JSONPATH
 from sqlalchemy.orm import Session
 
-from constants import PERSONALIZATION_EVIDENCE_CHATS, PERSONALIZATION_EVIDENCE_MESSAGES
+from constants import (
+    PERSONALIZATION_EVIDENCE_CHATS,
+    PERSONALIZATION_EVIDENCE_MESSAGES,
+    TIMEZONE,
+)
 from database.models import Conversation, Manager, ManagerPersonalization, Suggestion
 from database.session import get_session
 from domain.memory import SuggestionKind, SuggestionStatus
-from domain.personalization import Profile
+from domain.personalization import (
+    FIELDS,
+    PersonalizationCandidate,
+    Profile,
+    validate_value,
+)
 
 
 def read_profile(
@@ -50,6 +60,19 @@ def persist_profile(
     )
     if manager is None:
         raise LookupError("That manager does not belong to this store.")
+    return bool(_merge_profile(session, store_id, manager_id, changes, expected))
+
+
+def _merge_profile(
+    session: Session,
+    store_id: str,
+    manager_id: str,
+    changes: Profile,
+    expected: Profile | None = None,
+    *,
+    only_unset: bool = False,
+) -> int:
+    """Merge under the caller's manager lock; never hold it during model calls."""
     row = session.scalar(
         select(ManagerPersonalization).where(
             ManagerPersonalization.store_id == store_id,
@@ -66,10 +89,11 @@ def persist_profile(
     actual = {
         code: item
         for code, item in changes.items()
-        if code not in profile or profile[code].get("value") != item.get("value")
+        if (not only_unset or code not in profile)
+        and (code not in profile or profile[code].get("value") != item.get("value"))
     }
     if not actual:
-        return False
+        return 0
     profile.update(actual)
     if row is None:
         session.add(
@@ -93,7 +117,7 @@ def persist_profile(
         )
         .values(status=SuggestionStatus.DISMISSED),
     )
-    return True
+    return len(actual)
 
 
 def save_profile(
@@ -134,53 +158,23 @@ def evidence_chats(
         return [dict(row) for row in session.execute(statement).mappings()]
 
 
-def _propose(session: Session, row: dict[str, Any]) -> bool:
-    """Caller holds the manager lock for this short transaction."""
-    profile = (
-        session.scalar(
-            select(ManagerPersonalization.preferences).where(
-                ManagerPersonalization.store_id == row["store_id"],
-                ManagerPersonalization.manager_id == row["manager_id"],
-            ),
-        )
-        or {}
-    )
-    if row["payload"]["code"] in profile:
-        return False
-    existing = session.scalar(
-        select(Suggestion.id)
-        .where(
-            Suggestion.store_id == row["store_id"],
-            Suggestion.manager_id == row["manager_id"],
-            Suggestion.kind == SuggestionKind.PERSONALIZATION,
-            Suggestion.payload["code"].astext == row["payload"]["code"],
-            Suggestion.payload["value"].astext == row["payload"]["value"],
-        )
-        .limit(1),
-    )
-    if existing is not None:
-        return False
-    session.add(Suggestion(**row))
-    return True
-
-
 def finish_review(
     conversation_id: UUID,
     store_id: str,
     manager_id: str,
     expected: int | None,
     covers_to: int,
-    proposals: list[dict[str, Any]],
+    updates: list[dict[str, Any]],
     engine: Engine | None = None,
 ) -> int | None:
-    """Commit proposals and progress together; stale workers cannot move progress."""
+    """Save learned preferences and progress atomically, without approval rows."""
     if covers_to < 0 or (expected is not None and covers_to <= expected):
         raise ValueError("Personalization progress must move forward.")
     if any(
         row["store_id"] != store_id
         or row["manager_id"] != manager_id
         or row["kind"] != SuggestionKind.PERSONALIZATION
-        for row in proposals
+        for row in updates
     ):
         raise ValueError("Personalization evidence belongs to another manager.")
     with get_session(engine) as session:
@@ -206,7 +200,42 @@ def finish_review(
         ).scalar_one_or_none()
         if advanced is None:
             return None
-        return sum(_propose(session, row) for row in proposals)
+        changes: Profile = {}
+        for row in updates:
+            candidate = PersonalizationCandidate.model_validate(
+                {
+                    **row["payload"],
+                    "reason": row["reason"],
+                    "evidence": row["evidence"],
+                },
+            )
+            if candidate.code not in FIELDS:
+                raise ValueError("Dreaming can save only typed response preferences.")
+            value = validate_value(candidate.code, candidate.value)
+            if value is None or candidate.code in changes:
+                raise ValueError("Invalid or duplicate learned preference.")
+            evidence = next(
+                (
+                    entry
+                    for entry in candidate.evidence
+                    if entry.conversation_id == str(conversation_id)
+                    and (expected is None or entry.message_index > expected)
+                    and entry.message_index <= covers_to
+                ),
+                None,
+            )
+            if evidence is None:
+                raise ValueError("Learned preference requires evidence in this batch.")
+            changes[candidate.code] = {
+                "value": value,
+                "source": "dreaming",
+                "conversation_id": str(conversation_id),
+                "quote": evidence.quote,
+                "reason": candidate.reason,
+                "evidence": [entry.model_dump() for entry in candidate.evidence],
+                "saved_at": datetime.now(TIMEZONE).isoformat(),
+            }
+        return _merge_profile(session, store_id, manager_id, changes, only_unset=True)
 
 
 def pending_reviews(

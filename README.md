@@ -2,11 +2,11 @@
 
 [Live demo: Open DispatchDesk](https://supply-chain-bv-production.up.railway.app/)
 
-A dispatch assistant that answers questions using a simulated operating playbook and saved dispatch snapshots. The application provides Gradio chat with stored conversation history, per-manager settings, Jina embeddings, PostgreSQL/pgvector retrieval, Groq answer generation, and read-only dispatch tools.
+A dispatch assistant that answers questions using a simulated operating playbook and saved dispatch snapshots. The application provides Gradio chat with stored conversation history, per-manager settings, Jina embeddings, PostgreSQL/pgvector retrieval, OpenRouter answer generation, and read-only dispatch tools.
 
 Demo tools load **normal**, **backlog**, and **rain** starting snapshots and inspect orders, riders, hourly metrics, and zones. Current data comes from PostgreSQL; Refresh reads saved changes. Other scenarios preview their YAML definitions. Loading a scenario replaces operational rows and clears chat.
 
-Chat uses the question, stored conversation history, retrieved policy passages, and the selected manager's settings and saved personalization. Personalization is read before the first answer and every follow-up, so changes apply immediately across chats. Groq can request current dispatch data or historical metrics through local tools. Data is read when a tool is called. Conversations are saved in PostgreSQL; the URL identifies the selected chat so a refresh reopens it. Without a chat ID, the latest chat opens.
+Chat uses the question, stored conversation history, retrieved policy passages, and the selected manager's settings and saved personalization. Personalization is read before the first answer and every follow-up, so changes apply immediately across chats. The model can request current dispatch data or historical metrics through local tools. Data is read when a tool is called. Conversations are saved in PostgreSQL; the URL identifies the selected chat so a refresh reopens it. Without a chat ID, the latest chat opens.
 
 Settings (alert thresholds, batching, incentive cap, greeting) can be edited in **Settings** or proposed through chat. Chat proposals are saved only after the manager confirms them. Response style and decision priorities are managed separately in **Settings → Personalization** and persist across chats. Design: [memory](docs/memory.md), [personalization](docs/personalization.md).
 
@@ -14,7 +14,7 @@ The reload button beside **Current scenario** recreates the scenario currently s
 
 ## Setup
 
-Requires Python 3.13, uv, PostgreSQL with pgvector, and Jina/Groq API keys.
+Requires Python 3.13, uv, PostgreSQL with pgvector, and Jina/OpenRouter API keys.
 
 From the repository root:
 
@@ -30,7 +30,7 @@ Set these values in `backend/.env` or the process environment. Environment varia
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL URL; `DB_URL` is also accepted |
 | `JINA_API_KEY` | Jina embeddings |
-| `GROQ_API_KEY` | Groq answer generation |
+| `OPENROUTER_KEY` | OpenRouter answer generation and background LLM jobs |
 
 Example database URL: `postgresql+psycopg://user:password@localhost:5432/dispatchdesk`.
 
@@ -64,7 +64,9 @@ PORT=8080 uv run python cli.py app
 
 The corpus is in [`backend/resources/corpus/`](backend/resources/corpus/README.md). Default Markdown section chunking produces 37 chunks from seven operational documents. Ingestion upserts document and chunk rows in one transaction. The corpus README and prompt files are excluded from ingestion. Moving resources preserves their bytes, hashes, document IDs, chunk labels and stored source identities; existing indexed data needs no migration or re-ingestion for this move.
 
-Defaults are `jina-embeddings-v5-text-nano` for embeddings and Groq's [`openai/gpt-oss-120b`](https://console.groq.com/docs/model/openai/gpt-oss-120b) for answers. Provider and chunking options are listed in [`backend/.env.example`](backend/.env.example). Reingest after changing the embedding model or chunking strategy.
+Defaults are `jina-embeddings-v5-text-nano` for embeddings and OpenRouter's [`nvidia/nemotron-3-super-120b-a12b:free`](https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free) for answers, titles, summaries and reviews. `OPEN_ROUTER_KEY` and `OPENROUTER_API_KEY` are also accepted. Provider and chunking options are listed in [`backend/.env.example`](backend/.env.example). Reingest after changing the embedding model or chunking strategy.
+
+Set `LLM_PROVIDER=openrouter` and `LLM_MODEL=nvidia/nemotron-3-super-120b-a12b:free` if existing environment variables override the defaults. Groq remains selectable with `LLM_PROVIDER=groq`, `LLM_MODEL=openai/gpt-oss-120b` and `GROQ_API_KEY`. OpenRouter free endpoints have [request limits](https://openrouter.ai/docs/api/reference/limits); changing models does not remove account-wide limits.
 
 Assistant instructions live in [dispatch_manager_system.md](backend/resources/prompts/dispatch_manager_system.md), which the RAG service loads directly for each answer.
 
@@ -72,14 +74,14 @@ The [RAG notebook](backend/notebooks/simple_rag.ipynb) demonstrates chunking, em
 
 ## Dispatch tools
 
-Two read-only tools use the existing Groq tool-calling loop and run in the application process. Their contract is in [docs/tools.md](docs/tools.md):
+Two read-only tools use the configured LLM provider's tool-calling loop and run in the application process. Their contract is in [docs/tools.md](docs/tools.md):
 
 | Tool | Returns |
 | --- | --- |
 | `get_live_dispatch_status(store_id)` | Open queue (counts by status, oldest ages, orders), riders with hours and breaks, zones, rain flag, and the snapshot's `as_of` time with a `stale` flag (older than 5 minutes) |
 | `get_delivery_metrics(store_id, date, start_hour, end_hour)` | Hourly orders, 10-minute SLA, pick-pack, rider-wait and ride minutes, riders online, rain flag, and an order-weighted period summary |
 
-`service/tools.py` validates tool arguments and computes results; `queries/tools.py` performs the database reads, filtering by store and the requested period. The configured `LLM_MODEL` and normal Groq retry and fallback behavior apply to all chat requests.
+`service/tools.py` validates tool arguments and computes results; `queries/tools.py` performs the database reads, filtering by store and the requested period. The configured `LLM_PROVIDER` and `LLM_MODEL` apply to all chat requests and background LLM jobs.
 
 To see it in the chat, load a scenario, ask "Orders are backing up right now, what's going on and what should I do first?", and open the **Agent trace** under the answer. It records executed dispatch and setting tools, their data timestamps and errors, and the manager's customized settings. The trace is saved with the answer and survives a refresh. If no snapshot is loaded, the tool returns `NO_SNAPSHOT`.
 
@@ -111,7 +113,7 @@ Retrieval metrics: `hit@k` (any relevant chunk in top k), `recall@k` (share of e
 | Variable `PORT` | `8080` |
 | Domain target port | `8080` |
 
-Set `DATABASE_URL`, `JINA_API_KEY`, and `GROQ_API_KEY` on the application service in its production environment, then deploy the variable changes. Gradio binds to `0.0.0.0:$PORT`. The `/` healthcheck verifies that the homepage responds; it does not check database connectivity or AI credentials. The pre-deploy command applies pending migrations before the app starts; migrations can also be run locally with `uv run python cli.py migrate`.
+Set `DATABASE_URL`, `JINA_API_KEY`, and `OPENROUTER_KEY` on the application service in its production environment, then deploy the variable changes. Set `LLM_PROVIDER=openrouter` and `LLM_MODEL=nvidia/nemotron-3-super-120b-a12b:free` if the service has old Groq overrides. Gradio binds to `0.0.0.0:$PORT`. The `/` healthcheck verifies that the homepage responds; it does not check database connectivity or AI credentials. The pre-deploy command applies pending migrations before the app starts; migrations can also be run locally with `uv run python cli.py migrate`.
 
 Install dependencies during the build. Use the `python` commands above at runtime so app startup and cron runs do not trigger `uv run` dependency synchronization. Installer progress is written to stderr, which Railway can display as errors even when installation succeeds. Application logs use JSON on stdout with an explicit severity; failed CLI jobs log an error and exit with status 1.
 
@@ -123,7 +125,7 @@ Idle-conversation summarization runs through the `summaries` CLI command. In cha
 | --- | --- |
 | Start command | `python cli.py summaries` |
 | Cron schedule | `*/5 * * * *` |
-| Variables | `DATABASE_URL`, `GROQ_API_KEY` |
+| Variables | `DATABASE_URL`, `OPENROUTER_KEY` (same LLM provider/model as the web service) |
 | Healthcheck and public domain | None |
 
 Keep the web service's start command as `python cli.py app`. The cron command summarizes up to ten conversations idle for at least ten minutes, then processes up to ten other chats with pending personalization reviews, including failed or unfinished batches from earlier runs. Railway schedules use UTC. Locally, run the same task with `uv run python cli.py summaries`.
@@ -138,10 +140,10 @@ The daily review (dreaming) runs from cron once a day. Create a second cron serv
 | --- | --- |
 | Start command | `python cli.py review` |
 | Cron schedule | `0 18 * * *` (18:00 UTC = 23:30 IST) |
-| Variables | `DATABASE_URL`, `GROQ_API_KEY` |
+| Variables | `DATABASE_URL`, `OPENROUTER_KEY` (same LLM provider/model as the web service) |
 | Healthcheck and public domain | None |
 
-Summary refreshes can propose durable response preferences in **Settings → Suggestions**. Only explicit chat requests, Settings saves or accepted suggestions change **Personalization**. Most conversations produce no change. See [personalization.md](docs/personalization.md) for exact update rules.
+Summary refreshes and dreaming save verified new response preferences automatically, without approval. Explicit chat requests and Settings saves also update **Personalization**. Review preserves saved or removed fields, and most conversations produce no change. See [personalization.md](docs/personalization.md) for exact update rules.
 
 Locally: `uv run python cli.py review`.
 
@@ -156,7 +158,7 @@ Alerts are checked in code against each manager's settings (see [alerts.md](docs
 | Variables | `DATABASE_URL` |
 | Healthcheck and public domain | None |
 
-Railway runs cron jobs at most every five minutes, so each run checks five times, one minute apart, and exits after about four minutes, before the next run starts (Railway skips a run while the previous one is still active). That gives one check a minute. To run it as an always-on worker instead, use `python cli.py alerts --runs 0` in a normal service. The job needs no Groq key: it calls no model.
+Railway runs cron jobs at most every five minutes, so each run checks five times, one minute apart, and exits after about four minutes, before the next run starts (Railway skips a run while the previous one is still active). That gives one check a minute. To run it as an always-on worker instead, use `python cli.py alerts --runs 0` in a normal service. The job needs no LLM key: it calls no model.
 
 Locally: `uv run python cli.py alerts` checks once; `uv run python cli.py alerts --runs 0` keeps checking every minute until stopped.
 
@@ -176,7 +178,7 @@ Locally: `uv run python cli.py alerts` checks once; `uv run python cli.py alerts
 | `backend/cli.py` | App, migrations, ingestion, summaries and daily review; owns database resources |
 | `backend/service/factory.py` | Provider and chunking composition |
 
-`ui/gradio_app.py` composes the interface explicitly at launch. Services own validation and workflow decisions; `queries/` owns persistence. Suggestion acceptance and handover replacement use scoped atomic transactions. App and job entry points reuse one engine and dispose it on exit; `NullPool` remains unchanged.
+`ui/gradio_app.py` composes the interface explicitly at launch. Services own validation and workflow decisions; `queries/` owns persistence. Suggestion acceptance and handover replacement use scoped atomic transactions. App and job entry points reuse one engine with a bounded connection pool and dispose it on exit.
 
 ## Development checks
 

@@ -16,14 +16,15 @@ available, links to its source conversation.
 | --- | --- | --- |
 | Save personalization | A validated field actually differs from the loaded profile | Save only changed fields; stale edits are rejected |
 | Latest chat message | A direct lasting request such as "Keep answers short for me", "Always keep your answers short", "I prefer detailed explanations", or "Forget my preference for short answers" | A turn-scoped tool validates the exact user quote and supported value, then saves or removes that field |
-| Accept suggestion | A pending personalization suggestion still belongs to the manager and the field has never been set or removed | Apply the validated value and accept the proposal atomically |
+| Dreaming after summary | Verified clear intent or matching requests in three distinct chats; the field is unset | Save the preference and evidence with the review marker, without approval |
+| Accept a legacy suggestion | An older pending suggestion belongs to this manager and the field remains unset | Retained for existing records; new reviews do not create personalization suggestions |
 
 Repeating a saved value changes nothing, including its source and save time.
-No timer, page load, scenario load, summary or daily review applies a preference.
+Page loads and scenario loads do not infer preferences. Summary and daily review can save verified new preferences automatically.
 A removed field retains a null entry so old conversations cannot restore it.
 An explicit new request or a Settings save can set that field again.
 
-## Batched review only creates suggestions
+## Batched dreaming saves preferences automatically
 
 Review runs after a **successful summary save**, on all existing summary paths:
 Summarize Now, folding older messages after an answer, and the idle summary job
@@ -43,16 +44,14 @@ review of an existing summary. There is no new scheduler.
    and mark the batch reviewed.
 3. Exclude fields already saved or deliberately removed. Review never replaces
    them. If no unset field is supported by the new messages, stop.
-4. A new explicit lasting request can create a proposal. A request without
+4. A new explicit lasting request can save a preference. A request without
    lasting intent requires the same preference in **three distinct chats**.
    Repetition within one chat does not count. Evidence lookup is bounded to the
    last 20 summarized chats and their last 60 messages, scoped to this manager.
 5. Only then call the extractor. The usual output is `[]`. Each candidate must
    use an allowed code/value and exact user quotes at verified message positions.
    At least one supporting message must belong to the current review batch.
-6. Save pending proposals and the batch's progress marker in one transaction.
-   Duplicate, accepted or dismissed proposals for the same code/value are not
-   generated again. A successful no-op also advances progress. Provider errors,
+6. Save verified preferences, exact evidence and the batch's progress marker in one transaction, with source `dreaming`. No approval is required and no new personalization suggestion is created. Already saved or removed fields are checked again under the manager lock. A successful no-op also advances progress. Provider errors,
    malformed output and transaction failures leave that batch pending. Earlier
    successful batches remain complete. Summary and saved preferences stay intact.
 
@@ -71,16 +70,13 @@ stale or concurrent worker cannot regress progress or duplicate a completed batc
 
 Example: "Why is the queue growing?" saves nothing. "Make this answer shorter"
 applies to that answer only. "Keep answers short for me" can save a durable
-preference through chat. If its chat tool did not save it, summary review can
-propose it for approval; review never silently applies it.
+preference through chat. If its chat tool did not save it, summary review saves it automatically, with the source quote visible in Settings.
 
 ## Storage and answering
 
 Migration `0013_personalization` adds `app.manager_personalization`: one row per
 manager with store scope and a small JSON object containing typed preferences,
-source, quote, source conversation and save time. Personalization proposals use
-the existing `app.suggestions` table. Writes serialize on the manager row;
-acceptance and profile changes share a transaction.
+source, quote, source conversation and save time. Learned items also retain extraction reason and verified evidence. Existing personalization proposals remain readable in `app.suggestions`, but new dreaming runs save directly to the profile. Writes serialize on the manager row; profile changes and review progress share a transaction.
 
 Migration `0015_merge_personalization` joins this migration with the alert
 migrations from `main`. Both existing upgrade paths converge on one head without

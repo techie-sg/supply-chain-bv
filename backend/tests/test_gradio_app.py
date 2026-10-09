@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import gradio as gr
 import pytest
+import requests
 
 from service import scenarios
 from service.managers import ShiftManager
@@ -245,6 +246,28 @@ def test_chat_failure_preserves_existing_history(monkeypatch) -> None:
         chat_ui.chat("new question", history)
     assert history == [{"role": "user", "content": "earlier question"}]
     assert "internal API details" not in str(error.value)
+
+
+def test_rate_limit_restores_draft_and_explains_the_failure(monkeypatch) -> None:
+    calls = []
+
+    def fail(question, manager_id=None):
+        calls.append(question)
+        response = requests.Response()
+        response.status_code = 429
+        raise requests.HTTPError("private provider details", response=response)
+
+    monkeypatch.setattr(chat_ui, "ask_question", fail)
+    previous = [{"role": "assistant", "content": "Earlier reply"}]
+    stream = chat_ui.respond_to_pending(
+        "Try this",
+        previous + [{"role": "user", "content": "Try this"}],
+    )
+    assert next(stream)[:2] == (previous, "Try this")
+    with pytest.raises(gr.Error, match="rate-limiting") as error:
+        next(stream)
+    assert calls == ["Try this"]  # Never retries the provider or replays tools.
+    assert "private provider details" not in str(error.value)
 
 
 def test_reply_uses_pending_message_once_and_keeps_previous_history(
@@ -891,7 +914,7 @@ def test_demo_summary_job_uses_the_forced_shared_job(monkeypatch, count):
     status = summary_ui.run_summary_job_now()
     assert called == [True]
     assert f"Updated {count} conversation" in status
-    assert "Suggested preferences require approval." in status
+    assert "Verified personalization preferences are saved automatically." in status
 
 
 def test_demo_summary_job_reports_partial_failures(monkeypatch):

@@ -1,5 +1,6 @@
 """Keep chat history in PostgreSQL so it survives refreshes and restarts."""
 
+import json
 import re
 from collections.abc import Callable, Sequence
 from datetime import datetime
@@ -365,6 +366,32 @@ def ask_question(
     )
 
     def reply(question: str, **kwargs: Any) -> AnswerResult:
+        direct_setting = changes.direct_request(question)
+        if direct_setting is not None:
+            calls: list[ToolCallTrace] = []
+            tool = traced_tools([changes.tool()], calls)[0]
+            result = json.loads(tool.run(direct_setting))
+            text = (
+                tidy_reply("", changes.proposals)
+                if result["status"] == "proposed"
+                else result["reason"]
+            )
+            return AnswerResult(text, _trace(preferences, calls))
+        direct = personalization.direct_requests()
+        if direct:
+            calls = []
+            tool = traced_tools([personalization.tool()], calls)[0]
+            results = [json.loads(tool.run(arguments)) for arguments in direct]
+            if all(result.get("saved") for result in results):
+                saved = "; ".join(result["preference"] for result in results)
+                return AnswerResult(f"Saved. {saved}.", _trace(preferences, calls))
+            return AnswerResult(
+                "Could not save that preference. "
+                + "; ".join(
+                    result["reason"] for result in results if not result.get("saved")
+                ),
+                _trace(preferences, calls),
+            )
         if is_greeting(question):
             greeting = _briefing(preferences, kwargs.get("handover_note_id"))
             if greeting is not None:
@@ -418,6 +445,15 @@ def _tidied(
     result: AnswerResult,
     changes: SettingChanges,
 ) -> AnswerResult:
+    if not changes.proposals and re.search(
+        r"\b(?:press|click)\s+\*{0,2}confirm\b",
+        result.text,
+        re.IGNORECASE,
+    ):
+        return AnswerResult(
+            "I couldn't prepare that setting change. Nothing was saved. You can update it in Settings or specify the setting and value again.",
+            result.trace,
+        )
     return AnswerResult(tidy_reply(result.text, changes.proposals), result.trace)
 
 

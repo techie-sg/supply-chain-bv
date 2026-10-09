@@ -5,6 +5,7 @@ from service import factory
 from service.chunking import FixedSizeChunkingStrategy, MarkdownSectionChunkingStrategy
 from service.groq_service import GroqService
 from service.jina_embedding_service import JinaEmbeddingService
+from service.openrouter_service import OpenRouterService
 
 
 def test_factories_use_settings_without_calling_external_providers(monkeypatch) -> None:
@@ -21,11 +22,19 @@ def test_factories_use_settings_without_calling_external_providers(monkeypatch) 
         isinstance(embedding, JinaEmbeddingService) and embedding.model == "embedding"
     )
     assert embedding.task_adapters
-    assert isinstance(llm, GroqService) and llm.model == "chat"
+    assert isinstance(llm, OpenRouterService) and llm.model == "chat"
     assert isinstance(
         factory.create_chunking_strategy(),
         MarkdownSectionChunkingStrategy,
     )
+
+
+def test_groq_remains_an_explicit_provider_option() -> None:
+    from constants import GROQ_MODEL
+
+    settings = Settings(_env_file=None, llm_provider="groq", llm_model=GROQ_MODEL)  # type: ignore[call-arg]
+    llm = factory.create_llm_service(settings)
+    assert isinstance(llm, GroqService) and llm.model == GROQ_MODEL
 
 
 def test_fixed_size_settings_select_the_alternative_strategy() -> None:

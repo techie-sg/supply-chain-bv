@@ -1,8 +1,8 @@
 # Dispatch tools
 
-The assistant can call two read-only Python tools through the configured `GroqService`. They run in the application process using the existing `Tool` contract.
+The assistant can call two read-only Python tools through the configured LLM service (`OpenRouterService` by default). They run in the application process using the existing `Tool` contract.
 
-`domain/tools.py` defines validated inputs and the JSON schemas sent to Groq. `service/tools.py` exposes the tools, assembles results, and calculates metrics. All database reads live in `queries/tools.py` and use transactional sessions with the configured connection and statement timeouts.
+`domain/tools.py` defines validated inputs and the JSON schemas sent to the model. `service/tools.py` exposes the tools, assembles results, and calculates metrics. All database reads live in `queries/tools.py` and use transactional sessions with the configured connection and statement timeouts.
 
 ## Live dispatch status
 
@@ -77,7 +77,7 @@ Example call:
 
 ## Results and errors
 
-The service returns a data dictionary, serialized as JSON in the tool message sent to Groq. Validation rejects missing, malformed, or extra arguments before any database read. Errors use this shape:
+The service returns a data dictionary, serialized as JSON in the tool message sent to the model. Validation rejects missing, malformed, or extra arguments before any database read. Errors use this shape:
 
 ```json
 {
@@ -102,7 +102,7 @@ Database failures return a safe error message. Internal exceptions are logged, a
 
 ## Chat and trace
 
-All chat requests use the same RAG retrieval and configured Groq service. Tools are available without a preliminary read of the scenario tables. A policy-only answer can be generated without fetching operational rows.
+All chat requests use the same RAG retrieval and configured LLM service. Tools are available without a preliminary read of the scenario tables. A policy-only answer can be generated without fetching operational rows. Both providers allow at most three tool rounds; OpenRouter then finishes without offering tools because the Nemotron free endpoint does not support `tool_choice="none"`.
 
 The expandable **Agent trace** records executed dispatch and setting tools, their arguments, the data's `as_of` time and stale flag, errors, and the manager's customized settings. It is saved on the assistant message for display and is never sent back to the model as conversation history.
 

@@ -225,6 +225,34 @@ def test_drafting_needs_chats_in_the_shift(shifts, monkeypatch) -> None:
     assert "- Asked: Rain backlog?" in seen[0]
 
 
+def test_draft_preserves_application_confirmations_separately_from_model_claims(shifts):
+    handover.ensure_shift("ananya")
+    conversation = chat("2026-10-09T10:30:00+05:30", "No changes approved.")
+    conversation.messages.extend(
+        [
+            {
+                "who": "assistant",
+                "what": "Saved. Surge incentive cap per shift: ₹300.",
+                "when": "2026-10-09T10:31:00+05:30",
+            },
+            {
+                "who": "assistant",
+                "what": "Saved. Surge incentive cap per shift: ₹400.",
+                "when": "2026-10-09T10:32:00+05:30",
+                "trace": {"tools": [], "preferences": []},
+            },
+        ],
+    )
+    shifts.chats = [conversation]
+    seen = []
+    service = handover.HandoverService(
+        lambda prompt, message: seen.append(message) or "- Cap confirmed at ₹300.",
+    )
+    service.draft(shifts.rows[0])
+    recorded = seen[0].split("Application-recorded", 1)[1]
+    assert "₹300" in recorded and "₹400" not in recorded
+
+
 def test_a_failed_summary_drafts_from_the_messages(shifts, monkeypatch) -> None:
     handover.begin_shift("ananya")
     shifts.chats = [chat("2026-10-09T10:30:00+05:30")]
@@ -243,6 +271,41 @@ def test_a_failed_summary_drafts_from_the_messages(shifts, monkeypatch) -> None:
         "- Rain backlog.\n  - Standby rider approved."
     )
     assert "manager: Rain backlog?" in seen[0]
+
+
+def test_reopened_chat_draft_uses_only_messages_from_the_shift(shifts) -> None:
+    handover.begin_shift("ananya")
+    shift = shifts.rows[0]
+    shift.ended_at = ENDED
+    conversation = chat("2026-10-08T10:00:00+05:30", "Prior shift cap ₹100.")
+    conversation.messages.extend(
+        [
+            {
+                "who": "assistant",
+                "what": "Saved. Cap ₹300.",
+                "when": "2026-10-09T10:00:00+05:30",
+            },
+            {
+                "who": "assistant",
+                "what": "Saved. Next shift cap ₹400.",
+                "when": "2026-10-09T15:00:00+05:30",
+            },
+        ],
+    )
+    future_chat = chat("2026-10-09T16:00:00+05:30", "Future-only chat.")
+    shifts.chats = [conversation, future_chat]
+    seen: list[str] = []
+
+    def generate(prompt: str, message: str) -> str:
+        seen.append(message)
+        return "- Cap ₹300."
+
+    service = handover.HandoverService(generate)
+    result = service.draft(shift)
+    assert result is not None and result[1] == [conversation]
+    assert "₹300" in seen[0]
+    assert all(text not in seen[0] for text in ("₹100", "₹400", "Future-only"))
+    assert len(conversation.messages) == 3  # Stored chat history is unchanged.
 
 
 def test_next_manager_follows_shift_order_and_wraps(shifts) -> None:

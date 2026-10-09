@@ -47,6 +47,21 @@ def test_unavailable_storage_invalidates_edit_snapshot(monkeypatch):
         personalization.save("karthik", {"manager_id": "ananya", "profile": {}})
 
 
+def test_dreaming_source_is_visible_with_evidence_and_chat_link():
+    profile = {
+        "answer_length": item(
+            "brief",
+            "dreaming",
+            conversation_id=str(uuid4()),
+            quote="Keep answers short for me",
+        ),
+    }
+    values = personalization._values(profile, "ananya")
+    assert "learned during conversation review" in values[-2]
+    assert "Keep answers short for me" in values[-2]
+    assert "View conversation" in values[-2] and "manager=ananya" in values[-2]
+
+
 def test_settings_show_personalization_controls_and_no_memory_digest(ui_app):
     ids = {
         component.elem_id

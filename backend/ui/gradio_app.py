@@ -338,6 +338,7 @@ def build_app() -> gr.Blocks:
         app.load(fn=None, js=sidebar_ui.CLOSE_SIDEBAR_ON_PHONE_JS)
         app.load(fn=None, js=navigation_ui.CHAT_NAVIGATION_JS)
         app.load(fn=None, js=summary_ui.SUMMARY_POPOVER_JS)
+        app.load(fn=None, js=chat_ui.COMPOSER_LAYOUT_JS)
         history_list.input(
             sidebar_ui.open_conversation,
             inputs=[history_list, manager],

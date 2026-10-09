@@ -24,7 +24,7 @@ from service.factory import (
     create_embedding_service,
     create_llm_service,
 )
-from service.groq_service import GroqService
+from service.llm_service import LLMService
 from service.rag import RAGService, retrieval_query
 
 DATASET = Path(__file__).with_name("dataset.csv")
@@ -220,7 +220,10 @@ def judge(
 def main() -> None:  # pragma: no cover
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--judge", action="store_true", help="also score answers")
-    parser.add_argument("--judge-model", help="Groq model for grading answers")
+    parser.add_argument(
+        "--judge-model",
+        help="model for grading answers on the configured LLM provider",
+    )
     parser.add_argument("--category", help="only run one category")
     parser.add_argument(
         "--delay",
@@ -247,9 +250,10 @@ def main() -> None:  # pragma: no cover
     embedder = create_embedding_service(settings)
     labels = chunk_labels()
     rag = RAGService(embedder, create_llm_service(settings))
-    judge_llm = GroqService(
-        model=args.judge_model or settings.llm_model,
-        api_key=settings.groq_api_key,
+    judge_llm = create_llm_service(
+        settings.model_copy(
+            update={"llm_model": args.judge_model or settings.llm_model},
+        ),
     )
 
     saved = {}
@@ -293,7 +297,7 @@ def _run(  # pragma: no cover
     embedder: Any,
     labels: dict[str, set[str]],
     rag: RAGService,
-    judge_llm: GroqService,
+    judge_llm: LLMService,
     results: list[dict[str, Any]],
 ) -> None:
     for row in rows:

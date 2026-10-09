@@ -18,7 +18,7 @@ remains to be agreed. The four workstreams are not implemented milestones.
 
 | Group | Team members | Tasks |
 | --- | --- | --- |
-| 1 : RAG and 6-pager | Vishnu Mohan, Ravisekhar R | Prepare the policy corpus; implement chunking, Jina embeddings, document ingestion, pgvector retrieval, and Groq answer generation; validate retrieval and grounded responses; write and maintain the 6-pager. |
+| 1 : RAG and 6-pager | Vishnu Mohan, Ravisekhar R | Prepare the policy corpus; implement chunking, Jina embeddings, document ingestion, pgvector retrieval, and LLM answer generation; validate retrieval and grounded responses; write and maintain the 6-pager. |
 | 2 : Setup and integration | Sunny Gupta, Priya Ranjan, Sharad Nailwal | Set up the repository, dependencies, and environment configuration; implement database models, migrations, and scenario loading; integrate services with the Gradio UI; configure Railway deployment and CI; write the README and PR/FAQ. Own memory and dreaming under the current allocation above; coordinate integration of the other group's tools. Action approval, guardrails, caching, observability, end-to-end evaluation and demo scope require separate agreement. |
 
 Each group shares its listed tasks and coordinates integration and review with the other group.
@@ -31,7 +31,7 @@ Each group shares its listed tasks and coordinates integration and review with t
 | Database and retrieval | PostgreSQL, SQLAlchemy, and pgvector cosine search |
 | Migrations | Alembic; run manually from a local machine |
 | Embeddings | Jina API, `jina-embeddings-v5-text-nano` |
-| Answer generation | Groq, `openai/gpt-oss-120b` |
+| Answer generation | OpenRouter, `nvidia/nemotron-3-super-120b-a12b:free` |
 | Chunking | Markdown sections by default; optional fixed-size character windows |
 | Scenario definitions | YAML starting snapshots: normal, backlog, rain |
 | Dependencies | uv; locked versions in `backend/uv.lock` |

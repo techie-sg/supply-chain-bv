@@ -20,6 +20,7 @@ from sqlalchemy import Engine
 
 from constants import DEMO_STORE_ID, TIMEZONE
 from database.models import Conversation, Manager, Shift
+from domain.chat import StoredMessage
 from domain.managers import ShiftManager
 from domain.memory import SuggestionKind
 from queries.conversations import start_conversation
@@ -85,7 +86,7 @@ def when(moment: datetime) -> str:
 
 
 def shift_chats(shift: Shift, engine: Engine | None = None) -> list[Conversation]:
-    """The manager's chats with messages since the shift started, newest first."""
+    """The manager's chats with messages during this shift, newest first."""
     return [
         conversation
         for conversation in recent_conversations(
@@ -94,7 +95,17 @@ def shift_chats(shift: Shift, engine: Engine | None = None) -> list[Conversation
             50,
             engine,
         )
-        if datetime.fromisoformat(conversation.messages[-1]["when"]) >= shift.started_at
+        if shift_messages(conversation, shift)
+    ]
+
+
+def shift_messages(conversation: Conversation, shift: Shift) -> list[StoredMessage]:
+    """A reopened chat can span shifts; exclude earlier and later messages."""
+    return [
+        message
+        for message in conversation.messages
+        if (moment := datetime.fromisoformat(message["when"])) >= shift.started_at
+        and (shift.ended_at is None or moment <= shift.ended_at)
     ]
 
 
@@ -166,12 +177,34 @@ class HandoverService:
         if self._summarize(chats):
             chats = shift_chats(shift, self.engine)
         sections = []
+        decisions: list[str] = []
         for conversation in chats:
-            body = conversation.summary or "\n".join(
+            messages = shift_messages(conversation, shift)
+            # A full-chat summary may include decisions from a different shift.
+            summary = (
+                conversation.summary
+                if len(messages) == len(conversation.messages)
+                else None
+            )
+            body = summary or "\n".join(
                 f"{message['who']}: {message['what'][:300]}"
-                for message in conversation.messages[-6:]
+                for message in messages[-6:]
             )
             sections.append(f"Chat: {chat_label(conversation)}\n{body}")
+            decisions.extend(
+                f"{message['when']}: {message['what']}"
+                for message in messages
+                if message["who"] == "assistant"
+                and "trace" not in message
+                and message["what"].startswith(
+                    ("Saved. ", "Cancelled. Nothing was changed"),
+                )
+            )
+        sections.append(
+            "Application-recorded setting confirmations/cancellations (authoritative; "
+            "these override conflicting descriptions in chat summaries):\n"
+            + ("\n".join(decisions) if decisions else "None recorded."),
+        )
         reply = self.generate(
             (PROMPTS / "handover_draft.md").read_text(encoding="utf-8"),
             "\n\n".join(sections),

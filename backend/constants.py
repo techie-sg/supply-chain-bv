@@ -10,6 +10,9 @@ NO_GUIDANCE_ANSWER = (
 JINA_API_URL = "https://api.jina.ai/v1/embeddings"
 JINA_MODEL = "jina-embeddings-v5-text-nano"
 GROQ_MODEL = "openai/gpt-oss-120b"
+OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+LLM_MAX_TOOL_ROUNDS = 3
 DEFAULT_CHUNK_SIZE = 1600
 DEFAULT_CHUNK_OVERLAP = 200
 
@@ -31,7 +34,7 @@ SHOW_SUGGESTIONS = False
 DREAMING_MIN_CHATS = 3  # a settings suggestion needs evidence from this many chats
 DREAMING_RECENT_CHATS = 20  # chats read for settings suggestions
 
-# Personalization review usually does nothing; inference always needs approval.
+# Personalization review usually does nothing; verified preferences save directly.
 PERSONALIZATION_MIN_CHATS = 3
 PERSONALIZATION_EVIDENCE_CHATS = 20
 PERSONALIZATION_EVIDENCE_MESSAGES = 60

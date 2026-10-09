@@ -34,7 +34,11 @@ def _values(profile: Profile, manager_id: str, status: str = "") -> tuple:
         if not entry.get("value"):
             continue
         name = FIELDS[code].name if code in FIELDS else "Additional instructions"
-        if entry.get("source") == "chat" and entry.get("conversation_id"):
+        if entry.get("source") == "dreaming":
+            sources.append(
+                f"- **{name}:** learned during conversation review. “{escape(entry.get('quote', ''))}”",
+            )
+        elif entry.get("source") == "chat" and entry.get("conversation_id"):
             sources.append(
                 f"- **{name}:** saved from chat. “{escape(entry.get('quote', ''))}”",
             )
@@ -135,7 +139,7 @@ def build(manager: gr.State) -> PersonalizationComponents:
     snapshot = gr.State(None)
     sources = gr.Markdown(elem_id="personalization-sources")
     gr.Markdown(
-        "**When this changes:** only when you save here, explicitly ask in chat to remember/change/remove a lasting preference, or accept a suggestion. Summary refreshes can suggest preferences; they never apply them.",
+        "**When this changes:** save here or ask in chat for a lasting preference. Conversation review also saves clear or repeated preferences automatically, without approval. Ordinary questions do not change your preferences; review preserves settings you have already chosen or removed.",
     )
     with gr.Row():
         save_button = gr.Button(
