@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DispatchDesk retrieval evals</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f6f5f2; --surface: #fcfcfb; --line: #e4e3de; --grid: #ecebe7;
+  --ink: #0b0b0b; --ink2: #52514e; --ink3: #8a8983;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --good: #1b7f4b; --bad: #c0392b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page: #121211; --surface: #1a1a19; --line: #2e2e2b; --grid: #262624;
+    --ink: #fff; --ink2: #c3c2b7; --ink3: #8a8983;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --good: #4cc38a; --bad: #e66767;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, sans-serif; }
+main { max-width: 1080px; margin: 0 auto; padding: 32px 20px 80px; }
+h1 { font-size: 24px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 0; }
+p.sub, .sub { color: var(--ink2); margin: 2px 0 0; font-size: 13px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; margin-top: 20px; }
+.head { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: flex-start; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 12px; color: var(--ink2); }
+select, button, input { font: inherit; font-size: 12px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+button { cursor: pointer; }
+.legend { display: flex; gap: 16px; margin: 10px 0 2px; font-size: 12px; color: var(--ink2); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+svg { width: 100%; height: auto; display: block; }
+svg text { fill: var(--ink2); font-size: 11px; font-family: inherit; }
+svg .grid { stroke: var(--grid); }
+svg .axis { stroke: var(--line); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin-top: 16px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.tile .k { font-size: 12px; color: var(--ink2); }
+.tile .v { font-size: 26px; font-weight: 600; margin-top: 2px; }
+.tile .d { font-size: 12px; color: var(--ink2); }
+.tile .up { color: var(--good); font-weight: 600; }
+.tbl { display: none; overflow-x: auto; max-height: 420px; margin-top: 10px; }
+table { border-collapse: collapse; width: 100%; font-size: 12px; }
+th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--ink2); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
+td.n { font-variant-numeric: tabular-nums; text-align: right; } th.n { text-align: right; }
+code { font-size: 11px; background: var(--page); padding: 1px 4px; border-radius: 4px; }
+ol.find li { margin: 6px 0; }
+#tip { position: fixed; pointer-events: none; z-index: 9; background: var(--ink); color: var(--surface); padding: 6px 9px; border-radius: 6px; font-size: 12px; display: none; max-width: 300px; white-space: pre-line; }
+</style>
+</head>
+<body>
+<main>
+  <h1>DispatchDesk retrieval evals</h1>
+  <p class="sub">Embedding model, chunk size and embedding type &mdash; retrieval only, no LLM. 63 scored questions, top-5 chunks, Jina embeddings, PDF corpus (7 docs), run 2026-10-06. One question moves a metric by 0.016; treat gaps under ~0.05 as noise.</p>
+
+  <div class="tiles" id="tiles"></div>
+  <p class="sub" style="margin-top:8px">Same chunking (sections, 768-dim v5-nano), task adapters off &rarr; on. In-memory sweep.</p>
+
+  <section class="card" id="c-heat">
+    <div class="head"><div><h2>Overview &middot; all hit and recall results at once</h2><p class="sub">Top: hit and recall at every cutoff, per setup. Bottom: the same numbers as a heatmap (darker = higher, outlined = best in column).</p></div><div class="controls" data-controls></div></div>
+    <div class="legend" data-legend></div><div data-chart></div><div class="tbl" data-tbl></div>
+  </section>
+
+  <section class="card" id="c-why">
+    <h2>Why <code>jina-embeddings-v5-text-nano</code></h2>
+    <p class="sub">Compared with v5-small, v4 and v3 (sections chunking, task adapters on, full float vectors).</p>
+    <div id="why-table" style="margin-top:10px"></div>
+    <ol class="find">
+      <li><b>Best top-3 and top-5 hit rate.</b> hit@3 0.825 and hit@5 0.873 are the highest of the four models. The app sends the top 3 sections to the LLM, so this is the metric closest to production.</li>
+      <li><b>v4's leads are inside the noise.</b> v4 is ahead on hit@1 (+0.048), MRR (+0.014) and recall@budget (+0.028), but a gap under ~0.05 is about three questions out of 63, and v4 is behind on hit@3 (&minus;0.031) and hit@5. It is not a reliable win.</li>
+      <li><b>Smallest vectors.</b> 768 dims against 1024 (small, v3) and 2048 (v4), so v4 stores and searches 2.7&times; the numbers per chunk and is a 3.8B-parameter model, for no consistent gain.</li>
+      <li><b>No reason to move up within v5.</b> v5-small scores below nano on every metric in the table above.</li>
+      <li><b>v3 is clearly worse</b> (hit@3 0.683, MRR 0.596).</li>
+      <li><b>The real lever is task adapters, not the model.</b> They lift nano's hit@3 from 0.683 to 0.825 at no cost, which is a bigger move than any model swap.</li>
+    </ol>
+    <p class="sub"><b>Caveats:</b> without adapters nano's hit@3 (0.683) is below v4 and v5-small, so this recommendation depends on turning adapters on and re-ingesting. With 63 questions the model ranking is close; recheck if the corpus or question set changes.</p>
+  </section>
+
+  <section class="card" id="c-chunk">
+    <div class="head"><div><h2>1 &middot; Chunk size</h2><p class="sub">Fixed-size chunks are <code>fixed-chars-overlap</code>; <code>sections</code> = one chunk per playbook section (current).</p></div><div class="controls" data-controls></div></div>
+    <div class="legend" data-legend></div><div data-chart></div><div class="tbl" data-tbl></div>
+  </section>
+
+  <section class="card" id="c-trade">
+    <div class="head"><div><h2>2 &middot; Context sent vs. quality</h2><p class="sub">Big chunks win per-k metrics only by sending more text. x = average characters in the top-3 context; each dot is one chunking setup.</p></div><div class="controls" data-controls></div></div>
+    <div class="legend" data-legend></div><div data-chart></div><div class="tbl" data-tbl></div>
+  </section>
+
+  <section class="card" id="c-budget">
+    <div class="head"><div><h2>3 &middot; Budget view: top-3 vs. a 4,000-character budget</h2><p class="sub">Top-3 gives every setup 3 chunks, so big chunks send far more text. The budget view keeps the top-ranked chunks that fit in 4,000 chars (at least one), so setups compete on equal context.</p></div><div class="controls" data-controls></div></div>
+    <div class="legend" data-legend></div><div data-chart></div><div class="tbl" data-tbl></div>
+    <div id="budget-notes" style="margin-top:12px"></div>
+  </section>
+
+  <section class="card" id="c-model">
+    <div class="head"><div><h2>4 &middot; Embedding model</h2><p class="sub">Sections chunking, full float vectors. A bigger model doesn't clearly beat v5-nano once adapters are on.</p></div><div class="controls" data-controls></div></div>
+    <div class="legend" data-legend></div><div data-chart></div><div class="tbl" data-tbl></div>
+  </section>
+
+  <section class="card" id="c-type">
+    <div class="head"><div><h2>5 &middot; Embedding type: dimensions &amp; binary</h2><p class="sub">Matryoshka truncation and sign-only binary vectors, sections chunking, task adapters on.</p></div><div class="controls" data-controls></div></div>
+    <div class="legend" data-legend></div><div data-chart></div><div class="tbl" data-tbl></div>
+  </section>
+
+  <section class="card" id="c-cat">
+    <div class="head"><div><h2>6 &middot; Results by question category</h2><p class="sub">Current <code>.env</code> setup on pgvector (v5-nano, sections, no adapters). Number in brackets = questions.</p></div><div class="controls" data-controls></div></div>
+    <div data-chart></div><div class="tbl" data-tbl></div>
+  </section>
+
+  <section class="card" id="c-q">
+    <div class="head"><div><h2>7 &middot; Eval questions</h2><p class="sub">The 65 scenarios and the sections each must retrieve.</p></div><div class="controls" id="q-controls"></div></div>
+    <div style="overflow-x:auto;max-height:520px;margin-top:10px"><table id="q-table"></table></div>
+  </section>
+
+  <section class="card">
+    <h2>Findings</h2>
+    <ol class="find">
+      <li><b>Task adapters are the clearest win, at no cost</b> &mdash; every chunking and model improves (v5-nano + sections: hit@3 0.683 &rarr; 0.825, MRR 0.547 &rarr; 0.664).</li>
+      <li><b>A bigger model doesn't pay off</b> &mdash; with adapters, v5-small and v4 are within noise of v5-nano; v3 is worst.</li>
+      <li><b>Keep section chunking</b> &mdash; fixed chunks only look better per k; at equal 4,000-char context, sections + adapters has recall 0.771 vs 0.651 for fixed-1600-0.</li>
+      <li><b>Keep full-size float vectors</b> &mdash; quality drops steeply below 512 dims and with binary vectors.</li>
+      <li><b>The PDF switch cost ~5 points</b> vs the Markdown corpus baseline (hit@1 0.46 &rarr; 0.40).</li>
+    </ol>
+  </section>
+</main>
+<div id="tip"></div>
+
+<script>
+const D = /*DATA*/;
+const $ = (s, r = document) => r.querySelector(s);
+const num = v => parseFloat(v);
+const f3 = v => v.toFixed(3);
+const METRICS = ["hit@1","hit@3","hit@5","recall@1","recall@3","recall@5","MRR","hit@budget","recall@budget"];
+const METRICS_TYPE = METRICS.slice(0, 7);
+const SERIES = ["--s1", "--s2"];
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+// ---- tooltip (event delegation on [data-tip]) ----
+const tip = $("#tip");
+document.addEventListener("mouseover", e => {
+  const t = e.target.closest("[data-tip]");
+  if (!t) { tip.style.display = "none"; return; }
+  tip.textContent = t.getAttribute("data-tip"); tip.style.display = "block";
+});
+document.addEventListener("mousemove", e => {
+  tip.style.left = Math.min(e.clientX + 14, innerWidth - 310) + "px"; tip.style.top = e.clientY + 14 + "px";
+});
+
+// ---- svg helpers ----
+const W = 900, H = 320, M = { l: 44, r: 12, t: 10, b: 54 };
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+function yAxis(ymax, x0 = M.l, x1 = W - M.r, h = H - M.t - M.b) {
+  let s = "";
+  for (let i = 0; i <= 5; i++) {
+    const v = ymax * i / 5, y = M.t + h - h * i / 5;
+    s += `<line class="${i ? "grid" : "axis"}" x1="${x0}" x2="${x1}" y1="${y}" y2="${y}"/><text x="${x0 - 6}" y="${y + 4}" text-anchor="end">${v.toFixed(2)}</text>`;
+  }
+  return s;
+}
+const ceil10 = v => Math.min(1, Math.ceil(v * 10) / 10);
+
+function barChart(cats, series, tipFmt) {
+  const ymax = ceil10(Math.max(...series.flatMap(s => s.values)));
+  const pw = W - M.l - M.r, ph = H - M.t - M.b, gw = pw / cats.length;
+  const bw = Math.min(26, gw * 0.7 / series.length), gap = 2;
+  let s = yAxis(ymax);
+  cats.forEach((c, i) => {
+    const gx = M.l + gw * i + gw / 2, total = bw * series.length + gap * (series.length - 1);
+    series.forEach((ser, j) => {
+      const x = gx - total / 2 + j * (bw + gap), h = ph * ser.values[i] / ymax, y = M.t + ph - h, r = Math.min(4, h);
+      s += `<path d="M${x} ${M.t + ph}V${y + r}Q${x} ${y} ${x + r} ${y}H${x + bw - r}Q${x + bw} ${y} ${x + bw} ${y + r}V${M.t + ph}Z" fill="var(${ser.color})"/>`;
+    });
+    const tipText = c.label + "\n" + series.map(x => `${x.name}: ${f3(x.values[i])}`).join("\n") + (tipFmt ? "\n" + tipFmt(i) : "");
+    s += `<text x="${gx}" y="${H - M.b + 16}" text-anchor="middle" ${c.bold ? 'style="font-weight:700;fill:var(--ink)"' : ""}>${esc(c.short)}</text>`;
+    if (c.sub) s += `<text x="${gx}" y="${H - M.b + 30}" text-anchor="middle" style="fill:var(--ink3)">${esc(c.sub)}</text>`;
+    s += `<rect x="${M.l + gw * i}" y="${M.t}" width="${gw}" height="${ph}" fill="transparent" data-tip="${esc(tipText)}"/>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" role="img">${s}</svg>`;
+}
+
+function lineChart(xs, series) {
+  const ymax = ceil10(Math.max(...series.flatMap(s => s.values.filter(v => v != null)))), pw = W - M.l - M.r - 30, ph = H - M.t - M.b;
+  const X = i => M.l + 15 + pw * i / (xs.length - 1), Y = v => M.t + ph - ph * v / ymax;
+  let s = yAxis(ymax);
+  xs.forEach((x, i) => { s += `<text x="${X(i)}" y="${H - M.b + 18}" text-anchor="middle">${esc(x)}</text>`; });
+  s += `<text x="${M.l + 15 + pw / 2}" y="${H - 6}" text-anchor="middle" style="fill:var(--ink3)">dimensions</text>`;
+  series.forEach(ser => {
+    const pts = ser.values.map((v, i) => [X(i), v == null ? null : Y(v)]).filter(p => p[1] != null);
+    s += `<polyline fill="none" stroke="var(${ser.color})" stroke-width="2" stroke-linejoin="round" points="${pts.map(p => p.join(",")).join(" ")}"/>`;
+    pts.forEach(p => { s += `<circle cx="${p[0]}" cy="${p[1]}" r="4.5" fill="var(${ser.color})" stroke="var(--surface)" stroke-width="2"/>`; });
+  });
+  const cw = pw / (xs.length - 1);
+  xs.forEach((x, i) => {
+    const t = x + " dims\n" + series.map(s => `${s.name}: ${s.values[i] == null ? "–" : f3(s.values[i])}`).join("\n");
+    s += `<rect x="${X(i) - cw / 2}" y="${M.t}" width="${cw}" height="${ph}" fill="transparent" data-tip="${esc(t)}"/>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" role="img">${s}</svg>`;
+}
+
+function scatter(points, xlabel, ymax) {
+  const xmax = Math.ceil(Math.max(...points.map(p => p.x)) / 1000) * 1000, pw = W - M.l - M.r, ph = H - M.t - M.b;
+  const X = v => M.l + pw * v / xmax, Y = v => M.t + ph - ph * v / ymax;
+  let s = yAxis(ymax);
+  for (let v = 0; v <= xmax; v += 1000) s += `<text x="${X(v)}" y="${H - M.b + 18}" text-anchor="middle">${v}</text>`;
+  s += `<text x="${M.l + pw / 2}" y="${H - 8}" text-anchor="middle" style="fill:var(--ink3)">${xlabel}</text>`;
+  points.forEach(p => {
+    s += `<circle cx="${X(p.x)}" cy="${Y(p.y)}" r="6" fill="var(${p.color})" stroke="var(--surface)" stroke-width="2"/>` +
+         `<circle cx="${X(p.x)}" cy="${Y(p.y)}" r="12" fill="transparent" data-tip="${esc(p.tip)}"/>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H}" role="img">${s}</svg>`;
+}
+
+function hbar(rows, color) {
+  const rh = 26, lw = 210, w = W, h = rows.length * rh + 12, pw = w - lw - 60;
+  let s = "";
+  rows.forEach((r, i) => {
+    const y = 6 + i * rh, bw = Math.max(0, pw * r.value);
+    s += `<text x="${lw - 8}" y="${y + 16}" text-anchor="end">${esc(r.label)}</text>` +
+         `<path d="M${lw} ${y + 4}H${lw + bw - 4}Q${lw + bw} ${y + 4} ${lw + bw} ${y + 8}V${y + 14}Q${lw + bw} ${y + 18} ${lw + bw - 4} ${y + 18}H${lw}Z" fill="var(${color})"/>` +
+         `<text x="${lw + bw + 6}" y="${y + 16}">${f3(r.value)}</text>` +
+         `<rect x="0" y="${y}" width="${w}" height="${rh}" fill="transparent" data-tip="${esc(r.tip)}"/>`;
+  });
+  s += `<line class="axis" x1="${lw}" x2="${lw}" y1="0" y2="${h}"/>`;
+  return `<svg viewBox="0 0 ${w} ${h}" role="img">${s}</svg>`;
+}
+
+// ---- card mounting: controls + legend + chart + table toggle ----
+function tableHTML(head, rows) {
+  return `<table><thead><tr>${head.map((h, i) => `<th class="${i ? "n" : ""}">${esc(h)}</th>`).join("")}</tr></thead><tbody>` +
+    rows.map(r => `<tr>${r.map((c, i) => `<td class="${i ? "n" : ""}">${esc(c)}</td>`).join("")}</tr>`).join("") + "</tbody></table>";
+}
+function mount(id, controls, render) {
+  const root = $("#" + id), state = {}, box = $("[data-controls]", root);
+  controls.forEach(c => {
+    state[c.key] = c.options[0];
+    const l = document.createElement("label"); l.textContent = c.label + " ";
+    const sel = document.createElement("select");
+    sel.innerHTML = c.options.map(o => `<option>${esc(o)}</option>`).join("");
+    sel.onchange = () => { state[c.key] = sel.value; draw(); };
+    l.append(sel); box.append(l);
+  });
+  const btn = document.createElement("button"); btn.textContent = "Table";
+  btn.onclick = () => { const t = $("[data-tbl]", root); const on = t.style.display !== "block"; t.style.display = on ? "block" : "none"; $("[data-chart]", root).style.display = on ? "none" : "block"; btn.textContent = on ? "Chart" : "Table"; };
+  box.append(btn);
+  function draw() {
+    const r = render(state);
+    $("[data-chart]", root).innerHTML = r.svg;
+    const lg = $("[data-legend]", root);
+    if (lg) lg.innerHTML = r.legend ? r.legend.map(l => `<span><i style="background:var(${l.color})"></i>${esc(l.name)}</span>`).join("") : "";
+    $("[data-tbl]", root).innerHTML = tableHTML(r.head, r.rows);
+  }
+  draw();
+}
+
+// ---- KPI tiles ----
+{
+  const row = ad => D.chunking.find(r => r.chunking === "sections" && r.task_adapters === ad);
+  const a = row("no"), b = row("yes");
+  $("#tiles").innerHTML = [["hit@1", "hit@1"], ["hit@3", "hit@3"], ["MRR", "MRR"], ["recall@budget", "recall @ 4k chars"]].map(([k, name]) => {
+    const x = num(a[k]), y = num(b[k]);
+    return `<div class="tile"><div class="k">${name}</div><div class="v">${f3(y)}</div><div class="d">with task adapters <span class="up">+${f3(y - x)}</span> (was ${f3(x)})</div></div>`;
+  }).join("");
+}
+
+// ---- why nano ----
+{
+  const cols = ["hit@1", "hit@3", "hit@5", "MRR", "recall@budget"];
+  const rows = D.models.filter(r => r.task_adapters === "yes"), nano = rows.find(r => r.model === "v5-text-nano");
+  const best = Object.fromEntries(cols.map(c => [c, Math.max(...rows.map(r => num(r[c])))]));
+  $("#why-table").innerHTML = `<table><thead><tr><th>model (adapters on)</th><th class="n">dims</th>${cols.map(c => `<th class="n">${c}</th>`).join("")}</tr></thead><tbody>` +
+    rows.map(r => `<tr><td>${esc(r.model)}</td><td class="n">${r.dims}</td>` + cols.map(c => {
+      const v = num(r[c]), d = v - num(nano[c]);
+      return `<td class="n" style="${v === best[c] ? "font-weight:700" : ""}">${f3(v)}${r === nano ? "" : ` <span style="color:var(--ink3)">(${d >= 0 ? "+" : ""}${f3(d)})</span>`}</td>`;
+    }).join("") + "</tr>").join("") + `</tbody></table><p class="sub">Bold = best in column; brackets = difference from v5-text-nano.</p>`;
+}
+
+// ---- overview heatmap ----
+const RAMP = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b"];
+const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+function ramp(t) {
+  const x = Math.max(0, Math.min(1, t)) * (RAMP.length - 1), i = Math.min(RAMP.length - 2, Math.floor(x)), f = x - i;
+  const a = hex(RAMP[i]), b = hex(RAMP[i + 1]);
+  return `rgb(${a.map((v, k) => Math.round(v + (b[k] - v) * f)).join(",")})`;
+}
+function heatmap(rows, groups) {
+  const cols = groups.flat(), vals = rows.flatMap(r => cols.map(c => r.v[c])), lo = Math.min(...vals), hi = Math.max(...vals);
+  const lw = 190, cw = 74, rh = 24, gap = 28, top = 44, w = lw + cols.length * cw + (groups.length - 1) * gap + 8, h = top + rows.length * rh + 6;
+  let s = "", x0 = lw;
+  const colX = {};
+  groups.forEach((g, gi) => {
+    s += `<text x="${x0 + g.length * cw / 2}" y="12" text-anchor="middle" style="font-weight:600;fill:var(--ink)">${gi ? "recall" : "hit"}</text>`;
+    g.forEach((c, ci) => { colX[c] = x0 + ci * cw; s += `<text x="${colX[c] + cw / 2}" y="34" text-anchor="middle">${esc(c.replace(/^(hit|recall)/, ""))}</text>`; });
+    x0 += g.length * cw + gap;
+  });
+  const best = Object.fromEntries(cols.map(c => [c, Math.max(...rows.map(r => r.v[c]))]));
+  rows.forEach((r, i) => {
+    const y = top + i * rh;
+    s += `<text x="${lw - 8}" y="${y + 16}" text-anchor="end" ${r.bold ? 'style="font-weight:700;fill:var(--ink)"' : ""}>${esc(r.label)}</text>`;
+    cols.forEach(c => {
+      const v = r.v[c], t = (v - lo) / (hi - lo), isBest = v === best[c];
+      s += `<g data-tip="${esc(r.label + "\n" + c + ": " + f3(v))}"><rect x="${colX[c] + 1}" y="${y + 1}" width="${cw - 2}" height="${rh - 2}" rx="3" fill="${ramp(t)}" ${isBest ? 'stroke="var(--ink)" stroke-width="2"' : ""}/>` +
+           `<text x="${colX[c] + cw / 2}" y="${y + 16}" text-anchor="middle" style="fill:${t > 0.45 ? "#fff" : "#0b0b0b"};font-weight:${isBest ? 700 : 400}">${f3(v)}</text></g>`;
+    });
+  });
+  return `<svg viewBox="0 0 ${w} ${h}" role="img">${s}</svg>`;
+}
+const SOURCES = {
+  "Chunk size (v5-nano)": { data: () => D.chunking, label: r => `${r.chunking} · ${r.task_adapters === "yes" ? "adapters" : "no adapters"}`, bold: r => r.chunking === "sections", budget: true, cat: r => ({ short: r.chunking.replace("fixed-", ""), sub: r.task_adapters === "yes" ? "adapt." : "plain", bold: r.chunking === "sections" }) },
+  "Embedding model (sections)": { data: () => D.models, label: r => `${r.model} · ${r.task_adapters === "yes" ? "adapters" : "no adapters"}`, bold: r => r.model === "v5-text-nano" && r.task_adapters === "no", budget: true, cat: r => ({ short: r.model.replace("-text", ""), sub: r.task_adapters === "yes" ? "adapt." : "plain", bold: false }) },
+  "Embedding type (adapters on)": { data: () => D.types, label: r => `${r.model} · ${r.dims}${r.binary === "yes" ? " binary" : ""}`, bold: () => false, budget: false, cat: r => ({ short: r.dims + (r.binary === "yes" ? "b" : ""), sub: r.model.replace("-text", ""), bold: false }) },
+};
+mount("c-heat", [{ key: "src", label: "Compare", options: Object.keys(SOURCES) }], st => {
+  const src = SOURCES[st.src], ks = [1, 3, 5], hit = ks.map(k => "hit@" + k), rec = ks.map(k => "recall@" + k);
+  if (src.budget) { hit.push("hit@budget"); rec.push("recall@budget"); }
+  const rows = src.data().map(r => ({ label: src.label(r), bold: src.bold(r), v: Object.fromEntries([...hit, ...rec].map(c => [c, num(r[c])])) }));
+  const data = src.data(), cats = data.map(r => ({ ...src.cat(r), label: src.label(r) }));
+  const COLORS = ["--s1", "--s2", "--s3", "--s4"];
+  const chart = (kind, names) => barChart(cats, names.map((n, i) => ({ name: n, color: COLORS[i], values: data.map(r => num(r[n])) })));
+  const title = t => `<p class="sub" style="margin:10px 0 0;font-weight:600;color:var(--ink)">${t}</p>`;
+  const lg = hit.map((n, i) => ({ name: n === "hit@budget" ? "4,000-char budget" : "top-" + n.replace(/^hit@/, ""), color: COLORS[i] }));
+  return { svg: title("Hit rate") + chart("hit", hit) + title("Recall") + chart("recall", rec) + title("Heatmap") + heatmap(rows, [hit, rec]),
+    legend: lg, head: ["setup", ...hit, ...rec], rows: rows.map(r => [r.label, ...[...hit, ...rec].map(c => f3(r.v[c]))]) };
+});
+
+// ---- 1. chunk size ----
+const chunkOrder = [...new Set(D.chunking.map(r => r.chunking))];
+const chunkRows = (name, ad) => D.chunking.find(r => r.chunking === name && r.task_adapters === ad);
+mount("c-chunk", [{ key: "metric", label: "Metric", options: METRICS }], st => {
+  const cats = chunkOrder.map(n => ({ short: n.replace("fixed-", ""), label: n + (n === "sections" ? " (current)" : ""), bold: n === "sections", sub: n === "sections" ? "current" : "" }));
+  const series = [{ name: "No task adapters", color: SERIES[0], values: chunkOrder.map(n => num(chunkRows(n, "no")[st.metric])) },
+                  { name: "Task adapters", color: SERIES[1], values: chunkOrder.map(n => num(chunkRows(n, "yes")[st.metric])) }];
+  return { svg: barChart(cats, series, i => `chunks: ${chunkRows(chunkOrder[i], "yes").chunks}`), legend: series.map(s => ({ name: s.name, color: s.color })),
+    head: ["chunking", "adapters", "chunks", ...METRICS, "budget_chunks", "top3_chars"],
+    rows: D.chunking.map(r => [r.chunking, r.task_adapters, r.chunks, ...METRICS.map(m => r[m]), r.budget_chunks, r.top3_chars]) };
+});
+
+// ---- 2. context vs quality ----
+mount("c-trade", [{ key: "metric", label: "Metric (y)", options: ["hit@3", "recall@3", "MRR", "hit@budget", "recall@budget"] }], st => {
+  const pts = D.chunking.map(r => ({ x: num(r.top3_chars), y: num(r[st.metric]), color: r.task_adapters === "yes" ? SERIES[1] : SERIES[0],
+    tip: `${r.chunking} (${r.task_adapters === "yes" ? "adapters" : "no adapters"})\n${st.metric}: ${r[st.metric]}\ntop-3 context: ${r.top3_chars} chars` }));
+  return { svg: scatter(pts, "avg characters in top-3 context", ceil10(Math.max(...pts.map(p => p.y)))),
+    legend: [{ name: "No task adapters", color: SERIES[0] }, { name: "Task adapters", color: SERIES[1] }],
+    head: ["chunking", "adapters", "top3_chars", st.metric], rows: D.chunking.map(r => [r.chunking, r.task_adapters, r.top3_chars, r[st.metric]]) };
+});
+
+// ---- budget view ----
+mount("c-budget", [{ key: "adapters", label: "Task adapters", options: ["yes", "no"] }, { key: "kind", label: "Metric", options: ["hit", "recall"] }], st => {
+  const rows = chunkOrder.map(n => chunkRows(n, st.adapters));
+  const k = st.kind + "@3", b = st.kind + "@budget";
+  const cats = rows.map(r => ({ short: r.chunking.replace("fixed-", ""), label: r.chunking + (r.chunking === "sections" ? " (current)" : ""), bold: r.chunking === "sections", sub: `3 → ${r.budget_chunks}` }));
+  const series = [{ name: k + " (top-3 chunks)", color: SERIES[0], values: rows.map(r => num(r[k])) }, { name: b + " (≤4,000 chars)", color: SERIES[1], values: rows.map(r => num(r[b])) }];
+  const rank = key => Object.fromEntries(rows.slice().sort((x, y) => num(y[key]) - num(x[key])).map((r, i) => [r.chunking, i + 1]));
+  const rk = rank(k), rb = rank(b);
+  const head = ["chunking", "top-3 chars", "chunks in budget", k, b, "change", "rank top-3", "rank budget"];
+  const body = rows.map(r => [r.chunking, r.top3_chars, r.budget_chunks, r[k], r[b], (num(r[b]) - num(r[k]) >= 0 ? "+" : "") + f3(num(r[b]) - num(r[k])), rk[r.chunking], rb[r.chunking]]);
+  const top = key => rows.slice().sort((x, y) => num(y[key]) - num(x[key]))[0].chunking;
+  $("#budget-notes").innerHTML = `<p class="sub">x-axis sub-label: chunks scored (3 &rarr; average chunks that fit in the budget). Small chunks gain because 8 of them fit; big chunks lose because only 1&ndash;2 fit, so most of their top-3 credit disappears.</p>` +
+    `<p class="sub"><b>Top ${k}:</b> ${top(k)} &nbsp;&rarr;&nbsp; <b>Top ${b}:</b> ${top(b)}</p>` + tableHTML(head, body);
+  return { svg: barChart(cats, series, i => `top-3 context: ${rows[i].top3_chars} chars\nchunks in budget: ${rows[i].budget_chunks}`), legend: series.map(x => ({ name: x.name, color: x.color })), head, rows: body };
+});
+
+// ---- 3. model ----
+const models = [...new Set(D.models.map(r => r.model))];
+mount("c-model", [{ key: "metric", label: "Metric", options: METRICS }], st => {
+  const get = (m, ad) => D.models.find(r => r.model === m && r.task_adapters === ad);
+  const cats = models.map(m => ({ short: m.replace("-text", ""), label: m, sub: get(m, "no").dims + " dims" }));
+  const series = [{ name: "No task adapters", color: SERIES[0], values: models.map(m => num(get(m, "no")[st.metric])) },
+                  { name: "Task adapters", color: SERIES[1], values: models.map(m => num(get(m, "yes")[st.metric])) }];
+  return { svg: barChart(cats, series), legend: series.map(s => ({ name: s.name, color: s.color })),
+    head: ["model", "adapters", "dims", ...METRICS, "budget_chunks"], rows: D.models.map(r => [r.model, r.task_adapters, r.dims, ...METRICS.map(m => r[m]), r.budget_chunks]) };
+});
+
+// ---- 4. embedding type ----
+mount("c-type", [{ key: "model", label: "Model", options: [...new Set(D.types.map(r => r.model))] }, { key: "metric", label: "Metric", options: METRICS_TYPE }], st => {
+  const rows = D.types.filter(r => r.model === st.model);
+  const dims = [...new Set(rows.map(r => r.dims))].sort((a, b) => a - b), full = dims[dims.length - 1];
+  const val = (bin, d) => { const r = rows.find(x => x.dims === d && x.binary === bin); return r ? num(r[st.metric]) : null; };
+  const series = [{ name: "Float vector", color: SERIES[0], values: dims.map(d => val("no", d)) }, { name: "Binary (sign-only)", color: SERIES[1], values: dims.map(d => val("yes", d)) }];
+  return { svg: lineChart(dims.map(d => d === full ? d + " (full)" : d), series), legend: series.map(s => ({ name: s.name, color: s.color })),
+    head: ["model", "dims", "binary", ...METRICS_TYPE], rows: D.types.map(r => [r.model, r.dims, r.binary, ...METRICS_TYPE.map(m => r[m])]) };
+});
+
+// ---- 5. categories ----
+mount("c-cat", [{ key: "metric", label: "Metric", options: METRICS_TYPE }], st => {
+  const rows = D.categories.map(r => ({ label: `${r.category} (${r.questions})`, value: num(r[st.metric]), tip: `${r.category}: ${r.questions} questions\n${st.metric}: ${r[st.metric]}\nhit@1 ${r["hit@1"]} · hit@5 ${r["hit@5"]} · MRR ${r.MRR}` })).sort((a, b) => b.value - a.value);
+  return { svg: hbar(rows, SERIES[0]), head: Object.keys(D.categories[0]), rows: D.categories.map(r => Object.values(r)) };
+});
+
+// ---- 6. questions ----
+{
+  const cats = [...new Set(D.questions.map(q => q.Category))].sort();
+  $("#q-controls").innerHTML = `<select id="q-cat"><option value="">all categories</option>${cats.map(c => `<option>${c}</option>`).join("")}</select><input id="q-search" placeholder="search…">`;
+  const draw = () => {
+    const c = $("#q-cat").value, s = $("#q-search").value.toLowerCase();
+    const rows = D.questions.filter(q => (!c || q.Category === c) && (!s || JSON.stringify(q).toLowerCase().includes(s)));
+    $("#q-table").innerHTML = `<thead><tr><th>ID</th><th>Category</th><th>Question</th><th>Hist</th><th>Expected sections</th></tr></thead><tbody>` +
+      rows.map(q => `<tr><td>${esc(q.ID)}</td><td>${esc(q.Category)}</td><td>${esc(q.Question)}</td><td>${esc(q["Turns of history"])}</td><td>${esc(q["Expected sections"]).split(", ").map(x => `<code>${x}</code>`).join(" ")}</td></tr>`).join("") + "</tbody>";
+  };
+  $("#q-cat").onchange = draw; $("#q-search").oninput = draw; draw();
+}
+</script>
+</body>
+</html>
