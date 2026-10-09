@@ -108,11 +108,11 @@ def test_day_names_and_numeric_strings_are_normalized(store) -> None:
     [
         (
             {"code": "rider_shortage_alert", "value": 3},
-            "0.5 orders per available rider to 2",
+            "0.5 to 2 orders per available rider",
         ),
         (
             {"code": "order_waiting_too_long_alert", "value": 12},
-            "1 minutes to 8 minutes",
+            "1 to 8 minutes",
         ),
         ({"code": "sla_dip_alert", "value": 40}, "50% to 100%"),
         ({"code": "incentive_cap", "value": 900}, "₹0 to ₹500"),

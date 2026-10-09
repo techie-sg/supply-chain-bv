@@ -15,7 +15,7 @@ import gradio as gr
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
-from constants import DEMO_MANAGER_ID, DEMO_STORE_ID, TIMEZONE
+from constants import DEMO_MANAGER_ID, DEMO_STORE_ID, SHOW_SUGGESTIONS, TIMEZONE
 from domain.memory import AlertOptions, SuggestionKind
 from domain.personalization import describe as describe_personalization
 from domain.preferences import EffectiveSetting
@@ -136,7 +136,7 @@ def refresh(
     detail, note = _details(chosen)
     count = len(items)
     return (
-        gr.update(visible=bool(items)),
+        gr.update(visible=bool(items) and SHOW_SUGGESTIONS),
         f'<p class="sidebar-heading">Suggestions · {count}</p>',
         gr.update(
             choices=[(_label(item), str(item.id)) for item in items],

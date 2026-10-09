@@ -51,6 +51,9 @@ def test_refresh_lists_pending_suggestions_with_their_details(
         "pending_suggestions",
         lambda manager_id=None: [SETTING, DRAFT],
     )
+    # Hidden from managers for now: pending suggestions don't show the entry.
+    assert suggestions_ui.refresh()[0] == gr.update(visible=False)
+    monkeypatch.setattr(suggestions_ui, "SHOW_SUGGESTIONS", True)
     entry, entry_text, items, detail, note, actions, _ = suggestions_ui.refresh()
     assert entry == gr.update(visible=True) and actions == gr.update(visible=True)
     assert entry_text == '<p class="sidebar-heading">Suggestions · 2</p>'

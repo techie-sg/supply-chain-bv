@@ -105,9 +105,11 @@ def limits(definition: SettingDefinition) -> str:
     if definition.locked:
         return "fixed by store policy"
     if definition.value_type == ValueType.NUMBER:
-        low = _amount(definition, definition.min_value or 0)
-        high = _amount(definition, definition.max_value or 0)
-        return f"{low} to {high}"
+        low, high = definition.min_value or 0, definition.max_value or 0
+        if definition.unit in (Unit.INR, Unit.PERCENT):
+            return f"{_amount(definition, low)} to {_amount(definition, high)}"
+        # "1 to 50 orders", not "1 orders to 50 orders".
+        return f"{_number(low)} to {_amount(definition, high)}"
     if definition.value_type == ValueType.BOOLEAN:
         return "on or off"
     return "one or more of " + ", ".join(definition.allowed_values or [])

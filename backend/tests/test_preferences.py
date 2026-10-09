@@ -92,10 +92,7 @@ def test_saving_an_unchanged_value_stores_nothing(store) -> None:
             True,
             3,
             None,
-            (
-                "Rider shortage must be 0.5 orders per available rider to 2 orders "
-                "per available rider."
-            ),
+            ("Rider shortage must be 0.5 to 2 orders per available rider."),
         ),
         (
             "cold_chain_isolation",

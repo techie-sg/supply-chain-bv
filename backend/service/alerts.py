@@ -25,7 +25,7 @@ from database.models import AlertEvent, HourlyMetric, Order, Rider
 from domain.memory import AlertOperator, AlertOptions, PreferenceCategory
 from queries.alerts import dismiss_trigger, record_trigger, triggers_since
 from queries.scenarios import read_scenario_rows
-from service.preferences import EffectiveSetting, manager_preferences
+from service.preferences import EffectiveSetting, limits, manager_preferences
 from service.scenarios import TIMEZONE
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -538,8 +538,8 @@ def diagnose(
             }
             for event in today
         ],
-        "allowed": f"{_amount(float(setting.definition.min_value or 0), unit)} to "
-        f"{_amount(float(setting.definition.max_value or 0), unit)}",
+        # Worded as the Settings tab words it.
+        "allowed": limits(setting.definition),
     }
 
 
