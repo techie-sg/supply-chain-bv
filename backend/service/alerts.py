@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from typing import Any
+from uuid import UUID
 
 import structlog
 from sqlalchemy import Engine
@@ -21,7 +22,7 @@ from sqlalchemy import Engine
 from constants import DEMO_MANAGER_ID, DEMO_STORE_ID
 from database.models import AlertEvent, HourlyMetric, Order, Rider
 from domain.memory import AlertOperator, AlertOptions, PreferenceCategory
-from queries.alerts import record_trigger, triggers_since
+from queries.alerts import dismiss_trigger, record_trigger, triggers_since
 from queries.scenarios import read_scenario_rows
 from service.preferences import EffectiveSetting, manager_preferences
 from service.scenarios import TIMEZONE
@@ -385,7 +386,8 @@ def check_alerts(
     """Record pop-ups for breached alerts and return the manager's recent ones.
 
     Returns pop-ups from the last few minutes, including ones another tab or an
-    earlier check recorded; the page shows those it has not shown yet.
+    earlier check recorded, except those the manager has closed; the page shows
+    those it has not shown yet. Today's counts include closed ones.
     """
     now = now or datetime.now(TIMEZONE)
     snapshot = live_snapshot(engine)
@@ -428,10 +430,30 @@ def check_alerts(
         alerts=[
             alert_view(event, counts[event.code])
             for event in today
-            if event.triggered_at >= recent_from
+            if event.triggered_at >= recent_from and event.dismissed_at is None
         ],
         recorded=recorded,
     )
+
+
+def dismiss_alert(
+    event_id: str,
+    manager_id: str = DEMO_MANAGER_ID,
+    store_id: str = DEMO_STORE_ID,
+    engine: Engine | None = None,
+) -> bool:
+    """Close a pop-up for good: no page shows it again.
+
+    If the breach lasts, the next trigger after the cooldown is a new pop-up.
+    """
+    try:
+        parsed = UUID(event_id)
+    except ValueError:
+        return False
+    closed = dismiss_trigger(parsed, store_id, manager_id, engine)
+    if closed:
+        logger.info("Alert dismissed", event_id=event_id, manager_id=manager_id)
+    return closed
 
 
 @dataclass(frozen=True)

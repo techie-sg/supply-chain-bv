@@ -91,9 +91,31 @@ def test_card_for_a_single_warning_and_for_nothing() -> None:
     assert popup == gr.update(visible=False) and html == ""
 
 
-def test_dismiss_moves_to_the_next_alert() -> None:
-    assert alerts_ui.dismiss([ALERT, PILING]) == [PILING]
+def recorder(closed: list[tuple[str, str]]):
+    """A stand-in for dismiss_alert that remembers what was closed."""
+
+    def dismiss_alert(event_id: str, manager_id: str) -> bool:
+        closed.append((event_id, manager_id))
+        return True
+
+    return dismiss_alert
+
+
+def test_dismiss_saves_the_close_and_moves_to_the_next_alert(monkeypatch) -> None:
+    closed: list[tuple[str, str]] = []
+    monkeypatch.setattr(alerts_ui, "dismiss_alert", recorder(closed))
+    assert alerts_ui.dismiss([ALERT, PILING], "imran") == [PILING]
+    assert closed == [("event-1", "imran")]
     assert alerts_ui.dismiss(None) == []
+    assert len(closed) == 1
+
+
+def test_dismiss_still_closes_when_saving_fails(monkeypatch) -> None:
+    def unavailable(event_id, manager_id):
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(alerts_ui, "dismiss_alert", unavailable)
+    assert alerts_ui.dismiss([ALERT, PILING], "imran") == [PILING]
 
 
 def test_diagnosis_opens_with_drivers_and_today_then_closes(monkeypatch) -> None:
@@ -180,6 +202,8 @@ def test_start_new_chat_from_an_alert(monkeypatch) -> None:
         "start_new_conversation",
         lambda manager_id=None: "new-chat",
     )
+    closed: list[tuple[str, str]] = []
+    monkeypatch.setattr(alerts_ui, "dismiss_alert", recorder(closed))
     history, message, chat_id, tab, queue = alerts_ui.start_alert_chat(
         [ALERT, PILING],
         "karthik",
@@ -187,6 +211,8 @@ def test_start_new_chat_from_an_alert(monkeypatch) -> None:
     assert history == [] and chat_id == "new-chat"
     assert message == alerts_ui.question(ALERT)
     assert tab == gr.update(selected="assistant") and queue == [PILING]
+    # Acting on the alert closes it, like the close button.
+    assert closed == [("event-1", "karthik")]
     assert alerts_ui.start_alert_chat([], "karthik") == (gr.skip(),) * 5
 
 

@@ -530,3 +530,5 @@ class AlertEvent(Base):
         JSONB,
         server_default=text("'{}'::jsonb"),
     )
+    # When the manager closed the pop-up; it is not shown again after that.
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

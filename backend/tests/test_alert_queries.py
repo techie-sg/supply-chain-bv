@@ -10,7 +10,7 @@ from sqlalchemy import Engine, delete, insert, text, update
 
 from database.models import AlertEvent, PreferenceDefinition
 from database.session import Base, build_engine, get_session
-from queries.alerts import record_trigger, triggers_since
+from queries.alerts import dismiss_trigger, record_trigger, triggers_since
 from service.scenarios import TIMEZONE
 
 AS_OF = datetime(2026, 10, 8, 20, 14, tzinfo=TIMEZONE)
@@ -108,3 +108,14 @@ def test_triggers_since_filters_by_manager_alert_and_time(alert_engine: Engine) 
     assert [event.code for event in only] == ["orders_piling_up_alert"]
     future = datetime.now(TIMEZONE) + timedelta(hours=1)
     assert triggers_since("DS-1", "karthik", future, engine=alert_engine) == []
+
+
+def test_a_pop_up_is_closed_once_and_only_by_its_manager(alert_engine: Engine) -> None:
+    event = record_trigger(values(), 15, alert_engine)
+    assert event is not None and event.dismissed_at is None
+    assert not dismiss_trigger(event.id, "DS-1", "ananya", alert_engine)
+    assert dismiss_trigger(event.id, "DS-1", "karthik", alert_engine)
+    assert not dismiss_trigger(event.id, "DS-1", "karthik", alert_engine)
+    since = datetime.now(TIMEZONE) - timedelta(hours=1)
+    [stored] = triggers_since("DS-1", "karthik", since, engine=alert_engine)
+    assert stored.dismissed_at is not None

@@ -2,8 +2,9 @@
 
 from datetime import datetime, timedelta
 from typing import Any
+from uuid import UUID
 
-from sqlalchemy import Engine, func, select, text
+from sqlalchemy import Engine, func, select, text, update
 
 from database.models import AlertEvent
 from database.session import get_session
@@ -61,3 +62,25 @@ def triggers_since(
         statement = statement.where(AlertEvent.code == code)
     with get_session(engine) as session:
         return list(session.scalars(statement.order_by(AlertEvent.triggered_at)))
+
+
+def dismiss_trigger(
+    event_id: UUID,
+    store_id: str,
+    manager_id: str,
+    engine: Engine | None = None,
+) -> bool:
+    """Mark the manager's pop-up closed; False if it is not theirs or already closed."""
+    statement = (
+        update(AlertEvent)
+        .where(
+            AlertEvent.id == event_id,
+            AlertEvent.store_id == store_id,
+            AlertEvent.manager_id == manager_id,
+            AlertEvent.dismissed_at.is_(None),
+        )
+        .values(dismissed_at=func.now())
+        .returning(AlertEvent.id)
+    )
+    with get_session(engine) as session:
+        return session.execute(statement).scalar_one_or_none() is not None

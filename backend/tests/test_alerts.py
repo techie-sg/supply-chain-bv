@@ -257,6 +257,7 @@ class FakeEvents:
         row = SimpleNamespace(
             id=f"event-{len(self.rows) + 1}",
             triggered_at=self.now,
+            dismissed_at=None,
             **values,
         )
         self.rows.append(row)
@@ -401,3 +402,35 @@ def test_store_check_without_a_scenario(events, monkeypatch) -> None:
     monkeypatch.setattr(alerts, "live_snapshot", lambda engine=None: None)
     check = alerts.check_store(now=THURSDAY)
     assert not check.available and check.recorded == {}
+
+
+def test_closed_pop_ups_are_not_shown_again_but_still_counted(events) -> None:
+    first = alerts.check_alerts("karthik", now=THURSDAY)
+    shortage = next(a for a in first.alerts if a["code"] == "rider_shortage_alert")
+    row = next(r for r in events.rows if r.id == shortage["id"])
+    row.dismissed_at = THURSDAY
+    events.now = THURSDAY + timedelta(minutes=2)
+    again = alerts.check_alerts("karthik", now=events.now)
+    assert [a["code"] for a in again.alerts] == ["orders_piling_up_alert"]
+    # Once the cooldown passes and it still breaches, it is a new pop-up.
+    events.now = THURSDAY + timedelta(minutes=16)
+    later = alerts.check_alerts("karthik", now=events.now)
+    reopened = [a for a in later.alerts if a["code"] == "rider_shortage_alert"]
+    assert len(reopened) == 1 and reopened[0]["today"] == 2
+
+
+def test_dismiss_alert_saves_for_the_manager(monkeypatch) -> None:
+    from uuid import UUID, uuid4
+
+    calls = []
+
+    def dismiss_trigger(event_id, store_id, manager_id, engine=None):
+        calls.append((event_id, store_id, manager_id))
+        return True
+
+    monkeypatch.setattr(alerts, "dismiss_trigger", dismiss_trigger)
+    event_id = str(uuid4())
+    assert alerts.dismiss_alert(event_id, "imran") is True
+    assert calls == [(UUID(event_id), "DS-BLR-014", "imran")]
+    assert alerts.dismiss_alert("not-a-uuid", "imran") is False
+    assert len(calls) == 1

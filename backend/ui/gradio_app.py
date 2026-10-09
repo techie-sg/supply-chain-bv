@@ -552,7 +552,7 @@ def build_app() -> gr.Blocks:
         )
         alert_components.close.click(
             alerts_ui.dismiss,
-            inputs=alert_queue,
+            inputs=[alert_queue, manager],
             outputs=alert_queue,
             show_progress="hidden",
         )

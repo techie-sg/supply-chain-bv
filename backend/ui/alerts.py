@@ -14,7 +14,7 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
 from constants import DEMO_MANAGER_ID
-from service.alerts import check_alerts, diagnose
+from service.alerts import check_alerts, diagnose, dismiss_alert
 from ui import chat as chat_ui
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -140,9 +140,24 @@ def card(queue: list[dict[str, Any]] | None) -> tuple[dict, str, dict, bool, dic
     )
 
 
-def dismiss(queue: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    """Close the shown alert; the next queued one, if any, takes its place."""
-    return list(queue or [])[1:]
+def _close(alert: dict[str, Any], manager_id: str) -> None:
+    """Remember the pop-up was closed, so a refresh or another tab skips it."""
+    try:
+        dismiss_alert(alert["id"], manager_id)
+    except (SQLAlchemyError, RuntimeError):
+        # The page still closes it; only other pages may show it again.
+        logger.warning("Could not save the alert dismissal", exc_info=True)
+
+
+def dismiss(
+    queue: list[dict[str, Any]] | None,
+    manager_id: str = DEMO_MANAGER_ID,
+) -> list[dict[str, Any]]:
+    """Close the shown alert for good; the next queued one takes its place."""
+    queue = list(queue or [])
+    if queue:
+        _close(queue[0], manager_id)
+    return queue[1:]
 
 
 def _table(items: list[dict[str, Any]], kind: str) -> str:
@@ -241,10 +256,14 @@ def start_alert_chat(
     queue: list[dict[str, Any]] | None,
     manager_id: str = DEMO_MANAGER_ID,
 ) -> tuple[Any, Any, Any, Any, Any]:
-    """Start a new chat about the shown alert; its question is sent next."""
+    """Start a new chat about the shown alert; its question is sent next.
+
+    Acting on the alert closes it, like the close button.
+    """
     if not queue:
         return gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip()
     history, _, conversation_id, tab = chat_ui.clear_chat(manager_id)
+    _close(queue[0], manager_id)
     return history, question(queue[0]), conversation_id, tab, queue[1:]
 
 
