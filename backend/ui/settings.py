@@ -14,17 +14,16 @@ import gradio as gr
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
-from constants import DEMO_MANAGER_ID, DIGEST_DAYS
-from database.models import PreferenceDefinition
+from constants import DEMO_MANAGER_ID, DIGEST_DAYS, TIMEZONE
 from domain.memory import BriefingView, PreferenceCode, Weekday
-from service.dreaming import memory_digest, plural
+from domain.preferences import EffectiveSetting, SettingDefinition
+from service.memory import memory_digest
 from service.preferences import (
-    EffectiveSetting,
     PreferenceError,
     limits,
     manager_preferences,
 )
-from service.scenarios import TIMEZONE
+from service.suggestions import plural
 from ui import suggestions as suggestions_ui
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -44,6 +43,28 @@ VIEW_CHOICES = [
     ("Last handover note", BriefingView.LAST_HANDOVER_NOTE.value),
 ]
 UNAVAILABLE = "Settings are unavailable right now. Check the database connection."
+
+
+ALERT_FIELDS = ("enabled", "threshold", "cooldown", "days", "start", "end")
+FORM_INPUTS = [(code, name) for code in ALERT_CODES for name in ALERT_FIELDS] + [
+    (PreferenceCode.SURGE_ONLY_BATCHING, "value"),
+    (PreferenceCode.INCENTIVE_CAP, "value"),
+    (PreferenceCode.BRIEFING, "value"),
+]
+FORM_OUTPUTS = (
+    [(code, name) for code in ALERT_CODES for name in (*ALERT_FIELDS, "info")]
+    + [
+        (code, name)
+        for code in (
+            PreferenceCode.COLD_CHAIN_ISOLATION,
+            PreferenceCode.SURGE_ONLY_BATCHING,
+            PreferenceCode.INCENTIVE_CAP,
+            PreferenceCode.BRIEFING,
+        )
+        for name in ("value", "info")
+    ]
+    + [("", "status")]
+)
 
 
 @dataclass
@@ -70,54 +91,33 @@ class SettingsForm:
     briefing_info: gr.Markdown
     status: gr.Markdown
     nav: gr.Radio | None = None
-    suggestions: tuple[Any, ...] = ()
+    suggestions: suggestions_ui.SuggestionComponents | None = None
     memory: gr.Markdown | None = None
     category_outputs: tuple[Any, ...] = ()  # each panel, then the Save row
 
+    def _component(self, code: str, name: str) -> Any:
+        if code in self.alerts:
+            return getattr(self.alerts[code], name)
+        controls: dict[str, tuple[Any, Any]] = {
+            PreferenceCode.COLD_CHAIN_ISOLATION: (
+                self.cold_chain,
+                self.cold_chain_info,
+            ),
+            PreferenceCode.SURGE_ONLY_BATCHING: (self.surge, self.surge_info),
+            PreferenceCode.INCENTIVE_CAP: (self.incentive_amount, self.incentive_info),
+            PreferenceCode.BRIEFING: (self.briefing, self.briefing_info),
+        }
+        return (
+            self.status
+            if name == "status"
+            else controls[code][0 if name == "value" else 1]
+        )
+
     def inputs(self) -> list[Any]:
-        """Editable fields, in the order `entries` reads them."""
-        fields: list[Any] = []
-        for alert in self.alerts.values():
-            fields += [
-                alert.enabled,
-                alert.threshold,
-                alert.cooldown,
-                alert.days,
-                alert.start,
-                alert.end,
-            ]
-        return [
-            *fields,
-            self.surge,
-            self.incentive_amount,
-            self.briefing,
-        ]
+        return [self._component(code, name) for code, name in FORM_INPUTS]
 
     def outputs(self) -> list[Any]:
-        """Every field the form refreshes, in the order `form_values` returns."""
-        fields: list[Any] = []
-        for alert in self.alerts.values():
-            fields += [
-                alert.enabled,
-                alert.threshold,
-                alert.cooldown,
-                alert.days,
-                alert.start,
-                alert.end,
-                alert.info,
-            ]
-        return [
-            *fields,
-            self.cold_chain,
-            self.cold_chain_info,
-            self.surge,
-            self.surge_info,
-            self.incentive_amount,
-            self.incentive_info,
-            self.briefing,
-            self.briefing_info,
-            self.status,
-        ]
+        return [self._component(code, name) for code, name in FORM_OUTPUTS]
 
 
 def _info(setting: EffectiveSetting) -> str:
@@ -132,57 +132,58 @@ def _info(setting: EffectiveSetting) -> str:
 def form_values(settings: list[EffectiveSetting], status: str = "") -> list[Any]:
     """Field updates for the current settings, in `SettingsForm.outputs` order."""
     by_code = {setting.definition.code: setting for setting in settings}
-    values: list[Any] = []
-    for code in ALERT_CODES:
-        setting = by_code[code]
+    updates: dict[tuple[str, str], Any] = {}
+    for code, setting in by_code.items():
         definition = setting.definition
-        options = setting.options
-        values += [
-            gr.update(value=setting.enabled, label=definition.name),
-            gr.update(
-                value=setting.value,
+        updates[(code, "info")] = _info(setting)
+        if code in ALERT_CODES:
+            options = setting.options
+            values = {
+                "enabled": gr.update(value=setting.enabled, label=definition.name),
+                "threshold": gr.update(
+                    value=setting.value,
+                    minimum=definition.min_value,
+                    maximum=definition.max_value,
+                ),
+                "cooldown": (options.cooldown_min if options else None)
+                or definition.default_cooldown_min,
+                "days": [day.value for day in options.days]
+                if options and options.days
+                else [],
+                "start": options.start or "" if options else "",
+                "end": options.end or "" if options else "",
+            }
+            updates.update({(code, name): value for name, value in values.items()})
+        elif code == PreferenceCode.INCENTIVE_CAP:
+            updates[(code, "value")] = gr.update(
+                value=setting.value if setting.enabled else None,
                 minimum=definition.min_value,
                 maximum=definition.max_value,
-            ),
-            (options.cooldown_min if options and options.cooldown_min else None)
-            or definition.default_cooldown_min,
-            [day.value for day in options.days] if options and options.days else [],
-            options.start if options and options.start else "",
-            options.end if options and options.end else "",
-            _info(setting),
-        ]
-    cold_chain = by_code[PreferenceCode.COLD_CHAIN_ISOLATION]
-    surge = by_code[PreferenceCode.SURGE_ONLY_BATCHING]
-    incentive = by_code[PreferenceCode.INCENTIVE_CAP]
-    briefing = by_code[PreferenceCode.BRIEFING]
-    return [
-        *values,
-        gr.update(value=bool(cold_chain.value), label=cold_chain.definition.name),
-        _info(cold_chain),
-        gr.update(value=bool(surge.value), label=surge.definition.name),
-        _info(surge),
-        gr.update(
-            value=incentive.value if incentive.enabled else None,
-            minimum=incentive.definition.min_value,
-            maximum=incentive.definition.max_value,
-        ),
-        _info(incentive),
-        list(briefing.value) if briefing.enabled and briefing.value else [],
-        _info(briefing),
-        status,
-    ]
+            )
+        elif code == PreferenceCode.BRIEFING:
+            updates[(code, "value")] = (
+                list(setting.value) if setting.enabled and setting.value else []
+            )
+        else:
+            updates[(code, "value")] = gr.update(
+                value=bool(setting.value),
+                label=definition.name,
+            )
+    updates[("", "status")] = status
+    return [updates[field] for field in FORM_OUTPUTS]
 
 
 def entries(
     values: tuple[Any, ...],
-    definitions: dict[str, PreferenceDefinition],
+    definitions: dict[str, SettingDefinition],
 ) -> list[dict[str, Any]]:
     """Turn form values into one entry per catalogue item, exactly as entered."""
+    fields = dict(zip(FORM_INPUTS, values, strict=True))
     items: list[dict[str, Any]] = []
-    for index, code in enumerate(ALERT_CODES):
-        enabled, threshold, cooldown, days, start, end = values[
-            index * 6 : index * 6 + 6
-        ]
+    for code in ALERT_CODES:
+        enabled, threshold, cooldown, days, start, end = (
+            fields[(code, name)] for name in ALERT_FIELDS
+        )
         options = {
             "days": list(days) or None,
             "start": (start or "").strip() or None,
@@ -199,7 +200,9 @@ def entries(
                 "options": {key: item for key, item in options.items() if item} or None,
             },
         )
-    surge, incentive_amount, views = values[len(ALERT_CODES) * 6 :]
+    surge = fields[(PreferenceCode.SURGE_ONLY_BATCHING, "value")]
+    incentive_amount = fields[(PreferenceCode.INCENTIVE_CAP, "value")]
+    views = fields[(PreferenceCode.BRIEFING, "value")]
     briefing = definitions[PreferenceCode.BRIEFING]
     items += [
         {
@@ -234,7 +237,7 @@ def load_settings(manager_id: str = DEMO_MANAGER_ID) -> list[Any]:
         return form_values(manager_preferences(manager_id).effective())
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not load settings", exc_info=True)
-        return [gr.skip()] * (len(ALERT_CODES) * 7 + 8) + [
+        return [gr.skip()] * (len(FORM_OUTPUTS) - 1) + [
             f'<p class="settings-status">{UNAVAILABLE}</p>',
         ]
 

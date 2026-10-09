@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from database.models import Document, DocumentChunk
 from database.session import Base, build_engine
 from queries.vector_store import insert_chunks, retrieve
+from service.corpus import prepare_documents
 
 
 def corpus_document(
@@ -59,10 +60,12 @@ def vector_engine() -> Iterator[Engine]:
 def test_edited_file_replaces_its_old_document_and_chunks(
     vector_engine: Engine,
 ) -> None:
-    insert_chunks([corpus_document("old")], [[1.0, 0.0]], vector_engine)
     insert_chunks(
-        [corpus_document("new", file_hash="cd" * 32)],
-        [[0.0, 1.0]],
+        prepare_documents([corpus_document("old")], [[1.0, 0.0]]),
+        vector_engine,
+    )
+    insert_chunks(
+        prepare_documents([corpus_document("new", file_hash="cd" * 32)], [[0.0, 1.0]]),
         vector_engine,
     )
     with vector_engine.connect() as connection:
@@ -75,10 +78,15 @@ def test_edited_file_replaces_its_old_document_and_chunks(
 def test_renamed_source_replaces_rows_with_the_same_document_id(
     vector_engine: Engine,
 ) -> None:
-    insert_chunks([corpus_document("markdown")], [[1.0, 0.0]], vector_engine)
     insert_chunks(
-        [corpus_document("pdf", source="policy.pdf", file_hash="cd" * 32)],
-        [[0.0, 1.0]],
+        prepare_documents([corpus_document("markdown")], [[1.0, 0.0]]),
+        vector_engine,
+    )
+    insert_chunks(
+        prepare_documents(
+            [corpus_document("pdf", source="policy.pdf", file_hash="cd" * 32)],
+            [[0.0, 1.0]],
+        ),
         vector_engine,
     )
     with vector_engine.connect() as connection:
@@ -93,10 +101,10 @@ def test_renamed_source_replaces_rows_with_the_same_document_id(
 def test_upsert_is_repeatable_and_preserves_document_id(vector_engine: Engine) -> None:
     documents = [corpus_document("one"), corpus_document("two")]
     embeddings = [[1.0, 0.0], [0.0, 1.0]]
-    assert insert_chunks(documents, embeddings, vector_engine) == 2
+    assert insert_chunks(prepare_documents(documents, embeddings), vector_engine) == 2
     with vector_engine.connect() as connection:
         original_id = connection.execute(select(Document.id)).scalar_one()
-    assert insert_chunks(documents, embeddings, vector_engine) == 2
+    assert insert_chunks(prepare_documents(documents, embeddings), vector_engine) == 2
     with vector_engine.connect() as connection:
         assert connection.execute(select(Document.id)).scalar_one() == original_id
         assert (
@@ -118,11 +126,16 @@ def test_reingestion_removes_chunks_left_by_the_previous_strategy(
     vector_engine: Engine,
 ) -> None:
     insert_chunks(
-        [corpus_document("one"), corpus_document("two"), corpus_document("three")],
-        [[1.0, 0.0]] * 3,
+        prepare_documents(
+            [corpus_document("one"), corpus_document("two"), corpus_document("three")],
+            [[1.0, 0.0]] * 3,
+        ),
         vector_engine,
     )
-    insert_chunks([corpus_document("combined")], [[1.0, 0.0]], vector_engine)
+    insert_chunks(
+        prepare_documents([corpus_document("combined")], [[1.0, 0.0]]),
+        vector_engine,
+    )
     assert [
         result["content"] for result in retrieve([1.0, 0.0], engine=vector_engine)
     ] == ["combined"]
@@ -131,7 +144,7 @@ def test_reingestion_removes_chunks_left_by_the_previous_strategy(
 def test_retrieval_uses_cosine_ranking_without_rpc(vector_engine: Engine) -> None:
     documents = [corpus_document("near"), corpus_document("far")]
     assert retrieve([1.0, 0.0], engine=vector_engine) == []
-    insert_chunks(documents, [[1.0, 0.0], [0.0, 1.0]], vector_engine)
+    insert_chunks(prepare_documents(documents, [[1.0, 0.0], [0.0, 1.0]]), vector_engine)
     results = retrieve([1.0, 0.0], match_count=1, engine=vector_engine)
     assert len(results) == 1
     assert results[0]["chunk_id"] == "POLICY#0"
@@ -148,7 +161,10 @@ def test_multi_document_write_rolls_back_on_failure(vector_engine: Engine) -> No
         corpus_document("invalid", "bad.md", file_hash="ab"),
     ]
     with pytest.raises(IntegrityError):
-        insert_chunks(documents, [[1.0, 0.0], [0.0, 1.0]], vector_engine)
+        insert_chunks(
+            prepare_documents(documents, [[1.0, 0.0], [0.0, 1.0]]),
+            vector_engine,
+        )
     with vector_engine.connect() as connection:
         assert (
             connection.execute(select(func.count()).select_from(Document)).scalar_one()
@@ -164,8 +180,10 @@ def test_multi_document_write_rolls_back_on_failure(vector_engine: Engine) -> No
 
 def test_document_without_version_date(vector_engine: Engine) -> None:
     insert_chunks(
-        [corpus_document("guidance", version="unknown")],
-        [[1.0, 0.0]],
+        prepare_documents(
+            [corpus_document("guidance", version="unknown")],
+            [[1.0, 0.0]],
+        ),
         vector_engine,
     )
     with vector_engine.connect() as connection:
@@ -177,7 +195,10 @@ def test_pgvector_in_extensions_schema(vector_engine: Engine) -> None:
         connection.execute(text("CREATE SCHEMA IF NOT EXISTS extensions"))
         connection.execute(text("ALTER EXTENSION vector SET SCHEMA extensions"))
     try:
-        insert_chunks([corpus_document("guidance")], [[1.0, 0.0]], vector_engine)
+        insert_chunks(
+            prepare_documents([corpus_document("guidance")], [[1.0, 0.0]]),
+            vector_engine,
+        )
         assert retrieve([1.0, 0.0], engine=vector_engine)[0]["content"] == "guidance"
     finally:
         with vector_engine.begin() as connection:
@@ -185,8 +206,8 @@ def test_pgvector_in_extensions_schema(vector_engine: Engine) -> None:
 
 
 def test_invalid_inputs_fail_without_database_access() -> None:
-    assert insert_chunks([], []) == 0
+    assert insert_chunks(prepare_documents([], [])) == 0
     with pytest.raises(ValueError, match="same length"):
-        insert_chunks([corpus_document("one")], [])
+        insert_chunks(prepare_documents([corpus_document("one")], []))
     with pytest.raises(ValueError, match="positive"):
         retrieve([1.0, 0.0], match_count=0)

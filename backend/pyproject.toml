@@ -16,12 +16,13 @@ dependencies = [
     "langchain-groq>=1.1.3",
     "requests>=2.34.2",
     "structlog>=25,<27",
-    "torch>=2.14,<3",
-    "torchvision>=0.29,<1",
-    "docling>=2.133.0",
+    "groq>=0.37.1,<1",
+    "uvicorn>=0.54.0",
 ]
 
 [dependency-groups]
+ingestion = ["docling>=2.133.0", "torch>=2.14,<3", "torchvision>=0.29,<1"]
+eval = ["numpy>=2.4,<3"]
 dev = [
     "mypy",
     "pytest",

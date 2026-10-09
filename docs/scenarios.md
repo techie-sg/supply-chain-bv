@@ -1,7 +1,7 @@
 # Synthetic scenario starting states
 
 Each scenario has its own YAML file in
-[backend/service/scenario_data](../backend/service/scenario_data). The
+[backend/resources/scenarios](../backend/resources/scenarios). The
 [loader](../backend/service/scenarios.py) validates the selected file and turns it into database rows. The
 [Gradio workspace](../backend/ui/gradio_app.py) calls the loader directly.
 They seed `orders`, `riders`, `hourly_metrics`, and `zones`. The document and

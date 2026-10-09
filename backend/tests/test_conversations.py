@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from database.models import Conversation
+from domain.chat import AnswerResult, AnswerTrace
 from service import conversations
 from service.preferences import PreferenceService
 
@@ -83,7 +84,11 @@ def store(monkeypatch) -> FakeStore:
 
 
 def service(answer) -> conversations.ConversationService:
-    return conversations.ConversationService("DS-1", "karthik", answer=answer)
+    def result(question, **kwargs):
+        value = answer(question, **kwargs)
+        return value if isinstance(value, AnswerResult) else AnswerResult(value)
+
+    return conversations.ConversationService("DS-1", "karthik", answer=result)
 
 
 def test_first_question_starts_a_conversation_and_stores_both_messages(store) -> None:
@@ -93,7 +98,7 @@ def test_first_question_starts_a_conversation_and_stores_both_messages(store) ->
         seen.append((question, history))
         return "Check the oldest order."
 
-    assert service(answer).ask("What first?") == "Check the oldest order."
+    assert service(answer).ask("What first?").text == "Check the oldest order."
     assert seen == [("What first?", [])]
     [row] = store.rows
     assert [(m["who"], m["what"]) for m in row.messages] == [
@@ -252,7 +257,7 @@ def test_explicit_chat_selection_survives_newer_activity_in_another_chat(store):
     selected = conversations.ConversationService(
         "DS-1",
         "karthik",
-        answer=lambda question, **kwargs: "Rain follow-up",
+        answer=lambda question, **kwargs: AnswerResult("Rain follow-up"),
         conversation_id=str(first_id),
     )
     assert selected.history()[0]["what"] == "Rain plan?"
@@ -299,7 +304,7 @@ def test_first_answer_gets_a_clean_title_once(store, monkeypatch) -> None:
     chat = conversations.ConversationService(
         "DS-1",
         "karthik",
-        answer=lambda question, *, history: "Call in the standby rider.",
+        answer=lambda question, *, history: AnswerResult("Call in the standby rider."),
         titler=titler,
     )
     assert chat.title_latest() is None
@@ -319,7 +324,7 @@ def test_title_failures_leave_the_chat_untitled(store, monkeypatch) -> None:
     chat = conversations.ConversationService(
         "DS-1",
         "karthik",
-        answer=lambda question, *, history: "reply",
+        answer=lambda question, *, history: AnswerResult("reply"),
         titler=failing,
     )
     chat.ask("Rain plan?")
@@ -328,7 +333,7 @@ def test_title_failures_leave_the_chat_untitled(store, monkeypatch) -> None:
     blank = conversations.ConversationService(
         "DS-1",
         "karthik",
-        answer=lambda question, *, history: "reply",
+        answer=lambda question, *, history: AnswerResult("reply"),
         titler=lambda question, answer: "  \n",
     )
     assert blank.title_latest() is None
@@ -336,7 +341,7 @@ def test_title_failures_leave_the_chat_untitled(store, monkeypatch) -> None:
         conversations.ConversationService(
             "DS-1",
             "karthik",
-            answer=lambda question, *, history: "reply",
+            answer=lambda question, *, history: AnswerResult("reply"),
         ).title_latest()
         is None
     )
@@ -430,8 +435,10 @@ def test_dispatch_tools_share_the_rag_path_and_record_their_results(
     )
     monkeypatch.setattr(conversations, "answer_question", answer)
     monkeypatch.setattr(conversations, "manager_preferences", lambda *a: prefs)
-    reply, trace = conversations._answer("Why late?", history=[], summary="earlier")
+    result = conversations._answer("Why late?", history=[], summary="earlier")
+    reply, trace = result.text, result.trace
     assert reply == "from tools"
+    assert trace is not None
     assert trace["tools"][0]["tool"] == "get_live_dispatch_status"
     assert trace["tools"][0]["as_of"] == "2026-10-09T20:14:00+05:30"
     assert seen["summary"] == "earlier" and seen["preferences"] is prefs
@@ -446,12 +453,13 @@ def test_policy_questions_do_not_read_dispatch_rows(monkeypatch) -> None:
         lambda *a: (_ for _ in ()).throw(AssertionError("unexpected dispatch read")),
     )
     monkeypatch.setattr(conversations, "answer_question", lambda *a, **k: "policy")
-    reply, trace = conversations._answer("Can riders jump red lights?", history=[])
+    result = conversations._answer("Can riders jump red lights?", history=[])
+    reply, trace = result.text, result.trace
     assert reply == "policy" and trace == {"tools": [], "preferences": []}
 
 
 def test_setting_proposals_are_traced_without_a_scenario(monkeypatch) -> None:
-    from service.llm_service import Tool
+    from domain.tools import Tool
 
     local = Tool(
         "propose_setting_change",
@@ -465,16 +473,30 @@ def test_setting_proposals_are_traced_without_a_scenario(monkeypatch) -> None:
         return "Press Confirm."
 
     monkeypatch.setattr(conversations, "answer_question", answer)
-    reply, trace = conversations._answer("Set cap to 300", history=[], tools=[local])
+    result = conversations._answer("Set cap to 300", history=[], tools=[local])
+    reply, trace = result.text, result.trace
     assert reply == "Press Confirm."
+    assert trace is not None
     assert trace["tools"][0]["tool"] == "propose_setting_change"
+    assert trace is not None
     assert trace["tools"][0]["arguments"]["value"] == 300
 
 
 def test_the_reply_is_stored_with_its_trace_and_returned_to_the_ui(store) -> None:
-    trace = {"tools": [{"tool": "get_live_dispatch_status"}], "preferences": []}
-    chat = service(lambda question, *, history: ("tool reply", trace))
-    assert chat.ask_traced("Queue?") == ("tool reply", trace)
+    trace: AnswerTrace = {
+        "tools": [
+            {
+                "tool": "get_live_dispatch_status",
+                "arguments": {},
+                "error": None,
+                "as_of": None,
+                "stale": False,
+            },
+        ],
+        "preferences": [],
+    }
+    chat = service(lambda question, *, history: AnswerResult("tool reply", trace))
+    assert chat.ask("Queue?") == AnswerResult("tool reply", trace)
     assert chat.history()[-1]["trace"] == trace
     assert "trace" not in chat.history()[0]
 
@@ -568,7 +590,7 @@ def test_selected_chat_cannot_be_read_or_written_by_another_manager(store):
     other = conversations.ConversationService(
         "DS-1",
         "other-manager",
-        answer=lambda question, **kwargs: "Wrong answer",
+        answer=lambda question, **kwargs: AnswerResult("Wrong answer"),
         conversation_id=conversation_id,
     )
     with pytest.raises(LookupError):

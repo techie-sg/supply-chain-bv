@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -47,12 +46,12 @@ def test_ingestion_accepts_each_strategy_and_preserves_embedding_alignment(
     embeddings = FakeEmbeddingService()
     stored = []
 
-    def insert_chunks(**kwargs: Any) -> int:
-        documents = kwargs["documents"]
-        assert [document.page_content for document in documents] == embeddings.texts
-        assert len(kwargs["embeddings"]) == len(documents)
-        stored.extend(documents)
-        return len(documents)
+    def insert_chunks(documents) -> int:
+        chunks = [chunk for document in documents for chunk in document.chunks]
+        assert [chunk.content for chunk in chunks] == embeddings.texts
+        assert all(chunk.embedding == [0.1] for chunk in chunks)
+        stored.extend(chunks)
+        return len(chunks)
 
     monkeypatch.setattr(ingestion, "insert_chunks", insert_chunks)
     assert IngestionService(corpus, embeddings).run() == len(stored) > 0
@@ -104,9 +103,10 @@ def test_ingestion_cli_composes_services(tmp_path, monkeypatch) -> None:
     )
     stored = []
 
-    def insert_chunks(**kwargs):
-        stored.append(len(kwargs["documents"]))
-        return len(kwargs["documents"])
+    def insert_chunks(documents):
+        count = sum(len(document.chunks) for document in documents)
+        stored.append(count)
+        return count
 
     monkeypatch.setattr(ingestion, "insert_chunks", insert_chunks)
     ingestion.main()

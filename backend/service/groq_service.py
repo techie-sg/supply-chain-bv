@@ -19,7 +19,8 @@ from pydantic import SecretStr
 from config import get_settings, require
 from constants import GROQ_MODEL
 from domain.chat import ChatMessage
-from service.llm_service import LLMService, Tool
+from domain.tools import Tool
+from service.llm_service import LLMService
 
 logger = structlog.stdlib.get_logger(__name__)
 

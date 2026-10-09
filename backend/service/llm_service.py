@@ -1,32 +1,10 @@
 """Provider-independent contract for generating assistant responses."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
-from typing import Any
+from collections.abc import Sequence
 
 from domain.chat import ChatMessage
-
-
-@dataclass(frozen=True)
-class Tool:
-    """A function the model may call; `run` returns the result shown to the model."""
-
-    name: str
-    description: str
-    parameters: dict[str, Any]
-    run: Callable[[dict[str, Any]], str]
-
-    def schema(self) -> dict[str, Any]:
-        """OpenAI-style function definition, as tool-calling providers expect."""
-        return {
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": self.description,
-                "parameters": self.parameters,
-            },
-        }
+from domain.tools import Tool
 
 
 class LLMService(ABC):

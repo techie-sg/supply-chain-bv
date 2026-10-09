@@ -4,7 +4,9 @@ import gradio as gr
 import pytest
 
 from domain.memory import PreferenceCode
-from ui import gradio_app, settings
+from ui import navigation as navigation_ui
+from ui import settings
+from ui import sidebar as sidebar_ui
 
 ALERTS = len(settings.ALERT_CODES)
 
@@ -37,16 +39,15 @@ def defaults(store) -> tuple:
     return (*inputs, surge, incentive_amount, briefing)
 
 
-def test_settings_tab_is_part_of_the_workspace() -> None:
+def test_settings_tab_is_part_of_the_workspace(ui_app) -> None:
     tabs = [
         item.id
-        for item in gradio_app.app.blocks.values()
+        for item in ui_app.blocks.values()
         if isinstance(item, gr.Tab) and item.id is not None
     ]
     assert {"assistant", "settings", "demo"} <= set(tabs)
     assert any(
-        callback.fn is settings.load_settings
-        for callback in gradio_app.app.fns.values()
+        callback.fn is settings.load_settings for callback in ui_app.fns.values()
     )
 
 
@@ -157,13 +158,13 @@ def test_unavailable_storage_is_reported(monkeypatch) -> None:
 )
 def test_settings_tab_can_be_opened_from_the_url(view, selected) -> None:
     request = SimpleNamespace(query_params={"view": view})
-    assert gradio_app._restore_tab(request)["selected"] == selected  # type: ignore[arg-type]
+    assert navigation_ui._restore_tab(request)["selected"] == selected  # type: ignore[arg-type]
 
 
-def test_categories_switch_panels_in_the_browser() -> None:
+def test_categories_switch_panels_in_the_browser(ui_app) -> None:
     nav = next(
         item
-        for item in gradio_app.app.blocks.values()
+        for item in ui_app.blocks.values()
         if isinstance(item, gr.Radio) and item.elem_id == "settings-nav"
     )
     assert [value for _, value in nav.choices] == [
@@ -177,7 +178,7 @@ def test_categories_switch_panels_in_the_browser() -> None:
     assert nav.value == "alerts"
     [callback] = [
         callback
-        for callback in gradio_app.app.fns.values()
+        for callback in ui_app.fns.values()
         if callback.js == settings.SHOW_CATEGORY_JS
     ]
     assert callback.fn is None and not callback.queue
@@ -234,15 +235,15 @@ def test_summary_reports_unavailable_storage(monkeypatch) -> None:
     assert settings.load_summary() == '<p class="summary-off">Settings unavailable.</p>'
 
 
-def test_summary_is_shown_in_the_sidebar_and_refreshed_after_changes() -> None:
+def test_summary_is_shown_in_the_sidebar_and_refreshed_after_changes(ui_app) -> None:
     summary = next(
         item
-        for item in gradio_app.app.blocks.values()
+        for item in ui_app.blocks.values()
         if isinstance(item, gr.HTML) and item.elem_id == "settings-summary"
     )
     refreshers = [
         callback
-        for callback in gradio_app.app.fns.values()
+        for callback in ui_app.fns.values()
         if callback.fn is settings.load_summary
     ]
     assert all(callback.outputs == [summary] for callback in refreshers)
@@ -251,17 +252,17 @@ def test_summary_is_shown_in_the_sidebar_and_refreshed_after_changes() -> None:
     assert len(refreshers) == 1 + 1 + 1 + len(settings.ALERT_CODES) + 3 + 1 + 1
     edit = next(
         item
-        for item in gradio_app.app.blocks.values()
+        for item in ui_app.blocks.values()
         if isinstance(item, gr.Button) and item.elem_id == "edit-settings"
     )
     [callback] = [
         callback
-        for callback in gradio_app.app.fns.values()
+        for callback in ui_app.fns.values()
         if (edit._id, "click") in callback.targets
     ]
-    assert callback.fn is gradio_app.open_settings
-    assert gradio_app.open_settings()["selected"] == "settings"
-    assert callback.js == gradio_app.CLOSE_SIDEBAR_ON_PHONE_JS
+    assert callback.fn is navigation_ui.open_settings
+    assert navigation_ui.open_settings()["selected"] == "settings"
+    assert callback.js == sidebar_ui.CLOSE_SIDEBAR_ON_PHONE_JS
 
 
 def test_entering_an_amount_turns_the_incentive_cap_on(preference_store) -> None:

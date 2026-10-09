@@ -2,26 +2,23 @@
 
 from __future__ import annotations
 
-import math
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from time import perf_counter
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import structlog
 import yaml
 from pydantic import ValidationError
 from sqlalchemy import Engine
 
+from constants import TIMEZONE
 from database.models import HourlyMetric, Order, Rider, Zone
 from domain.scenario import ScenarioData
 from queries.scenarios import read_scenario_rows, replace_scenario
+from resources import SCENARIO_DIR
 
 logger = structlog.stdlib.get_logger(__name__)
-
-SCENARIO_DIR = Path(__file__).resolve().parent / "scenario_data"
-TIMEZONE = ZoneInfo("Asia/Kolkata")
 
 
 def _scenario_paths() -> dict[str, Path]:
@@ -37,6 +34,16 @@ def _read_scenario(key: str) -> ScenarioData:
         return ScenarioData.model_validate(data)
     except (OSError, yaml.YAMLError, ValidationError) as exc:
         raise ValueError(f"Invalid scenario file: {key}") from exc
+
+
+def scenario_metadata(key: str) -> dict[str, Any]:
+    """Static fixture details; these are not mutable operational database state."""
+    data = _read_scenario(key)
+    return {
+        "title": data.title,
+        "description": data.description,
+        "is_raining": data.is_raining,
+    }
 
 
 def scenario_names() -> list[dict[str, str]]:
@@ -101,36 +108,6 @@ def build_scenario(key: str, as_of: datetime) -> tuple[list[object], dict[str, A
             "available_riders": sum(rider.status == "available" for rider in riders),
         },
     }
-    if data.rain_started_minutes_ago is not None:
-        context["rain_started_at"] = (
-            as_of - timedelta(minutes=data.rain_started_minutes_ago)
-        ).isoformat()
-    if data.candidate_routes:
-        zone_by_order = {order.order_id: order.zone_id for order in orders}
-        rain_ride_by_zone = {zone.zone_id: zone.avg_ride_min_rain for zone in zones}
-        routes = []
-        for item in data.candidate_routes:
-            route = item.model_dump(exclude={"include_eta"})
-            if item.include_eta:
-                ride_mean = max(
-                    rain_ride_by_zone[zone_by_order[order_id]]
-                    for order_id in item.order_ids
-                )
-                route["remaining_delivery_eta_min_range"] = [
-                    math.floor(1 + 0.9 * ride_mean + item.added_detour_min),
-                    math.ceil(3 + 1.3 * ride_mean + item.added_detour_min),
-                ]
-            routes.append(route)
-        context["candidate_routes"] = routes
-        context["route_source"] = data.route_source
-        context["eta_method"] = (
-            "Illustrative minutes from as_of: floor(1 + 0.9 × rain ride mean + detour) "
-            "to ceil(3 + 1.3 × rain ride mean + detour)."
-        )
-    if data.declared_surge is not None:
-        context["declared_surge"] = data.declared_surge
-    if data.three_order_batch_approved is not None:
-        context["three_order_batch_approved"] = data.three_order_batch_approved
     return [*zones, *history, *riders, *orders], context
 
 

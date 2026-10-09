@@ -1,3 +1,7 @@
+from typing import Literal
+
+from domain.chat import StoredMessage
+
 """Integration checks against a dedicated TEST_DATABASE_URL."""
 
 import os
@@ -46,7 +50,7 @@ def conversation_engine() -> Iterator[Engine]:
         engine.dispose()
 
 
-def message(who: str, what: str) -> dict[str, str]:
+def message(who: Literal["manager", "assistant"], what: str) -> StoredMessage:
     return {"who": who, "what": what, "when": "2026-10-06T19:42:10+05:30"}
 
 

@@ -44,11 +44,11 @@ Run from `backend/`:
 
 ```bash
 uv run python cli.py migrate
-uv run python cli.py ingest
+uv run --group ingestion python cli.py ingest
 uv run python cli.py app
 ```
 
-Open http://localhost:7860. The CLI runs only the selected command. Application startup does not migrate, ingest documents, or load a scenario. Use `uv run python cli.py --help` to list commands.
+Open http://localhost:7860. `pyproject.toml` and `uv.lock` are the dependency source of truth. PDF ingestion uses the `ingestion` group; ordinary app and cron runs exclude Docling and PyTorch. Linux ingestion uses CPU-only PyTorch wheels. The CLI runs only the selected command. Application startup does not migrate, ingest documents, or load a scenario. Use `uv run python cli.py --help` to list commands.
 
 To change the listening port, set `PORT` in the process environment:
 
@@ -60,11 +60,11 @@ PORT=8080 uv run python cli.py app
 
 ## RAG
 
-The corpus is in [`backend/service/rag_data/corpus/`](backend/service/rag_data/corpus/README.md). Default Markdown section chunking produces 37 chunks from seven operational documents. Ingestion upserts document and chunk rows in one transaction. The corpus README and prompt files are excluded from ingestion.
+The corpus is in [`backend/resources/corpus/`](backend/resources/corpus/README.md). Default Markdown section chunking produces 37 chunks from seven operational documents. Ingestion upserts document and chunk rows in one transaction. The corpus README and prompt files are excluded from ingestion. Moving resources preserves their bytes, hashes, document IDs, chunk labels and stored source identities; existing indexed data needs no migration or re-ingestion for this move.
 
 Defaults are `jina-embeddings-v5-text-nano` for embeddings and Groq's [`openai/gpt-oss-120b`](https://console.groq.com/docs/model/openai/gpt-oss-120b) for answers. Provider and chunking options are listed in [`backend/.env.example`](backend/.env.example). Reingest after changing the embedding model or chunking strategy.
 
-Assistant instructions live in [dispatch_manager_system.md](backend/service/rag_data/prompts/dispatch_manager_system.md), which the RAG service loads directly for each answer.
+Assistant instructions live in [dispatch_manager_system.md](backend/resources/prompts/dispatch_manager_system.md), which the RAG service loads directly for each answer.
 
 The [RAG notebook](backend/notebooks/simple_rag.ipynb) demonstrates chunking, embedding, storage, retrieval, and a conversation with a follow-up. Select `backend/.venv/bin/python` as its kernel. The storage cell writes document data; provider cells make API calls.
 
@@ -88,9 +88,11 @@ Live data is a saved snapshot. Its original `as_of` time is preserved and it is 
 [`backend/evals/dataset.csv`](backend/evals/dataset.csv) holds 65 questions. Each row lists `relevant_chunk_ids` (must be retrieved), `expected_chunk_ids` (all useful chunks), live-data and safety flags, and the expected behavior. `history` holds prior turns as JSON for follow-up questions. Run from `backend/` after ingestion:
 
 ```bash
-uv run python -m evals.run_evals            # retrieval only
-uv run python -m evals.run_evals --judge    # also generate and grade answers
+uv run --group eval --group ingestion python -m evals.run_evals            # retrieval only
+uv run --group eval --group ingestion python -m evals.run_evals --judge    # also generate and grade answers
 ```
+
+The harness evaluates retrieval and bare RAG; it does not exercise conversation preferences, handover, memory or dispatch tools. Its scores do not validate the full product workflow.
 
 Retrieval metrics: `hit@k` (any relevant chunk in top k), `recall@k` (share of expected chunks in top k), and `mrr`. `--judge` asks an LLM to grade each answer 1/0 on `behavior`, `no_invented_facts`, `no_execution_claim`, `safety` (safety rows only) and `live_data_honesty` (live-data rows only); `pass` requires every applicable check. Results are printed overall and by category, and per-question rows go to `evals/results.csv`, with `answer_model` and `judge_model` columns when `--judge` is used. Use `--judge-model` to grade with a different model than the one answering, and `--category` to run a subset, and `--delay` (seconds between questions) to stay under provider rate limits. `tests/test_evals.py` checks that every chunk ID in the dataset exists in the corpus.
 
@@ -143,25 +145,30 @@ Locally: `uv run python cli.py review`.
 
 | Path | Purpose |
 | --- | --- |
-| `backend/ui/` | Gradio callbacks, the Settings tab, styles, and favicon |
+| `backend/ui/` | Chat, sidebar, scenario, summary and settings views; browser scripts in `assets/` |
+| `backend/resources/` | Prompts, policy corpus and scenario fixtures |
+| `backend/resources.py` | Backend-relative resource paths |
 | `backend/service/` | RAG, ingestion, provider services, chunking, scenarios, conversations, preferences, summaries, and local tools |
 | `backend/queries/` | Database operations |
 | `backend/domain/` | Data contracts |
 | `backend/database/` | SQLAlchemy models and sessions |
 | `backend/alembic/` | Migrations |
 | `backend/config.py` | Pydantic settings |
-| `backend/cli.py` | App, migrations, ingestion, and one-shot summary commands |
+| `backend/cli.py` | App, migrations, ingestion, summaries and daily review; owns database resources |
 | `backend/service/factory.py` | Provider and chunking composition |
+
+`ui/gradio_app.py` composes the interface explicitly at launch. Services own validation and workflow decisions; `queries/` owns persistence. Suggestion acceptance and handover replacement use scoped atomic transactions. App and job entry points reuse one engine and dispose it on exit; `NullPool` remains unchanged.
 
 ## Development checks
 
 Run from `backend/`:
 
 ```bash
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy . --exclude alembic/versions
-uv run pytest --cov=. --cov-report=term-missing
+uv sync --locked --group ingestion --group eval
+uv run --group ingestion --group eval ruff check .
+uv run --group ingestion --group eval ruff format --check .
+uv run --group ingestion --group eval mypy . --exclude alembic/versions
+uv run --group ingestion --group eval pytest --cov=. --cov-report=term-missing
 ```
 
 CI requires 90% coverage. Vector-store integration tests need `TEST_DATABASE_URL` pointing to a disposable PostgreSQL/pgvector database; they clear its document tables. Without that variable, those tests are skipped.

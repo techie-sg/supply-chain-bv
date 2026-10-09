@@ -3,7 +3,6 @@
 import re
 from collections.abc import Callable, Sequence
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
@@ -11,9 +10,16 @@ import requests
 import structlog
 from sqlalchemy import Engine
 
-from constants import DEMO_MANAGER_ID, DEMO_STORE_ID
+from constants import DEMO_MANAGER_ID, DEMO_STORE_ID, TIMEZONE
 from database.models import Conversation
-from domain.chat import ChatMessage
+from domain.chat import (
+    AnswerResult,
+    AnswerTrace,
+    ChatMessage,
+    StoredMessage,
+    ToolCallTrace,
+)
+from domain.tools import Tool
 from queries.conversations import (
     append_message,
     latest_conversation,
@@ -22,12 +28,12 @@ from queries.conversations import (
     set_title,
     start_conversation,
 )
-from service.dreaming import handover_block, memory_block
+from resources import PROMPTS
 from service.factory import create_llm_service
-from service.llm_service import Tool
+from service.handover import handover_block
+from service.memory import memory_block
 from service.preferences import PreferenceService, describe, manager_preferences
 from service.rag import answer_question
-from service.scenarios import TIMEZONE
 from service.setting_changes import SettingChange, SettingChanges, tidy_reply
 from service.summaries import history_start
 from service.tools import dispatch_tools, traced_tools
@@ -35,20 +41,19 @@ from service.tools import dispatch_tools, traced_tools
 logger = structlog.stdlib.get_logger(__name__)
 
 # An answer is the reply text, or the reply with its trace (tools used, settings).
-Answer = Callable[..., str | tuple[str, dict[str, Any]]]
+Answer = Callable[..., AnswerResult]
 Titler = Callable[[str, str], str]
-TITLE_PROMPT_PATH = (
-    Path(__file__).resolve().parent / "rag_data" / "prompts" / "conversation_title.md"
-)
+
+TITLE_PROMPT_PATH = PROMPTS / "conversation_title.md"
 TITLE_MAX_LENGTH = 60
 
 
 def new_message(
     who: Literal["manager", "assistant"],
     what: str,
-    trace: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    message: dict[str, Any] = {
+    trace: AnswerTrace | None = None,
+) -> StoredMessage:
+    message: StoredMessage = {
         "who": who,
         "what": what,
         "when": datetime.now(TIMEZONE).isoformat(),
@@ -69,7 +74,7 @@ def clean_title(text: str) -> str | None:
     return line or None
 
 
-def to_chat_messages(messages: Sequence[dict[str, str]]) -> list[ChatMessage]:
+def to_chat_messages(messages: Sequence[StoredMessage]) -> list[ChatMessage]:
     """Map stored messages to provider-independent chat roles, in order."""
     return [
         {
@@ -108,7 +113,7 @@ class ConversationService:
             )
         return latest_conversation(self.store_id, self.manager_id, self.engine)
 
-    def history(self) -> list[dict[str, str]]:
+    def history(self) -> list[StoredMessage]:
         """Stored messages of the latest conversation, without creating one."""
         conversation = self.selected()
         return list(conversation.messages) if conversation else []
@@ -148,7 +153,7 @@ class ConversationService:
         """Recent non-empty conversations, newest first."""
         return list_conversations(self.store_id, self.manager_id, limit, self.engine)
 
-    def resume(self, conversation_id: UUID) -> list[dict[str, str]]:
+    def resume(self, conversation_id: UUID) -> list[StoredMessage]:
         """Select a past conversation without changing its recency."""
         conversation = resume_conversation(
             conversation_id,
@@ -160,10 +165,7 @@ class ConversationService:
         logger.info("Conversation resumed", conversation_id=str(conversation.id))
         return list(conversation.messages)
 
-    def ask(self, question: str) -> str:
-        return self.ask_traced(question)[0]
-
-    def ask_traced(self, question: str) -> tuple[str, dict[str, Any] | None]:
+    def ask(self, question: str) -> AnswerResult:
         """Store the question first, so a failed answer never loses it."""
         conversation = self.selected() or self.start_new()
         # The summary stands in for older messages; recent ones stay word for word.
@@ -171,15 +173,15 @@ class ConversationService:
         extra = {"summary": conversation.summary} if conversation.summary else {}
         append_message(conversation.id, new_message("manager", question), self.engine)
         result = self.answer(question, history=history, **extra)
-        reply, trace = result if isinstance(result, tuple) else (result, None)
+        reply, trace = result.text, result.trace
         append_message(
             conversation.id,
             new_message("assistant", reply, trace),
             self.engine,
         )
-        return reply, trace
+        return result
 
-    def note(self, text: str) -> dict[str, str] | None:
+    def note(self, text: str) -> StoredMessage | None:
         """Add an assistant note to the open chat, such as a confirmed setting.
 
         Stored like any reply, so later answers know what happened.
@@ -231,8 +233,8 @@ class ConversationService:
 
 def _trace(
     settings: PreferenceService,
-    tools: Sequence[dict[str, Any]] = (),
-) -> dict[str, Any]:
+    tools: Sequence[ToolCallTrace] = (),
+) -> AnswerTrace:
     """What the answer was built from: tool calls and the manager's own settings."""
     return {
         "tools": list(tools),
@@ -249,10 +251,10 @@ def _answer(
     summary: str | None = None,
     preferences: PreferenceService | None = None,
     tools: Sequence[Tool] = (),
-) -> tuple[str, dict[str, Any]]:
+) -> AnswerResult:
     """Answer through RAG and the configured provider, recording local tool calls."""
     preferences = preferences or manager_preferences()
-    calls: list[dict[str, Any]] = []
+    calls: list[ToolCallTrace] = []
     reply = answer_question(
         question,
         history=history,
@@ -262,7 +264,7 @@ def _answer(
         memory=memory_block(preferences.manager_id),
         tools=traced_tools([*tools, *dispatch_tools(preferences.store_id)], calls),
     )
-    return reply, _trace(preferences, calls)
+    return AnswerResult(reply, _trace(preferences, calls))
 
 
 def _title(question: str, answer: str) -> str:
@@ -290,7 +292,7 @@ def ask_question(
     question: str,
     manager_id: str = DEMO_MANAGER_ID,
     conversation_id: str | None = None,
-) -> tuple[str, list[SettingChange], dict[str, Any] | None]:
+) -> tuple[str, list[SettingChange], AnswerTrace | None]:
     """UI entry point: answer using the stored history of the selected chat.
 
     Also returns the setting changes the assistant proposed in this answer
@@ -313,23 +315,22 @@ def ask_question(
         titler=_title,
         conversation_id=conversation_id,
     )
-    reply, trace = service.ask_traced(question)
-    return reply, changes.proposals, trace
+    result = service.ask(question)
+    return result.text, changes.proposals, result.trace
 
 
 def _tidied(
-    result: tuple[str, dict[str, Any]],
+    result: AnswerResult,
     changes: SettingChanges,
-) -> tuple[str, dict[str, Any]]:
-    reply, trace = result
-    return tidy_reply(reply, changes.proposals), trace
+) -> AnswerResult:
+    return AnswerResult(tidy_reply(result.text, changes.proposals), result.trace)
 
 
 def add_note(
     text: str,
     manager_id: str = DEMO_MANAGER_ID,
     conversation_id: str | None = None,
-) -> dict[str, str] | None:
+) -> StoredMessage | None:
     """UI entry point: record an assistant note in the open chat."""
     return _service(manager_id, conversation_id).note(text)
 
@@ -337,7 +338,7 @@ def add_note(
 def conversation_history(
     manager_id: str = DEMO_MANAGER_ID,
     conversation_id: str | None = None,
-) -> list[dict[str, str]]:
+) -> list[StoredMessage]:
     """UI entry point: stored messages to show when the page loads."""
     return _service(manager_id, conversation_id).history()
 
@@ -355,7 +356,7 @@ def past_conversations(manager_id: str = DEMO_MANAGER_ID) -> list[dict[str, Any]
 def resume_past_conversation(
     conversation_id: str,
     manager_id: str = DEMO_MANAGER_ID,
-) -> list[dict[str, str]]:
+) -> list[StoredMessage]:
     """UI entry point: reopen a past conversation and continue it."""
     return _service(manager_id).resume(UUID(conversation_id))
 

@@ -11,7 +11,6 @@ the last message folded in) change. Two triggers fold messages:
 
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
-from pathlib import Path
 from uuid import UUID
 
 import requests
@@ -27,26 +26,27 @@ from constants import (
     SUMMARY_MAX_RAW_MESSAGES,
     SUMMARY_MAX_RAW_TOKENS,
     SUMMARY_RECENT_MESSAGES,
+    TIMEZONE,
 )
 from database.models import Conversation
+from domain.chat import StoredMessage
 from queries.conversations import (
     idle_unsummarized,
     latest_conversation,
     resume_conversation,
     save_summary,
 )
+from resources import PROMPTS
 from service.factory import create_llm_service
-from service.scenarios import TIMEZONE
 
 logger = structlog.stdlib.get_logger(__name__)
 
-PROMPT_PATH = (
-    Path(__file__).resolve().parent / "rag_data" / "prompts" / "conversation_summary.md"
-)
+
+PROMPT_PATH = PROMPTS / "conversation_summary.md"
 Summarizer = Callable[[str, str], str]
 
 
-def estimate_tokens(messages: Sequence[dict[str, str]]) -> int:
+def estimate_tokens(messages: Sequence[StoredMessage]) -> int:
     """Rough token count: characters divided by four."""
     return sum(len(message["what"]) for message in messages) // 4
 
@@ -76,7 +76,7 @@ def needs_folding(conversation: Conversation) -> bool:
     )
 
 
-def _transcript(messages: Sequence[dict[str, str]], first_index: int) -> str:
+def _transcript(messages: Sequence[StoredMessage], first_index: int) -> str:
     return "\n\n".join(
         f"[{first_index + offset}] "
         f"{'Manager' if message['who'] == 'manager' else 'Assistant'} "

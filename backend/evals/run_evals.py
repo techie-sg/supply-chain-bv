@@ -15,6 +15,7 @@ from langchain_core.documents import Document
 from config import get_settings
 from domain.chat import ChatMessage
 from queries.vector_store import retrieve
+from resources import BACKEND_DIR, CORPUS_DIR
 from service.chunking import ChunkingStrategy, MarkdownSectionChunkingStrategy
 from service.corpus import CorpusService
 from service.document_parser import DoclingPdfParser
@@ -24,7 +25,6 @@ from service.factory import (
     create_llm_service,
 )
 from service.groq_service import GroqService
-from service.ingestion import BACKEND_DIR, CORPUS_DIR
 from service.rag import RAGService, retrieval_query
 
 DATASET = Path(__file__).with_name("dataset.csv")

@@ -25,7 +25,6 @@ backend/evals/.embed_cache.json
 build/
 dist/
 .tox/
-.ruff_cache/
 .hypothesis/
 
 # Logs

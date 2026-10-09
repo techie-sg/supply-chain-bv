@@ -1,6 +1,7 @@
 """Read the preference catalogue and store each manager's preference values."""
 
 from sqlalchemy import Engine, Executable, select, update
+from sqlalchemy.orm import Session
 
 from database.models import PreferenceDefinition, StorePreference
 from database.session import get_session
@@ -55,6 +56,28 @@ def save_preference(
     engine: Engine | None = None,
 ) -> StorePreference:
     """Supersede the active value, if any, and store the new one in one transaction."""
+    with get_session(engine) as session:
+        return persist_preference(
+            session,
+            store_id,
+            manager_id,
+            code,
+            enabled,
+            value,
+            options,
+        )
+
+
+def persist_preference(
+    session: Session,
+    store_id: str,
+    manager_id: str,
+    code: str,
+    enabled: bool,
+    value: object | None,
+    options: dict | None,
+) -> StorePreference:
+    """Write within a caller-owned query transaction, including suggestion acceptance."""
     preference = StorePreference(
         store_id=store_id,
         manager_id=manager_id,
@@ -64,13 +87,12 @@ def save_preference(
         options=options,
         status=PreferenceStatus.ACTIVE,
     )
-    with get_session(engine) as session:
-        session.execute(
-            _retire_active(store_id, manager_id, code, PreferenceStatus.SUPERSEDED),
-        )
-        session.add(preference)
-        session.flush()
-        session.refresh(preference)
+    session.execute(
+        _retire_active(store_id, manager_id, code, PreferenceStatus.SUPERSEDED),
+    )
+    session.add(preference)
+    session.flush()
+    session.refresh(preference)
     return preference
 
 

@@ -130,3 +130,11 @@ def ensure_managers(connection: Connection) -> None:
         )
         .on_conflict_do_nothing(index_elements=["manager_id"]),
     )
+
+
+@pytest.fixture(scope="session")
+def ui_app():
+    """Build the interface explicitly for event/component assertions."""
+    from ui.gradio_app import build_app
+
+    return build_app()

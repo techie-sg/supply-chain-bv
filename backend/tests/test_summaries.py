@@ -63,7 +63,18 @@ def test_folding_is_needed_over_the_count_or_size_limit() -> None:
     assert needs_folding(chat(SUMMARY_MAX_RAW_MESSAGES + 1))
     assert not needs_folding(chat(20, covers_to=13))
     assert needs_folding(chat(8, length=2000))
-    assert summaries.estimate_tokens([{"what": "x" * 400}]) == 100
+    assert (
+        summaries.estimate_tokens(
+            [
+                {
+                    "who": "manager",
+                    "what": "x" * 400,
+                    "when": "2026-10-08T19:00:00+05:30",
+                },
+            ],
+        )
+        == 100
+    )
 
 
 def test_fold_rolls_the_previous_summary_forward(saved) -> None:

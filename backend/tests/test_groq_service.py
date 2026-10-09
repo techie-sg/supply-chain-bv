@@ -106,7 +106,7 @@ def text_reply(text):
 
 
 def echo_tool(calls):
-    from service.llm_service import Tool
+    from domain.tools import Tool
 
     def run(args):
         calls.append(args)

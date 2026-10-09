@@ -252,6 +252,10 @@ Saved diagnoses (situation, root cause, actions, outcome, embedding) retrieved b
 | `service/managers.py`, `queries/managers.py` | the store's shift managers, choosing one |
 | `service/setting_changes.py` | chat setting changes: tool, merge, validate, confirm |
 | `service/summaries.py`, `cli.py` | summary folding, one-shot idle job |
-| `service/dreaming.py`, `queries/dreaming.py` | daily review, suggestions, handover notes, memory digest |
-| `ui/gradio_app.py`, `ui/settings.py` | chat, sidebar, Settings tab, Memory view |
-| `service/rag_data/prompts/` | system, title, summary and dreaming prompts, including `memory_digest.md` |
+| `service/dreaming.py` | daily review orchestration and failure report |
+| `service/suggestions.py`, `service/handover.py`, `service/memory.py` | scoped suggestion actions, handover drafts and memory digest |
+| `queries/dreaming.py` | review persistence and atomic suggestion/draft actions |
+| `ui/gradio_app.py` | application composition and event wiring |
+| `ui/chat.py`, `ui/sidebar.py`, `ui/scenarios.py`, `ui/summary.py` | chat, history, manager selection, scenario inspection and summary presentation |
+| `ui/settings.py`, `ui/suggestions.py` | settings, suggestions and memory presentation |
+| `resources/prompts/` | system, title, summary and dreaming prompts, including `memory_digest.md` |

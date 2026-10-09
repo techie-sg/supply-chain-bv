@@ -1,9 +1,11 @@
 import re
+from dataclasses import fields
 
 import pytest
 from catalogue import DEFINITIONS, definitions
 
 from domain.memory import PreferenceCategory, PreferenceCode
+from domain.preferences import SettingDefinition
 from service import preferences
 from service.preferences import PreferenceError, PreferenceService, validate
 
@@ -27,7 +29,12 @@ def test_catalogue_seed_matches_the_enums_and_its_own_limits() -> None:
         assert PreferenceCategory(definition.category)
         if not definition.locked:
             validate(
-                definition,
+                SettingDefinition(
+                    **{
+                        f.name: getattr(definition, f.name)
+                        for f in fields(SettingDefinition)
+                    },
+                ),
                 definition.default_enabled,
                 definition.default_value,
                 None,
@@ -217,7 +224,17 @@ def test_prompt_block_lists_every_item_with_state_and_limits(store) -> None:
 def test_validate_rejects_a_boolean_where_a_number_is_needed() -> None:
     definition = next(item for item in definitions() if item.code == "sla_dip_alert")
     with pytest.raises(PreferenceError, match="needs a number"):
-        validate(definition, True, True, None)
+        validate(
+            SettingDefinition(
+                **{
+                    f.name: getattr(definition, f.name)
+                    for f in fields(SettingDefinition)
+                },
+            ),
+            True,
+            True,
+            None,
+        )
 
 
 def test_manager_preferences_default_to_the_demo_manager() -> None:

@@ -1,5 +1,9 @@
 """Input contracts for the read-only dispatch tools."""
 
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -33,3 +37,24 @@ class MetricsInput(BaseModel):
             "Must be greater than start_hour. 8 to 10pm is start_hour=20, end_hour=22."
         ),
     )
+
+
+@dataclass(frozen=True)
+class Tool:
+    """A function the model may call; `run` returns the result shown to the model."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    run: Callable[[dict[str, Any]], str]
+
+    def schema(self) -> dict[str, Any]:
+        """OpenAI-style function definition, as tool-calling providers expect."""
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": self.parameters,
+            },
+        }

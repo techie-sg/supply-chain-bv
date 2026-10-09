@@ -1,6 +1,6 @@
 # DispatchDesk policy corpus
 
-Seven PDF documents provide simulated dispatch policy for the RAG assistant. The PDFs are the source documents; ingestion extracts their text with [Docling](https://github.com/docling-project/docling). They are based on the [sample dispatch playbook](../../../../docs/initial/sample_data/dispatch_operations_playbook.pdf); thresholds are illustrative demo rules.
+Seven PDF documents provide simulated dispatch policy for the RAG assistant. The PDFs are the source documents; ingestion extracts their text with [Docling](https://github.com/docling-project/docling). They are based on the [sample dispatch playbook](../../../docs/initial/sample_data/dispatch_operations_playbook.pdf); thresholds are illustrative demo rules.
 
 ## Documents
 
@@ -16,7 +16,7 @@ Seven PDF documents provide simulated dispatch policy for the RAG assistant. The
 
 ## Ingestion and retrieval
 
-Run `uv run python -m service.ingestion` from `backend/`. `DoclingPdfParser` converts each PDF to Markdown with Docling's layout model (OCR off, since the PDFs are born-digital); the model downloads on first use. The configured default strategy then splits at section headings and produces **37 chunks**. The title and header fields before the first section supply metadata. Only `*.pdf` files are ingested, so this README is excluded. An optional fixed-size strategy produces a different count; 37 is not a runtime limit.
+Run `uv run --group ingestion python cli.py ingest` from `backend/`. `DoclingPdfParser` converts each PDF to Markdown with Docling's layout model (OCR off, since the PDFs are born-digital); the model downloads on first use. The configured default strategy then splits at section headings and produces **37 chunks**. The title and header fields before the first section supply metadata. Only `*.pdf` files are ingested, so this README is excluded. An optional fixed-size strategy produces a different count; 37 is not a runtime limit.
 
 `CorpusService` attaches document ID, title, version, section, source path, and the PDF's file hash. Jina embeds the text; SQLAlchemy queries upsert it into `app.documents` and `app.document_chunks`. Stored chunk numbers are zero-based, and retrieved citations use the policy `doc_id#chunk_number`, such as `DD-BATCH-001#0`.
 
@@ -24,11 +24,11 @@ The assistant retrieves the nearest three passages by default using pgvector cos
 
 ## Scope and sources
 
-The corpus supplies rules, not live queue counts, rider states, weather observations, or ETAs. The current chat pipeline has no operational tools and does not receive scenario database rows. Tools and persistent store preferences described in the policy documents are intended interfaces for later project stages.
+The corpus supplies rules, not live queue counts, rider states, weather observations, or ETAs. The chat pipeline reads saved operational rows only when its local dispatch tools are invoked. Manager preferences, summaries, accepted handover notes and memory digests supply separate context. Setting changes require confirmation; dispatch tools are read-only.
 
-Hard safety and hours constraints take priority. Explicit batching, cold-chain, and communication rules constrain proposals. Future stored preferences may make these rules stricter; they cannot relax them. Assistant behavior is defined in [dispatch_manager_system.md](../prompts/dispatch_manager_system.md), which `RAGService` loads directly. Rules moved out of the corpus are included in that prompt. A separate guardrail layer is planned.
+Hard safety and hours constraints take priority. Explicit batching, cold-chain, and communication rules constrain proposals. Stored preferences may make these rules stricter; they cannot relax them. Assistant behavior is defined in [dispatch_manager_system.md](../prompts/dispatch_manager_system.md), which `RAGService` loads directly. Rules moved out of the corpus are included in that prompt. A separate guardrail layer is planned.
 
-The normal, backlog, and rain [scenario files](../../scenario_data/) seed operational tables. Rain YAML includes synthetic candidate-route adjacency, detour assumptions, and illustrative ETA inputs. These are not verified map results, are not persisted in the four operational tables, and are not available to chat. A general zone adjacency map, recorded incentive cap, and store closing time remain undefined.
+The normal, backlog, and rain [scenario files](../scenarios/) seed operational tables. Rain YAML includes synthetic candidate-route adjacency, detour assumptions, and illustrative ETA inputs. These are not verified map results, are not persisted in the four operational tables, and are not available to chat. Loading no longer builds these unused route/approval outputs. The live tool labels rain as static fixture metadata; orders, riders and historical metrics come from saved database rows. A general zone adjacency map and store closing time remain undefined. The incentive cap is a manager preference.
 
 ## Retrieval review
 

@@ -10,19 +10,18 @@ from datetime import datetime
 from functools import partial
 from time import perf_counter
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import structlog
 from pydantic import BaseModel, ValidationError
 
-from domain.tools import LiveStatusInput, MetricsInput
+from constants import TIMEZONE
+from domain.chat import ToolCallTrace
+from domain.tools import LiveStatusInput, MetricsInput, Tool
 from queries.tools import read_delivery_metrics, read_live_dispatch
-from service.llm_service import Tool
-from service.scenarios import _read_scenario
+from service.scenarios import scenario_metadata
 
 logger = structlog.stdlib.get_logger(__name__)
 
-TZ = ZoneInfo("Asia/Kolkata")
 STALE_AFTER_SEC = 300  # live data older than this is flagged stale
 
 
@@ -50,7 +49,7 @@ def _error(code: str, message: str, **details) -> dict:
 
 
 def _iso(value: datetime | None) -> str | None:
-    return value.astimezone(TZ).isoformat() if value is not None else None
+    return value.astimezone(TIMEZONE).isoformat() if value is not None else None
 
 
 def get_live_dispatch_status(store_id: str) -> dict:
@@ -71,7 +70,7 @@ def get_live_dispatch_status(store_id: str) -> dict:
             known_store_ids=data.known_store_ids,
         )
 
-    as_of = data.as_of.astimezone(TZ)
+    as_of = data.as_of.astimezone(TIMEZONE)
 
     order_rows: list[dict[str, Any]] = sorted(
         (
@@ -83,7 +82,9 @@ def get_live_dispatch_status(store_id: str) -> dict:
                 "has_frozen_items": o.has_frozen_items,
                 "assigned_rider_id": o.assigned_rider_id,
                 "placed_at": _iso(o.placed_at),
-                "age_sec": int((as_of - o.placed_at.astimezone(TZ)).total_seconds()),
+                "age_sec": int(
+                    (as_of - o.placed_at.astimezone(TIMEZONE)).total_seconds(),
+                ),
             }
             for o in data.orders
         ),
@@ -120,7 +121,7 @@ def get_live_dispatch_status(store_id: str) -> dict:
     )
 
     scenario_key = data.scenario_key
-    data_age_sec = int((datetime.now(TZ) - as_of).total_seconds())
+    data_age_sec = int((datetime.now(TIMEZONE) - as_of).total_seconds())
     stale = data_age_sec > STALE_AFTER_SEC
     if stale:
         logger.warning(
@@ -137,7 +138,8 @@ def get_live_dispatch_status(store_id: str) -> dict:
         "data_age_sec": data_age_sec,
         "stale": stale,
         "stale_after_sec": STALE_AFTER_SEC,
-        "conditions": {"is_raining": _read_scenario(scenario_key).is_raining},
+        "fixture_metadata_source": "scenario_yaml",
+        "conditions": {"is_raining": scenario_metadata(scenario_key)["is_raining"]},
         "queue": {
             "open_orders": len(order_rows),
             "packed_waiting": packed_waiting,
@@ -321,7 +323,7 @@ def dispatch_tools(store_id: str) -> list[Tool]:
 
 def _record_call(
     tool: Tool,
-    trace: list[dict[str, Any]],
+    trace: list[ToolCallTrace],
     arguments: dict[str, Any],
 ) -> str:
     started = perf_counter()
@@ -342,7 +344,7 @@ def _record_call(
             "arguments": arguments if isinstance(arguments, dict) else {},
             "error": error.get("code") if isinstance(error, dict) else None,
             "as_of": data.get("as_of"),
-            "stale": data.get("stale"),
+            "stale": bool(data.get("stale")),
         },
     )
     logger.info(
@@ -357,7 +359,7 @@ def _record_call(
 
 def traced_tools(
     tools: Sequence[Tool],
-    trace: list[dict[str, Any]],
+    trace: list[ToolCallTrace],
 ) -> list[Tool]:
     """Record actual tool executions without maintaining another model loop."""
     return [replace(tool, run=partial(_record_call, tool, trace)) for tool in tools]

@@ -19,7 +19,7 @@ The result contains:
 | `store_id`, `scenario_key` | Store and loaded scenario |
 | `as_of` | Original snapshot time, ISO 8601 in Asia/Kolkata |
 | `data_age_sec`, `stale`, `stale_after_sec` | Snapshot age and the five-minute freshness threshold |
-| `conditions.is_raining` | Weather condition from the loaded scenario definition |
+| `conditions.is_raining`, `fixture_metadata_source` | Static weather flag from scenario YAML, explicitly labeled as fixture metadata |
 | `queue.open_orders` | Count of orders that are neither delivered nor cancelled |
 | `queue.packed_waiting`, `counts_by_status` | Packed orders waiting for a rider and open-order counts by status |
 | `queue.oldest_order_age_sec` | Age of the oldest open order at the snapshot time |

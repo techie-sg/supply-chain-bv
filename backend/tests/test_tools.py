@@ -8,9 +8,9 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from database.models import HourlyMetric, Order, Rider, Zone
+from domain.tools import Tool
 from queries.tools import DispatchRows, MetricRows
 from service import tools
-from service.llm_service import Tool
 
 TZ = ZoneInfo("Asia/Kolkata")
 AS_OF = datetime(2026, 10, 3, 19, 30, tzinfo=TZ)
