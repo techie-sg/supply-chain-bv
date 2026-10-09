@@ -499,7 +499,7 @@ p.settings-status { padding-left: 0; color: var(--desk-muted); }
   #summary-trigger { gap: 5px; min-width: 84px !important; padding: 6px; font-size: 11px; }
 }
 
-/* Daily review: sidebar entry, Suggestions panel, and the admin report. */
+/* Suggestions and the on-demand summary/personalization job. */
 #suggestions-entry { align-items: center; justify-content: space-between; flex-wrap: nowrap; gap: 8px; padding: 10px; border: 1px solid var(--desk-selected-line); border-radius: 10px; background: var(--desk-selected); }
 #suggestions-entry .sidebar-heading { margin: 0; color: var(--desk-accent); font-size: 12px; }
 #review-suggestions { flex: 0 0 auto !important; min-height: 26px; padding: 2px 10px; font-size: 12px; border: none; background: var(--desk-tint); color: var(--desk-accent); }
@@ -511,8 +511,10 @@ p.settings-status { padding-left: 0; color: var(--desk-muted); }
 #suggestion-detail { font-size: 13px; line-height: 1.6; }
 .suggestion-evidence { font-size: 12px; color: var(--desk-muted); }
 #suggestion-actions { align-items: center; gap: 12px; }
-#review-admin { width: 100%; gap: 12px; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--desk-line); }
-#review-actions { align-items: center; gap: 12px; }
+#summary-admin { width: 100%; gap: 12px; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--desk-line); }
+#summary-job-actions { align-items: center; gap: 16px; }
+#run-summary-job { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto !important; width: auto; height: 40px; min-height: 40px; padding: 8px 18px; border-radius: 8px; font-size: 13px; font-weight: 500; white-space: nowrap; }
+#summary-job-status { color: var(--desk-muted); font-size: 13px; line-height: 1.6; }
 
 /* Alert pop-up: bottom right, above the message box. */
 #alert-popup { position: fixed !important; right: 24px; bottom: 112px; width: 440px !important; max-width: calc(100vw - 32px); max-height: calc(100dvh - 160px); overflow-y: auto; z-index: 60; gap: 0 !important; padding: 0 !important; border: 1px solid var(--desk-line) !important; border-radius: 16px !important; background: #1d1c20 !important; box-shadow: 0 18px 50px #00000070, 0 2px 8px #00000040; animation: alert-in 260ms cubic-bezier(.2,.8,.2,1); }

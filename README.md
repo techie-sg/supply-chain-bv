@@ -128,9 +128,11 @@ Idle-conversation summarization runs through the `summaries` CLI command. In cha
 
 Keep the web service's start command as `python cli.py app`. The cron command summarizes up to ten conversations idle for at least ten minutes, then processes up to ten other chats with pending personalization reviews, including failed or unfinished batches from earlier runs. Railway schedules use UTC. Locally, run the same task with `uv run python cli.py summaries`.
 
+In **Demo tools**, click **Run now** under **Summary & personalization** to run the same batch across all managers without the idle wait. It refreshes the open chat's summary and personalization suggestions; inferred preferences still require approval.
+
 ### Daily review
 
-The daily review (dreaming) runs from cron once a day; admins can also run it from **Run review now** in Demo tools. Create a second cron service from the same repository with root `/backend`:
+The daily review (dreaming) runs from cron once a day. Create a second cron service from the same repository with root `/backend`:
 
 | Setting | Value |
 | --- | --- |

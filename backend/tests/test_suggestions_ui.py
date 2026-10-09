@@ -1,11 +1,9 @@
-from types import SimpleNamespace
 from uuid import uuid4
 
 import gradio as gr
 import pytest
 
 from database.models import Suggestion
-from service.dreaming import ReviewReport
 from ui import gradio_app
 from ui import navigation as navigation_ui
 from ui import suggestions as suggestions_ui
@@ -137,75 +135,6 @@ def test_accept_and_dismiss_report_their_outcome(monkeypatch, preference_store) 
         suggestions_ui.dismiss(target)
 
 
-def test_admin_report_runs_the_review_and_lists_issues(monkeypatch) -> None:
-    issue = SimpleNamespace(
-        id=uuid4(),
-        payload={
-            "issue": "pushback",
-            "chat": "Rain backlog",
-            "question": "That's wrong",
-            "answer": "Call the standby rider.",
-            "when": "2026-10-08T13:30:00+00:00",
-        },
-    )
-    resolved = []
-    monkeypatch.setattr(
-        suggestions_ui,
-        "open_answer_issues",
-        lambda manager_id=None: [issue],
-    )
-    monkeypatch.setattr(suggestions_ui, "run_review", lambda: ReviewReport(chats=2))
-
-    def mark(store_id, manager_id):
-        resolved.append((store_id, manager_id))
-        return 1
-
-    monkeypatch.setattr(suggestions_ui, "mark_answer_issues_reviewed", mark)
-    monkeypatch.setattr(
-        suggestions_ui,
-        "pending_suggestions",
-        lambda manager_id=None: [DRAFT],
-    )
-    status, table = suggestions_ui.run_review_now()
-    assert status.startswith("Reviewed 2 chats with new messages")
-    assert status.endswith(
-        "Waiting: 1 suggestion for the manager, 1 answer issue to look at.",
-    )
-    assert table["data"] == [
-        [
-            "08 Oct, 19:00",
-            "Pushback",
-            "Rain backlog",
-            "That's wrong",
-            "Call the standby rider.",
-        ],
-    ]
-    status, _ = suggestions_ui.mark_issues_reviewed()
-    assert status == "Marked 1 issues as reviewed."
-    assert resolved == [("DS-BLR-014", "karthik")]
-
-
-def test_admin_report_handles_storage_errors(monkeypatch) -> None:
-    def unavailable(manager_id=None):
-        raise RuntimeError("database down")
-
-    monkeypatch.setattr(suggestions_ui, "open_answer_issues", unavailable)
-    assert suggestions_ui.issues_table()["data"] == []
-    monkeypatch.setattr(suggestions_ui, "run_review", ReviewReport)
-    status, _ = suggestions_ui.run_review_now()
-    assert status == "No new messages since the last review."
-    monkeypatch.setattr(suggestions_ui, "run_review", unavailable)
-    with pytest.raises(gr.Error, match="review could not run"):
-        suggestions_ui.run_review_now()
-    monkeypatch.setattr(
-        suggestions_ui,
-        "mark_answer_issues_reviewed",
-        lambda *args: unavailable(),
-    )
-    with pytest.raises(gr.Error):
-        suggestions_ui.mark_issues_reviewed()
-
-
 def test_sidebar_review_opens_the_suggestions_category(ui_app) -> None:
     nav, *panels, save_row = navigation_ui.show_suggestions()
     assert nav["value"] == "suggestions"
@@ -240,8 +169,6 @@ def test_sidebar_review_opens_the_suggestions_category(ui_app) -> None:
         "refresh_for",
         "accept",
         "dismiss",
-        "run_review_now",
-        "issues_table",
     } <= names
 
 
@@ -289,9 +216,6 @@ def test_review_panels_reload_with_the_selected_manager(ui_app) -> None:
         suggestions_ui.select,
         suggestions_ui.accept,
         suggestions_ui.dismiss,
-        suggestions_ui.issues_table,
-        suggestions_ui.run_review_now,
-        suggestions_ui.mark_issues_reviewed,
     }
     seen = set()
     for callback in ui_app.fns.values():

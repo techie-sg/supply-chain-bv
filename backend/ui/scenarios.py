@@ -270,10 +270,8 @@ class ScenarioComponents:
     preview: gr.HTML
     refresh: gr.Button
     tables: list[gr.Dataframe]
-    run_review_button: gr.Button
-    mark_reviewed_button: gr.Button
-    review_status: gr.Markdown
-    answer_issues: gr.Dataframe
+    run_summary_job: gr.Button
+    summary_job_status: gr.Markdown
 
 
 def build_scenarios(
@@ -375,36 +373,23 @@ def build_scenarios(
                     "Synthetic starting snapshots · Refresh to see saved changes",
                     elem_classes="panel-note",
                 )
-        with gr.Column(elem_id="review-admin", min_width=0):
+        with gr.Column(elem_id="summary-admin", min_width=0):
             gr.HTML(
-                '<div class="loader-heading"><h2>Daily review (admin)</h2>'
-                "<p>Runs every day at 23:30 IST. Drafts the handover note, "
-                "proposes settings, and lists answers that need a look.</p></div>",
+                '<div class="loader-heading"><h2>Summary &amp; personalization</h2>'
+                "<p>Run a batch for all managers without waiting for chats to "
+                "become idle. Suggested preferences still need approval.</p></div>",
                 apply_default_css=False,
             )
-            with gr.Row(elem_id="review-actions"):
-                run_review_button = gr.Button(
-                    "Run review now",
+            with gr.Row(elem_id="summary-job-actions"):
+                run_summary_job = gr.Button(
+                    "Run now",
                     variant="primary",
+                    size="sm",
                     scale=0,
-                    min_width=160,
+                    min_width=128,
+                    elem_id="run-summary-job",
                 )
-                mark_reviewed_button = gr.Button(
-                    "Mark all pending issues reviewed",
-                    scale=0,
-                    min_width=160,
-                )
-                review_status = gr.Markdown(elem_id="review-status")
-            answer_issues = gr.Dataframe(
-                value={"headers": [], "data": []},
-                label="Answer issues",
-                interactive=False,
-                type="array",
-                wrap=True,
-                show_search="filter",
-                elem_id="answer-issues",
-                elem_classes="scenario-table",
-            )
+                summary_job_status = gr.Markdown(elem_id="summary-job-status")
 
     return ScenarioComponents(
         situation,
@@ -413,8 +398,6 @@ def build_scenarios(
         preview,
         refresh,
         tables,
-        run_review_button,
-        mark_reviewed_button,
-        review_status,
-        answer_issues,
+        run_summary_job,
+        summary_job_status,
     )

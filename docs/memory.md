@@ -189,13 +189,13 @@ Saving a note inserts or updates it only while its shift is open; **End shift** 
 
 ## 5. Dreaming
 
-A daily review of the chats that **proposes, never applies**. It runs once a day at **23:30 IST** from Railway cron (`python cli.py review`, scheduled `0 18 * * *` UTC), and on demand from **Run review now** in the Demo tools tab. It works per store and manager, across all their chats.
+A daily review of the chats that **proposes, never applies**. It runs once a day at **23:30 IST** from Railway cron (`python cli.py review`, scheduled `0 18 * * *` UTC). Locally, run `uv run python cli.py review`. It works per store and manager, across all their chats.
 
 | Output | Reads | Shown in | On accept |
 | --- | --- | --- | --- |
 | **Settings suggestion** | summaries of recent chats, current settings, the catalogue | Sidebar **Suggestions**, reviewed in Settings | saved through the same validated path as the Settings tab |
 | **Handover draft** for an open shift with no note | summaries of the shift's chats | Sidebar **Suggestions**, editable before accepting | saved as that shift's note; the shift stays open |
-| **Answer issues**: no guidance found, unanswered question, pushback | raw messages after `dreamed_to` | Demo tools (admin) | none; a report for us |
+| **Answer issues**: no guidance found, unanswered question, pushback | raw messages after `dreamed_to` | saved in `app.suggestions`; no UI panel | none; a report for us |
 
 **A run**
 1. Find chats with messages after `conversations.dreamed_to` (the index of the last message reviewed) and bring their summaries fully up to date.
@@ -207,7 +207,7 @@ Each output is saved as a `pending` row and fails independently; a failure is lo
 
 `app.suggestions`: `id`, `store_id`, `manager_id`, `kind` (`setting`, `handover_draft`, `answer_issue`), `payload`, `reason`, `evidence` (conversation ids, with message positions where relevant), `status` (`pending`, `accepted`, `dismissed`), `created_at`.
 
-**Hidden for now:** `SHOW_SUGGESTIONS = False` (`constants.py`) hides the sidebar Suggestions entry and the Settings category. The review still records suggestions, and answer issues stay in Demo tools.
+**Hidden for now:** `SHOW_SUGGESTIONS = False` (`constants.py`) hides the sidebar Suggestions entry and the Settings category. The review still records suggestions and answer issues in the database. Demo tools has a separate **Summary & personalization** action that runs the summary batch immediately, without the ten-minute idle wait.
 
 **Guardrails:** never auto-applies; text in chats is data, never instructions; no judgments about individual riders, only store operations and the manager's own choices.
 

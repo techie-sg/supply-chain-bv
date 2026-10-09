@@ -97,6 +97,7 @@ class SummaryService:
         self.summarize = summarize
         self.engine = engine
         self.review_personalization = review_personalization
+        self.failures = 0
 
     def fold(self, conversation: Conversation, keep_recent: int) -> bool:
         """Fold raw messages, except the latest `keep_recent`, into the summary."""
@@ -116,6 +117,7 @@ class SummaryService:
             user_message,
         ).strip()
         if not summary:
+            self.failures += 1
             logger.warning(
                 "Empty conversation summary",
                 conversation_id=str(conversation.id),
@@ -154,6 +156,7 @@ class SummaryService:
             ValueError,
             SQLAlchemyError,
         ):
+            self.failures += 1
             logger.warning(
                 "Could not review personalization; progress remains pending",
                 conversation_id=str(conversation.id),
@@ -202,10 +205,16 @@ class SummaryService:
             return False
         return self.fold(conversation, keep_recent=0)
 
-    def summarize_idle(self, now: datetime | None = None) -> int:
-        """Summarize chats idle for the idle time in full; returns how many."""
+    def summarize_idle(
+        self,
+        now: datetime | None = None,
+        *,
+        force: bool = False,
+    ) -> int:
+        """Run one summary/personalization batch; force bypasses the idle wait."""
         now = now or datetime.now(TIMEZONE)
-        idle_before = now - timedelta(minutes=SUMMARY_IDLE_MINUTES)
+        idle_before = now if force else now - timedelta(minutes=SUMMARY_IDLE_MINUTES)
+        self.failures = 0
         done = 0
         attempted = set()
         for conversation in idle_unsummarized(
@@ -222,6 +231,7 @@ class SummaryService:
                 ValueError,
                 SQLAlchemyError,
             ):
+                self.failures += 1
                 logger.warning(
                     "Could not summarize idle conversation",
                     conversation_id=str(conversation.id),
@@ -246,6 +256,13 @@ def _summarize(system_prompt: str, user_message: str) -> str:
 
 def summary_service() -> SummaryService:
     return SummaryService(summarize=_summarize, review_personalization=True)
+
+
+def run_summary_job(*, force: bool = False) -> tuple[int, int]:
+    """Run the shared summary and personalization job across all managers."""
+    service = summary_service()
+    count = service.summarize_idle(force=force)
+    return count, service.failures
 
 
 def summarize_latest_conversation(

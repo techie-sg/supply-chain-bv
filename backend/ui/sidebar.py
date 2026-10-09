@@ -204,12 +204,6 @@ def build_sidebar() -> SidebarComponents:
                     elem_id="new-chat",
                     elem_classes="sidebar-nav-item",
                 )
-                edit_settings = gr.Button(
-                    "Settings",
-                    size="sm",
-                    elem_id="edit-settings",
-                    elem_classes="sidebar-nav-item",
-                )
                 handover_navigation = gr.Button(
                     "Handover",
                     size="sm",
@@ -220,6 +214,12 @@ def build_sidebar() -> SidebarComponents:
                     "Demo tools",
                     size="sm",
                     elem_id="sidebar-demo",
+                    elem_classes="sidebar-nav-item",
+                )
+                edit_settings = gr.Button(
+                    "Settings",
+                    size="sm",
+                    elem_id="edit-settings",
                     elem_classes="sidebar-nav-item",
                 )
         with gr.Column(elem_id="sidebar-history"):
