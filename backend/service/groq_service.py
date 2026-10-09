@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 from functools import cached_property
 from time import perf_counter
+from typing import Any
 
 import groq
 import structlog
@@ -85,14 +86,36 @@ class GroqService(LLMService):
             tokens=getattr(response, "usage_metadata", None),
             duration_ms=round((perf_counter() - started) * 1000, 2),
         )
-        return self._answer_text(response)
+        return self._answer_text(response, messages)
 
-    @staticmethod
-    def _answer_text(response: AIMessage) -> str:
-        if not response.text.strip():
+    def _answer_text(
+        self,
+        response: AIMessage,
+        messages: list[BaseMessage],
+        schemas: list[dict] | None = None,
+    ) -> str:
+        """The reply's text; one retry with low reasoning effort if it is empty.
+
+        gpt-oss models can spend the whole output budget on reasoning and
+        return no text. Retrying the same request with less reasoning usually
+        leaves room for the answer; if it is still empty, fail rather than save
+        an empty reply.
+        """
+        if response.text.strip():
+            return response.text
+        logger.warning(
+            "Groq returned an empty answer; retrying with low reasoning effort",
+            model=self.model,
+            tokens=getattr(response, "usage_metadata", None),
+        )
+        client: Any = self._client.model_copy(update={"reasoning_effort": "low"})
+        if schemas:
+            client = client.bind_tools(schemas, tool_choice="none")
+        retry = client.invoke(messages)
+        if not retry.text.strip():
             logger.error("Model returned no answer")
             raise RuntimeError("The model returned an empty answer.")
-        return response.text
+        return retry.text
 
     def generate_with_tools(
         self,
@@ -131,7 +154,11 @@ class GroqService(LLMService):
                 tokens=getattr(response, "usage_metadata", None),
                 duration_ms=round((perf_counter() - started) * 1000, 2),
             )
-            return self._answer_text(response)
+            return self._answer_text(
+                response,
+                messages,
+                [tool.schema() for tool in tools],
+            )
         logger.warning("Answering without tools after rejected tool calls")
         return self.generate(
             system_prompt,

@@ -9,6 +9,7 @@ from uuid import UUID
 import requests
 import structlog
 from sqlalchemy import Engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from constants import DEMO_MANAGER_ID, DEMO_STORE_ID, SUMMARY_RECENT_MESSAGES, TIMEZONE
 from database.models import Conversation
@@ -34,6 +35,7 @@ from queries.conversations import (
     start_conversation,
 )
 from resources import PROMPTS
+from service.alerts import alerts_block
 from service.factory import create_llm_service
 from service.handover import handover_block
 from service.memory import memory_block
@@ -275,8 +277,18 @@ def _answer(
         handover=handover_block(preferences.store_id),
         memory=memory_block(preferences.manager_id),
         tools=traced_tools([*tools, *dispatch_tools(preferences.store_id)], calls),
+        alerts=_alerts(preferences.manager_id),
     )
     return AnswerResult(reply, _trace(preferences, calls))
+
+
+def _alerts(manager_id: str) -> str | None:
+    """The manager's firing alerts; an answer never waits on or fails for them."""
+    try:
+        return alerts_block(manager_id)
+    except (SQLAlchemyError, RuntimeError, ValueError):
+        logger.warning("Could not read alerts for the answer", exc_info=True)
+        return None
 
 
 def _title(question: str, answer: str) -> str:

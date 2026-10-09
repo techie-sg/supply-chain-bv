@@ -181,6 +181,7 @@ def test_ui_entry_point_passes_preferences_through(monkeypatch) -> None:
             handover,
             memory,
             tools,
+            alerts,
         ):
             seen.update(question=question, preferences=preferences)
             return "answer"

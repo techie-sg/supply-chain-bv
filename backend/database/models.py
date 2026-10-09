@@ -484,3 +484,51 @@ class Suggestion(Base):
         DateTime(timezone=True),
         server_default=func.now(),
     )
+
+
+class AlertEvent(Base):
+    """One alert pop-up: the measure crossed the manager's threshold."""
+
+    __tablename__ = "alert_events"
+    __table_args__ = (
+        CheckConstraint(
+            "jsonb_typeof(details) = 'object'",
+            name="ck_alert_events_details",
+        ),
+        Index(
+            "ix_alert_events_manager_code_time",
+            "store_id",
+            "manager_id",
+            "code",
+            "triggered_at",
+        ),
+        {"schema": "app"},
+    )
+
+    id: Mapped[UUID] = mapped_column(
+        primary_key=True,
+        default=uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    store_id: Mapped[str] = mapped_column(String(32))
+    manager_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("app.managers.manager_id", ondelete="RESTRICT"),
+    )
+    code: Mapped[str] = mapped_column(
+        String(48),
+        ForeignKey("app.preference_definitions.code", ondelete="RESTRICT"),
+    )
+    value: Mapped[float] = mapped_column(Numeric(asdecimal=False))
+    threshold: Mapped[float] = mapped_column(Numeric(asdecimal=False))
+    snapshot_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    triggered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+    )
+    details: Mapped[dict] = mapped_column(
+        JSONB,
+        server_default=text("'{}'::jsonb"),
+    )
+    # When the manager closed the pop-up; it is not shown again after that.
+    dismissed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

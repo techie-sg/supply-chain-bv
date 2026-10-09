@@ -222,9 +222,49 @@ def test_without_tools_the_plain_path_is_used(monkeypatch) -> None:
     assert client.bound == []
 
 
+class Reasoning:
+    """Fake ChatGroq whose default effort returns no text."""
+
+    def __init__(self, effort=None, replies=None, silent=False) -> None:
+        self.effort = effort
+        self.silent = silent
+        self.replies = replies if replies is not None else []
+        self.seen: list[list] = []
+        self.bound: list[str] = []
+
+    def model_copy(self, update):
+        return Reasoning(update["reasoning_effort"], self.replies, self.silent)
+
+    def bind_tools(self, schemas, tool_choice):
+        self.bound.append(tool_choice)
+        return self
+
+    def invoke(self, messages):
+        self.replies.append((self.effort, len(messages)))
+        text = "the answer" if self.effort == "low" and not self.silent else "  "
+        return SimpleNamespace(text=text, tool_calls=[], usage_metadata=None)
+
+
+def test_an_empty_answer_is_retried_once_with_low_reasoning(monkeypatch) -> None:
+    client = Reasoning()
+    monkeypatch.setattr(GroqService, "_client", client)
+    service = GroqService(api_key=SecretStr("key"))
+    assert service.generate("system", "question") == "the answer"
+    assert client.replies == [(None, 2), ("low", 2)]
+
+
+def test_an_empty_answer_after_tools_is_retried_without_tools(monkeypatch) -> None:
+    client = Reasoning()
+    monkeypatch.setattr(GroqService, "_client", client)
+    service = GroqService(api_key=SecretStr("key"))
+    assert service.generate_with_tools("s", "u", [echo_tool([])]) == "the answer"
+    assert client.replies[-1] == ("low", 2)
+
+
 @pytest.mark.parametrize("with_tools", [False, True])
 def test_empty_answers_are_rejected_before_being_saved(monkeypatch, with_tools) -> None:
-    client = FakeGroqClient([text_reply(" ")])
+    # Empty even with low reasoning: fail rather than store an empty reply.
+    client = Reasoning(silent=True)
     monkeypatch.setattr(GroqService, "_client", client)
     service = GroqService(api_key=SecretStr("fake-key"))
     with pytest.raises(RuntimeError, match="empty answer"):
@@ -232,3 +272,4 @@ def test_empty_answers_are_rejected_before_being_saved(monkeypatch, with_tools) 
             service.generate_with_tools("system", "question", [echo_tool([])])
         else:
             service.generate("system", "question")
+    assert client.replies[-1][0] == "low"

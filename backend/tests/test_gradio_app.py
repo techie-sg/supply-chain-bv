@@ -961,8 +961,9 @@ def test_summary_popover_is_refreshed_with_the_chat(ui_app) -> None:
         if callback.fn is summary_ui.summary_card
     ]
     # Page load, switching manager, opening a chat, a scenario load, New chat,
-    # and before title generation and after any summary folding for each answer.
-    assert len(refreshers) == 9
+    # and before title generation and after any summary folding for each answer,
+    # and starting a chat from an alert.
+    assert len(refreshers) == 10
     assert all(trigger in callback.outputs for callback in refreshers)
     [click] = [
         callback

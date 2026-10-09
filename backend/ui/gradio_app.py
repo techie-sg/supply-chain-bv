@@ -10,6 +10,7 @@ from constants import DEMO_MANAGER_ID
 from logging_config import configure_logging, configure_uvicorn_logging
 from service.conversations import current_conversation_id
 from service.scenarios import scenario_names
+from ui import alerts as alerts_ui
 from ui import chat as chat_ui
 from ui import navigation as navigation_ui
 from ui import scenarios as scenarios_ui
@@ -44,6 +45,11 @@ def build_app() -> gr.Blocks:
         manager = gr.State(DEMO_MANAGER_ID)
         # Setting changes proposed in chat, waiting for Confirm or Cancel.
         pending_changes = gr.State([])
+        # Alert pop-ups waiting to be shown, the ones already shown on this
+        # page, and whether the shown alert's diagnosis is open.
+        alert_queue = gr.State([])
+        alert_seen = gr.State([])
+        alert_open = gr.State(False)
         sidebar_components = sidebar_ui.build_sidebar()
         new_chat = sidebar_components.new_chat
         edit_settings = sidebar_components.edit_settings
@@ -95,6 +101,7 @@ def build_app() -> gr.Blocks:
             mark_reviewed_button = scenarios_components.mark_reviewed_button
             review_status = scenarios_components.review_status
             answer_issues = scenarios_components.answer_issues
+        alert_components = alerts_ui.build_popup()
         app.load(navigation_ui._restore_tab, outputs=workspace, queue=False)
         suggestion_components = settings_form.suggestions
         assert suggestion_components is not None
@@ -251,6 +258,12 @@ def build_app() -> gr.Blocks:
                     outputs=answer_issues,
                 )
                 .then(settings.load_memory, inputs=manager, outputs=memory_view)
+                .then(
+                    alerts_ui.queue_new,
+                    inputs=[manager, alert_queue, alert_seen],
+                    outputs=[alert_queue, alert_seen],
+                    show_progress="hidden",
+                )
             )
 
         show_manager(
@@ -270,6 +283,8 @@ def build_app() -> gr.Blocks:
                 queue=False,
             )
             .then(list, outputs=pending_changes, queue=False)
+            # Alerts belong to the manager too: start the new one's afresh.
+            .then(lambda: ([], []), outputs=[alert_queue, alert_seen], queue=False)
             .then(fn=None, js=sidebar_ui.MANAGER_URL_JS, inputs=manager_picker),
         ).then(fn=None, js=sidebar_ui.CLOSE_SIDEBAR_ON_PHONE_JS)
         app.load(fn=None, js=sidebar_ui.CLOSE_SIDEBAR_ON_PHONE_JS)
@@ -356,6 +371,11 @@ def build_app() -> gr.Blocks:
             summary_ui.summary_card,
             inputs=[manager, active_chat],
             outputs=summary_outputs,
+        ).then(
+            alerts_ui.queue_new,
+            inputs=[manager, alert_queue, alert_seen],
+            outputs=[alert_queue, alert_seen],
+            show_progress="hidden",
         )
         for event in (submit.click, message.submit):
             response = event(
@@ -509,6 +529,54 @@ def build_app() -> gr.Blocks:
         # A proposal belongs to the chat it was made in.
         for event in (new_chat.click, history_list.input, load.click):
             event(list, outputs=pending_changes, queue=False)
+        alert_components.timer.tick(
+            alerts_ui.queue_new,
+            inputs=[manager, alert_queue, alert_seen],
+            outputs=[alert_queue, alert_seen],
+            show_progress="hidden",
+            concurrency_id="alerts",
+            concurrency_limit=1,
+        )
+        alert_queue.change(
+            alerts_ui.card,
+            inputs=alert_queue,
+            outputs=[
+                alert_components.popup,
+                alert_components.card,
+                alert_components.details,
+                alert_open,
+                alert_components.diagnose,
+            ],
+            queue=False,
+            show_progress="hidden",
+        )
+        alert_components.close.click(
+            alerts_ui.dismiss,
+            inputs=[alert_queue, manager],
+            outputs=alert_queue,
+            show_progress="hidden",
+        )
+        alert_components.diagnose.click(
+            alerts_ui.diagnosis,
+            inputs=[alert_queue, alert_open, manager],
+            outputs=[alert_components.details, alert_open, alert_components.diagnose],
+            show_progress="hidden",
+        )
+        alert_components.chat.click(
+            alerts_ui.start_alert_chat,
+            inputs=[alert_queue, manager],
+            outputs=[chatbot, message, active_chat, workspace, alert_queue],
+            concurrency_id="workspace",
+            concurrency_limit=1,
+        ).then(list, outputs=pending_changes, queue=False).then(
+            sidebar_ui.conversation_choices,
+            inputs=[manager, active_chat],
+            outputs=history_list,
+        ).then(
+            summary_ui.summary_card,
+            inputs=[manager, active_chat],
+            outputs=summary_outputs,
+        ).then(fn=None, js=alerts_ui.SEND_ALERT_QUESTION_JS)
     return app
 
 
