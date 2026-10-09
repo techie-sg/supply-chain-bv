@@ -60,8 +60,15 @@ DURABLE = re.compile(
     r"\b(?:always|from now on|in (?:the )?future|remember|i prefer|by default|every (?:answer|response|reply)|forget|remove|reset)\b",
     re.IGNORECASE,
 )
+GENERAL_RESPONSE = re.compile(
+    r"^(?:please\s+)?keep (?:your |the )?(?:answers|responses|replies)\s+"
+    r"(?:short(?:er)?|brief|concise|balanced|detailed|thorough|longer|in.depth)\b",
+    re.IGNORECASE,
+)
 TEMPORARY = re.compile(
-    r"\b(?:this (?:answer|response|reply|time)|for now|today|tonight|this shift|just this|only this)\b",
+    r"\b(?:(?:this|next|current) "
+    r"(?:answer|response|reply|question|chat|conversation|time|day|shift)|"
+    r"for now|today|tonight|tomorrow|until|just this|only this)\b",
     re.IGNORECASE,
 )
 NEGATED = re.compile(r"\b(?:don'?t|do not|never|not)\b", re.IGNORECASE)
@@ -122,7 +129,17 @@ def eligible(text: str) -> bool:
 
 
 def explicit(text: str) -> bool:
-    return any(DURABLE.search(clause) for clause in request_clauses(text))
+    return any(
+        DURABLE.search(clause)
+        or (
+            GENERAL_RESPONSE.search(clause)
+            and any(
+                supports("answer_length", value, clause)
+                for value in SIGNALS["answer_length"]
+            )
+        )
+        for clause in request_clauses(text)
+    )
 
 
 def item(
@@ -422,7 +439,7 @@ class PersonalizationChanges:
     def tool(self) -> Tool:
         return Tool(
             "change_personalization",
-            "Save or remove a lasting response preference ONLY when the latest manager message explicitly asks for it (always, from now on, I prefer, remember, forget/reset my preference). One-off requests apply to this answer only. Quote the exact request. This never changes operational settings or policy. Report saved only if this tool returns saved=true.",
+            "Save or remove a lasting response preference ONLY when the latest manager message explicitly asks for it (always, from now on, I prefer, remember, forget/reset my preference), including general instructions such as 'keep answers short for me' with no temporary scope. Call this tool before acknowledging a saved preference. One-off requests apply to this answer only. Quote the exact request. This never changes operational settings or policy. Report saved only if this tool returns saved=true.",
             {
                 "type": "object",
                 "properties": {
@@ -433,7 +450,7 @@ class PersonalizationChanges:
                     },
                     "quote": {
                         "type": "string",
-                        "description": "Exact quote from the latest manager message, including its lasting intent.",
+                        "description": "Exact quote from the latest manager message, including a general or explicitly lasting preference request.",
                     },
                 },
                 "required": ["code", "value", "quote"],

@@ -15,7 +15,7 @@ available, links to its source conversation.
 | Trigger | Requirement | Result |
 | --- | --- | --- |
 | Save personalization | A validated field actually differs from the loaded profile | Save only changed fields; stale edits are rejected |
-| Latest chat message | A direct lasting request such as "Always keep your answers short", "I prefer detailed explanations", or "Forget my preference for short answers" | A turn-scoped tool validates the exact user quote and supported value, then saves or removes that field |
+| Latest chat message | A direct lasting request such as "Keep answers short for me", "Always keep your answers short", "I prefer detailed explanations", or "Forget my preference for short answers" | A turn-scoped tool validates the exact user quote and supported value, then saves or removes that field |
 | Accept suggestion | A pending personalization suggestion still belongs to the manager and the field has never been set or removed | Apply the validated value and accept the proposal atomically |
 
 Repeating a saved value changes nothing, including its source and save time.
@@ -70,7 +70,7 @@ up by the next cron run. Progress saves use the expected previous marker so a
 stale or concurrent worker cannot regress progress or duplicate a completed batch.
 
 Example: "Why is the queue growing?" saves nothing. "Make this answer shorter"
-applies to that answer only. "Always keep your answers short" can save a durable
+applies to that answer only. "Keep answers short for me" can save a durable
 preference through chat. If its chat tool did not save it, summary review can
 propose it for approval; review never silently applies it.
 
