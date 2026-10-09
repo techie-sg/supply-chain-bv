@@ -130,7 +130,7 @@ Idle-conversation summarization runs through the `summaries` CLI command. In cha
 
 Keep the web service's start command as `python cli.py app`. The cron command summarizes up to ten conversations idle for at least ten minutes, then processes up to ten other chats with pending personalization reviews, including failed or unfinished batches from earlier runs. Railway schedules use UTC. Locally, run the same task with `uv run python cli.py summaries`.
 
-In **Demo tools**, click **Run now** under **Summary & personalization** to run the same batch across all managers without the idle wait. It refreshes the open chat's summary and personalization suggestions; inferred preferences still require approval.
+In **Demo tools**, click **Run now** under **Summary & personalization** to run the same batch across all managers without the idle wait. It refreshes summaries and saves verified personalization automatically, without approval.
 
 ### Daily review
 
@@ -143,7 +143,7 @@ The daily review (dreaming) runs from cron once a day. Create a second cron serv
 | Variables | `DATABASE_URL`, `OPENROUTER_KEY` (same LLM provider/model as the web service) |
 | Healthcheck and public domain | None |
 
-Summary refreshes and dreaming save verified new response preferences automatically, without approval. Explicit chat requests and Settings saves also update **Personalization**. Review preserves saved or removed fields, and most conversations produce no change. See [personalization.md](docs/personalization.md) for exact update rules.
+Summary cron and dreaming learn personal context from new manager messages, including names, email addresses, preferences, and instructions. They save supported updates automatically, without approval; chat tools never write personalization. Existing context is preserved unless the manager corrects it or asks to forget it. Most conversations produce no change. View or edit the saved context in **Settings → Personalization**. See [personalization.md](docs/personalization.md) for exact update rules.
 
 Locally: `uv run python cli.py review`.
 

@@ -19,6 +19,7 @@ from database.session import get_session
 from domain.memory import SuggestionKind, SuggestionStatus
 from domain.personalization import (
     FIELDS,
+    NOTES,
     PersonalizationCandidate,
     Profile,
     validate_value,
@@ -209,10 +210,10 @@ def finish_review(
                     "evidence": row["evidence"],
                 },
             )
-            if candidate.code not in FIELDS:
-                raise ValueError("Dreaming can save only typed response preferences.")
+            if candidate.code not in FIELDS and candidate.code != NOTES:
+                raise ValueError("Unknown personalization field.")
             value = validate_value(candidate.code, candidate.value)
-            if value is None or candidate.code in changes:
+            if (value is None and candidate.code != NOTES) or candidate.code in changes:
                 raise ValueError("Invalid or duplicate learned preference.")
             evidence = next(
                 (
@@ -235,7 +236,22 @@ def finish_review(
                 "evidence": [entry.model_dump() for entry in candidate.evidence],
                 "saved_at": datetime.now(TIMEZONE).isoformat(),
             }
-        return _merge_profile(session, store_id, manager_id, changes, only_unset=True)
+        expected_profile = next(
+            (
+                row["expected_profile"]
+                for row in updates
+                if row["payload"]["code"] == NOTES
+            ),
+            None,
+        )
+        return _merge_profile(
+            session,
+            store_id,
+            manager_id,
+            changes,
+            expected=expected_profile,
+            only_unset=NOTES not in changes,
+        )
 
 
 def pending_reviews(

@@ -1,17 +1,14 @@
-"""Save explicit preferences and learn unset preferences during dreaming.
+"""Dreaming learns durable personal context from new manager messages.
 
-Summary review sees only new manager messages. Ordinary dispatch questions do
-not read evidence, call an extraction model, or write personalization. Repeated
-style requests need three distinct chats; verified extraction saves automatically.
+Chat only reads this context. Summary cron reviews bounded raw message batches;
+ordinary operational messages normally produce no change.
 """
 
 import json
-import re
 from collections.abc import Callable
 from datetime import datetime
 from html import escape
 from typing import Any
-from uuid import UUID
 
 import structlog
 from pydantic import TypeAdapter, ValidationError
@@ -24,21 +21,18 @@ from constants import (
     PERSONALIZATION_BATCH_MESSAGES,
     PERSONALIZATION_BATCHES_PER_CHAT,
     PERSONALIZATION_MAX_INPUT_BYTES,
-    PERSONALIZATION_MIN_CHATS,
     TIMEZONE,
 )
 from database.models import Conversation
 from domain.memory import SuggestionKind
 from domain.personalization import (
-    FIELDS,
+    NOTES,
     PersonalizationCandidate,
     Profile,
     describe,
     validate_value,
 )
-from domain.tools import Tool
 from queries.personalization import (
-    evidence_chats,
     finish_review,
     read_profile,
     save_profile,
@@ -46,100 +40,6 @@ from queries.personalization import (
 from resources import PROMPTS
 
 logger = structlog.stdlib.get_logger(__name__)
-
-# Conservative English request forms. Questions, quoted instructions, assistant
-# text, temporary shift conditions and operational settings are not candidates.
-REQUEST = re.compile(
-    r"^(?:please\s+)?(?:i (?:prefer|like|want)|always\b|from now on\b|"
-    r"in (?:the )?future\b|remember (?:that |my )|keep (?:your |the )?"
-    r"(?:answers?|responses?|replies?)\b|(?:give|show|start|use|make)\b|"
-    r"(?:forget|remove|reset) (?:my |the )?(?:saved |preference|personalization))",
-    re.IGNORECASE,
-)
-DURABLE = re.compile(
-    r"\b(?:always|from now on|in (?:the )?future|remember|i prefer|by default|every (?:answer|response|reply)|forget|remove|reset)\b",
-    re.IGNORECASE,
-)
-GENERAL_RESPONSE = re.compile(
-    r"^(?:please\s+)?keep (?:your |the )?(?:answers|responses|replies)\s+"
-    r"(?:short(?:er)?|brief|concise|balanced|detailed|thorough|longer|in.depth)\b",
-    re.IGNORECASE,
-)
-TEMPORARY = re.compile(
-    r"\b(?:(?:this|next|current) "
-    r"(?:answer|response|reply|question|chat|conversation|time|day|shift)|"
-    r"for now|today|tonight|tomorrow|until|just this|only this)\b",
-    re.IGNORECASE,
-)
-NEGATED = re.compile(r"\b(?:don'?t|do not|never|not)\b", re.IGNORECASE)
-SIGNALS = {
-    "answer_length": {
-        "brief": r"\b(?:short|shorter|brief|concise)\b",
-        "balanced": r"\bbalanced\b",
-        "detailed": r"\b(?:detailed|thorough|in.depth|longer)\b",
-    },
-    "answer_order": {
-        "recommendation_first": r"(?:recommendation|action|next step).{0,25}\bfirst\b|\bstart\b.{0,30}(?:recommendation|action|next step)",
-        "explanation_first": r"explanation.{0,25}\bfirst\b|\bstart\b.{0,30}explanation",
-    },
-    "comparisons": {
-        "best_option": r"\b(?:one|single|best) (?:option|recommendation)\b",
-        "alternatives": r"\b(?:alternatives|trade.offs|compare (?:the )?options)\b",
-    },
-    "decision_priority": {
-        "existing_capacity": r"\b(?:existing|current) (?:team|capacity|riders)\b",
-        "lower_cost": r"\b(?:lower cost|cheaper|lowest cost)\b",
-        "service_quality": r"\bservice quality\b",
-    },
-}
-
-
-def request_clauses(text: str) -> list[str]:
-    return [
-        part.strip()
-        for part in re.split(r"[.!?\n]+", text)
-        if REQUEST.search(part.strip())
-        and not TEMPORARY.search(part)
-        and not re.search(r'["“”`]', part)
-    ]
-
-
-def supports(code: str, value: str, quote: str) -> bool:
-    pattern = SIGNALS.get(code, {}).get(value)
-    if code == "answer_length" and not re.search(
-        r"\b(?:answers?|responses?|replies|reply|explanations?)\b",
-        quote,
-        re.IGNORECASE,
-    ):
-        return False
-    return bool(
-        pattern
-        and re.search(pattern, quote, re.IGNORECASE)
-        and not NEGATED.search(quote),
-    )
-
-
-def eligible(text: str) -> bool:
-    return any(
-        supports(code, value, clause)
-        for clause in request_clauses(text)
-        for code, choices in SIGNALS.items()
-        for value in choices
-    )
-
-
-def explicit(text: str) -> bool:
-    return any(
-        DURABLE.search(clause)
-        or (
-            GENERAL_RESPONSE.search(clause)
-            and any(
-                supports("answer_length", value, clause)
-                for value in SIGNALS["answer_length"]
-            )
-        )
-        for clause in request_clauses(text)
-    )
 
 
 def item(
@@ -205,7 +105,7 @@ class PersonalizationService:
         conversation: Conversation,
         generate: Callable[[str, str], str],
     ) -> int:
-        """Save verified preferences from bounded batches after this chat's marker."""
+        """Save supported personal context from bounded batches after this chat's marker."""
         if (conversation.store_id, conversation.manager_id) != (
             self.store_id,
             self.manager_id,
@@ -224,7 +124,6 @@ class PersonalizationService:
                 conversation,
                 start,
                 end,
-                conversation.summary,
                 generate,
             )
             count = finish_review(
@@ -258,7 +157,7 @@ class PersonalizationService:
         size = 0
         for index in range(start, end + 1):
             message = conversation.messages[index]
-            if message["who"] != "manager" or not eligible(message["what"]):
+            if message["who"] != "manager":
                 continue
             size += len(json.dumps(message["what"]).encode("utf-8")) + 128
             if size > PERSONALIZATION_BATCH_BYTES:
@@ -274,307 +173,77 @@ class PersonalizationService:
         conversation: Conversation,
         start: int,
         end: int,
-        summary: str,
         generate: Callable[[str, str], str],
     ) -> list[dict[str, Any]]:
-        """Extract updates outside any write transaction, from exact user evidence."""
-        batch = conversation.messages[start : end + 1]
+        """Extract personal context from raw manager messages, outside transactions."""
         fresh = [
             (index, message)
-            for index, message in enumerate(batch, start)
-            if message["who"] == "manager" and eligible(message["what"])
+            for index, message in enumerate(
+                conversation.messages[start : end + 1],
+                start,
+            )
+            if message["who"] == "manager" and message["what"].strip()
         ]
         if not fresh:
             return []
         profile = self.profile()
-        allowed = {
-            code: field.choices for code, field in FIELDS.items() if code not in profile
-        }
-        if not allowed:
-            return []
-        fresh = [
-            (index, message)
-            for index, message in fresh
-            if any(
-                supports(code, value, clause)
-                for code, choices in allowed.items()
-                for value in choices
-                for clause in request_clauses(message["what"])
-            )
-        ]
-        if not fresh:
-            return []
+        current = self.prompt_block() or ""
         adapter = TypeAdapter(list[PersonalizationCandidate])
         prompt = (PROMPTS / "personalization.md").read_text(encoding="utf-8")
-        prompt += "\n\nRequired output JSON schema:\n" + json.dumps(
-            adapter.json_schema(),
+        prompt += "\nRequired JSON schema:\n" + json.dumps(adapter.json_schema())
+        payload = json.dumps(
+            {
+                "current_personal_context": current,
+                "manager_messages": [
+                    {
+                        "conversation_id": str(conversation.id),
+                        "message_index": index,
+                        "text": message["what"],
+                    }
+                    for index, message in fresh
+                ],
+            },
         )
-        fresh_keys = {(str(conversation.id), index) for index, _ in fresh}
-        messages: dict[tuple[str, int], str] = {
-            (str(conversation.id), index): message["what"] for index, message in fresh
-        }
-        # This context is optional. Full user messages, never truncated quotes,
-        # are retained as evidence; historical evidence fits only within the cap.
-        summary = summary.encode("utf-8")[:2048].decode("utf-8", errors="ignore")
-
-        def payload() -> str:
-            return json.dumps(
-                {
-                    "allowed_preferences": allowed,
-                    "new_messages": [
-                        {"conversation_id": chat, "message_index": index}
-                        for chat, index in sorted(fresh_keys)
-                    ],
-                    "manager_messages": [
-                        {"conversation_id": chat, "message_index": index, "text": text}
-                        for (chat, index), text in messages.items()
-                    ],
-                    "summary_for_context_only": summary,
-                },
-            )
-
-        def fits() -> bool:
-            return (
-                len(prompt.encode("utf-8")) + len(payload().encode("utf-8"))
-                <= PERSONALIZATION_MAX_INPUT_BYTES
-            )
-
-        if not fits():
-            raise ValueError("Personalization extraction input exceeds its budget.")
-        chats = evidence_chats(self.store_id, self.manager_id, self.engine)
-        for chat in chats:
-            for offset, message in enumerate(chat["messages"]):
-                if message["who"] == "manager" and eligible(message["what"]):
-                    key = (str(chat["id"]), chat["start"] + offset)
-                    if key in messages or (
-                        key[0] == str(conversation.id) and key[1] > end
-                    ):
-                        continue
-                    messages[key] = message["what"]
-                    if not fits():
-                        del messages[key]
-        # A single explicit request is enough for an update. Otherwise, require
-        # three chats with matching style requests before paying for extraction.
-        if not any(explicit(message["what"]) for _, message in fresh) and not any(
-            len(
-                {
-                    chat
-                    for (chat, _), text in messages.items()
-                    if any(
-                        supports(code, value, clause)
-                        for clause in request_clauses(text)
-                    )
-                },
-            )
-            >= PERSONALIZATION_MIN_CHATS
-            for code, choices in allowed.items()
-            for value in choices
+        if (
+            len(prompt.encode()) + len(payload.encode())
+            > PERSONALIZATION_MAX_INPUT_BYTES
         ):
-            return []
-        raw = generate(prompt, payload())
+            raise ValueError("Personalization extraction input exceeds its budget.")
         try:
-            candidates = adapter.validate_json(raw)
+            candidates = adapter.validate_json(generate(prompt, payload))
         except (ValidationError, ValueError) as exc:
             raise ValueError(
                 "Invalid personalization extraction; batch remains pending.",
             ) from exc
-        updates: list[dict[str, Any]] = []
-        for candidate in candidates[: len(FIELDS)]:
-            if (
-                candidate.code not in allowed
-                or candidate.value not in allowed[candidate.code]
-            ):
+        if len(candidates) > 1:
+            raise ValueError("Return one merged personal context or no update.")
+        texts = {index: message["what"] for index, message in fresh}
+        updates = []
+        for candidate in candidates:
+            if candidate.code != NOTES:
                 continue
-            evidence = candidate.evidence
-            keys = {(entry.conversation_id, entry.message_index) for entry in evidence}
-            if len(keys) != len(evidence) or not keys.intersection(fresh_keys):
+            value = validate_value(NOTES, candidate.value)
+            if value == profile.get(NOTES, {}).get("value"):
                 continue
             if not all(
-                entry.quote
-                in messages.get((entry.conversation_id, entry.message_index), "")
-                and any(
-                    entry.quote.strip().rstrip(".!?") in clause
-                    and supports(candidate.code, candidate.value, clause)
-                    for clause in request_clauses(
-                        messages.get((entry.conversation_id, entry.message_index), ""),
-                    )
-                )
-                for entry in evidence
+                entry.conversation_id == str(conversation.id)
+                and entry.message_index in texts
+                and entry.quote in texts[entry.message_index]
+                for entry in candidate.evidence
             ):
-                continue
-            if (
-                not any(
-                    explicit(entry.quote)
-                    for entry in evidence
-                    if (entry.conversation_id, entry.message_index) in fresh_keys
-                )
-                and len({entry.conversation_id for entry in evidence})
-                < PERSONALIZATION_MIN_CHATS
-            ):
-                continue
-            if any(row["payload"]["code"] == candidate.code for row in updates):
                 continue
             updates.append(
                 {
                     "store_id": self.store_id,
                     "manager_id": self.manager_id,
                     "kind": SuggestionKind.PERSONALIZATION,
-                    "payload": {"code": candidate.code, "value": candidate.value},
+                    "payload": {"code": NOTES, "value": candidate.value},
                     "reason": candidate.reason,
-                    "evidence": [entry.model_dump() for entry in evidence],
+                    "evidence": [entry.model_dump() for entry in candidate.evidence],
+                    "expected_profile": profile,
                 },
             )
         return updates
-
-
-class PersonalizationChanges:
-    """A turn-scoped tool; only a quoted explicit request authorizes a write."""
-
-    def __init__(
-        self,
-        service: PersonalizationService,
-        question: str,
-        conversation_id: Callable[[], UUID | None],
-    ):
-        self.service, self.question, self.conversation_id = (
-            service,
-            question,
-            conversation_id,
-        )
-
-    def tool(self) -> Tool:
-        return Tool(
-            "change_personalization",
-            "Save or remove a lasting response preference ONLY when the latest manager message explicitly asks for it (always, from now on, I prefer, remember, forget/reset my preference), including general instructions such as 'keep answers short for me' with no temporary scope. Call this tool before acknowledging a saved preference. One-off requests apply to this answer only. Quote the exact request. This never changes operational settings or policy. Report saved only if this tool returns saved=true.",
-            {
-                "type": "object",
-                "properties": {
-                    "code": {"type": "string", "enum": list(FIELDS)},
-                    "value": {
-                        "type": ["string", "null"],
-                        "description": f"Allowed values: {json.dumps({code: field.choices for code, field in FIELDS.items()})}. Null removes the saved preference.",
-                    },
-                    "quote": {
-                        "type": "string",
-                        "description": "Exact quote from the latest manager message, including a general or explicitly lasting preference request.",
-                    },
-                },
-                "required": ["code", "value", "quote"],
-                "additionalProperties": False,
-            },
-            self.run,
-        )
-
-    def direct_requests(self) -> list[dict[str, Any]]:
-        """Recognize unambiguous preference-only turns without asking a model."""
-        parts = [
-            part.strip()
-            for part in re.split(r"[.!?\n]+", self.question)
-            if part.strip()
-        ]
-        clauses = request_clauses(self.question)
-        if (
-            not parts
-            or parts != clauses
-            or not all(explicit(clause) for clause in clauses)
-            or re.search(
-                r"\b(?:what|which|why|where|who|how|check|inspect|tell me|orders?|riders?)\b",
-                self.question,
-                re.IGNORECASE,
-            )
-        ):
-            return []
-        requests: dict[str, dict[str, Any]] = {}
-        for clause in clauses:
-            matches = [
-                (code, value)
-                for code, choices in SIGNALS.items()
-                for value in choices
-                if supports(code, value, clause)
-            ]
-            if not matches or len({code for code, _ in matches}) != len(matches):
-                return []
-            for code, value in matches:
-                requested_value: str | None = (
-                    None
-                    if re.search(r"\b(?:forget|remove|reset)\b", clause, re.IGNORECASE)
-                    else value
-                )
-                if code in requests and requests[code]["value"] != requested_value:
-                    return []
-                requests[code] = {
-                    "code": code,
-                    "value": requested_value,
-                    "quote": self.question.strip() if len(clauses) == 1 else clause,
-                }
-        return list(requests.values())
-
-    def run(self, args: dict[str, Any]) -> str:
-        try:
-            code, value, quote = args["code"], args["value"], args["quote"]
-            if (
-                code not in FIELDS
-                or not isinstance(quote, str)
-                or not quote
-                or quote not in self.question
-                or not explicit(quote)
-                or not any(
-                    quote.strip().rstrip(".!?") in clause
-                    for clause in request_clauses(self.question)
-                )
-            ):
-                raise ValueError(
-                    "An explicit lasting preference in the latest message is required.",
-                )
-            value = validate_value(code, value)
-            if value is None:
-                names_field = (
-                    bool(
-                        re.search(
-                            r"\b(?:answers?|responses?|replies|reply|explanations?)\b",
-                            quote,
-                            re.IGNORECASE,
-                        ),
-                    )
-                    if code == "answer_length"
-                    else True
-                )
-                if (
-                    not re.search(
-                        r"\b(?:forget|remove|reset)\b",
-                        quote,
-                        re.IGNORECASE,
-                    )
-                    or not names_field
-                    or not any(
-                        re.search(pattern, quote, re.IGNORECASE)
-                        for pattern in SIGNALS[code].values()
-                    )
-                ):
-                    raise ValueError("Name the saved preference you want removed.")
-            elif not any(
-                supports(code, value, clause) for clause in request_clauses(quote)
-            ):
-                raise ValueError("The quoted request does not support that preference.")
-            chat_id = self.conversation_id()
-            if chat_id is None:
-                raise ValueError("No active conversation.")
-            changed = save_profile(
-                self.service.store_id,
-                self.service.manager_id,
-                {code: item(value, "chat", conversation_id=str(chat_id), quote=quote)},
-                engine=self.service.engine,
-            )
-            return json.dumps(
-                {
-                    "saved": True,
-                    "changed": changed,
-                    "preference": describe(code, value),
-                    "next": "Acknowledge briefly. It can be edited or removed in Settings > Personalization.",
-                },
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            return json.dumps({"saved": False, "reason": str(exc)})
 
 
 def manager_personalization(

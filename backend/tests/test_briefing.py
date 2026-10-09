@@ -224,11 +224,6 @@ def test_ask_uses_the_briefing_only_for_greetings(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         conversations,
-        "PersonalizationChanges",
-        lambda *args: SimpleNamespace(tool=lambda: None, direct_requests=list),
-    )
-    monkeypatch.setattr(
-        conversations,
         "manager_personalization",
         lambda manager_id: None,
     )

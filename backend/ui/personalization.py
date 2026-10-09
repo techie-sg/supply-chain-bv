@@ -1,4 +1,4 @@
-"""Editable response preferences; persistence stays in the service layer."""
+"""Editable personal context; persistence stays in the service layer."""
 
 from dataclasses import dataclass
 from html import escape
@@ -11,7 +11,7 @@ import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
 from constants import PERSONALIZATION_MAX_INSTRUCTIONS
-from domain.personalization import FIELDS, NOTES, Profile
+from domain.personalization import FIELDS, NOTES, Profile, describe
 from service.personalization import manager_personalization
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -33,7 +33,7 @@ def _values(profile: Profile, manager_id: str, status: str = "") -> tuple:
     for code, entry in profile.items():
         if not entry.get("value"):
             continue
-        name = FIELDS[code].name if code in FIELDS else "Additional instructions"
+        name = FIELDS[code].name if code in FIELDS else "Personal context"
         if entry.get("source") == "dreaming":
             sources.append(
                 f"- **{name}:** learned during conversation review. “{escape(entry.get('quote', ''))}”",
@@ -58,11 +58,14 @@ def _values(profile: Profile, manager_id: str, status: str = "") -> tuple:
             )
             sources[-1] += f" [View conversation](?{query})"
     return (
-        *(profile.get(code, {}).get("value") or "" for code in FIELDS),
-        profile.get(NOTES, {}).get("value") or "",
+        profile.get(NOTES, {}).get("value")
+        or "\n".join(
+            describe(code, entry["value"])
+            for code, entry in profile.items()
+            if code in FIELDS and entry.get("value")
+        ),
         {"manager_id": manager_id, "profile": profile},
-        "\n".join(sources)
-        or "No saved preferences yet. DispatchDesk uses its default answer style.",
+        "\n".join(sources) or "No personal context saved yet.",
         status,
     )
 
@@ -74,7 +77,7 @@ def load(manager_id: str) -> tuple:
         logger.warning("Could not load personalization", exc_info=True)
         # Never present an unavailable profile as an editable empty snapshot.
         return (
-            *[gr.skip() for _ in range(len(FIELDS) + 1)],
+            *[gr.skip() for _ in range(1)],
             None,
             gr.skip(),
             "Personalization is unavailable right now. Refresh after the database is available.",
@@ -91,7 +94,10 @@ def save(
     service = manager_personalization(manager_id)
     try:
         changed = service.save(
-            dict(zip([*FIELDS, NOTES], values, strict=True)),
+            {
+                NOTES: values[0],
+                **{code: None for code in FIELDS if code in snapshot["profile"]},
+            },
             snapshot["profile"],
         )
         return _values(
@@ -110,36 +116,24 @@ def save(
 
 def build(manager: gr.State) -> PersonalizationComponents:
     gr.Markdown(
-        "These preferences apply across your conversations until you change them. Choose **Use default** to remove a preference.",
+        "Dreaming remembers relevant details and instructions from your chats. Review, edit or clear your personal context here.",
     )
     controls: list[Any] = []
     with gr.Column(elem_classes="setting-card"):
-        for code, field in FIELDS.items():
-            controls.append(
-                gr.Dropdown(
-                    choices=[
-                        ("Use default", ""),
-                        *((name, value) for value, name in field.choices.items()),
-                    ],
-                    value="",
-                    label=field.name,
-                    elem_id=f"personalization-{code}",
-                ),
-            )
         controls.append(
             gr.Textbox(
-                label="Additional instructions",
-                lines=3,
+                label="Personal context and instructions",
+                lines=8,
                 max_length=PERSONALIZATION_MAX_INSTRUCTIONS,
                 placeholder="Use plain language. Explain the trade-off before suggesting extra spending.",
-                info="Optional preferences for how you receive advice. Policy and operational settings still apply.",
+                info="Your name, contact details, working preferences and personal instructions. Policy and operational settings still apply.",
                 elem_id="personalization-instructions",
             ),
         )
     snapshot = gr.State(None)
     sources = gr.Markdown(elem_id="personalization-sources")
     gr.Markdown(
-        "**When this changes:** save here or ask in chat for a lasting preference. Conversation review also saves clear or repeated preferences automatically, without approval. Ordinary questions do not change your preferences; review preserves settings you have already chosen or removed.",
+        "**When this changes:** save here, or let dreaming learn clear or repeated preferences from your chats after summarization. Dreaming saves verified preferences automatically, without approval. Chat does not save them immediately. Ordinary questions do not change your preferences; review keeps existing details unless you correct or ask to forget them.",
     )
     with gr.Row():
         save_button = gr.Button(
