@@ -39,7 +39,7 @@ def retrieval_query(
 
 
 class PreferenceContext(Protocol):
-        """The manager's settings, shown to the model so its answers apply them."""
+    """The manager's settings, shown to the model so its answers apply them."""
 
     def prompt_block(self) -> str: ...
 
