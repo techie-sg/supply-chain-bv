@@ -181,7 +181,7 @@ Saving a note inserts or updates it only while its shift is open; **End shift** 
 - Once ended: the note read-only, and **Start a new shift**.
 - **Past handovers:** the store's ended shifts from the last 7 days, newest first: who, shift, start and end, and the note.
 
-**The handover chat:** the note is not copied into the chat. The chat's `handover_note_id` points to it, and the chat shows it as a card at the top, read from `handover_notes`.
+**The handover chat:** it starts with the note as its first message ("**Handover from Ananya Rao** · Morning shift, ended 9 Oct, 14:02", then the note), or a line saying no note was left, and is titled "Handover notes · 9 Oct · from Ananya Rao". A chat with a message is listed in the next manager's chats, so the handover stays there after **New chat**, a refresh or another chat. The chat's `handover_note_id` still points to the note. Older handover chats, opened with no messages, still show the note as a card at the top.
 
 **Read path:** in a handover chat the assistant gets that chat's note as `<handover_notes>`; in any other chat, the note of the store's most recently ended shift. Reference, never rules.
 

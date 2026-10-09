@@ -333,6 +333,8 @@ def build_app() -> gr.Blocks:
                 queue=False,
             )
             .then(list, outputs=pending_changes, queue=False)
+            # The previous manager's alerts must not follow the hand over.
+            .then(lambda: ([], []), outputs=[alert_queue, alert_seen], queue=False)
             .then(fn=None, js=sidebar_ui.MANAGER_URL_JS, inputs=manager_picker),
         )
         app.load(fn=None, js=sidebar_ui.CLOSE_SIDEBAR_ON_PHONE_JS)

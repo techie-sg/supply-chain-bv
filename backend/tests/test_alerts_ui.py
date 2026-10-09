@@ -268,3 +268,39 @@ def test_buttons_are_wired_to_the_shown_alert(ui_app) -> None:
 def test_card_severity_classes(severity) -> None:
     _, html, *_ = alerts_ui.card([{**ALERT, "severity": severity}])
     assert f"alert-{severity}" in html
+
+
+def test_every_manager_switch_clears_the_previous_managers_alerts(ui_app) -> None:
+    from ui import handover as handover_ui
+    from ui import sidebar as sidebar_ui
+
+    # Choosing a manager in the sidebar, and the switch after a hand over.
+    switches = [
+        callback
+        for callback in ui_app.fns.values()
+        if callback.fn in (sidebar_ui.select_manager, handover_ui.take_over)
+    ]
+    assert len(switches) == 2
+
+    def descendants(start):
+        found, frontier = [], [start._id]
+        while frontier:
+            current = frontier.pop()
+            for callback in ui_app.fns.values():
+                if callback.trigger_after == current:
+                    found.append(callback)
+                    frontier.append(callback._id)
+        return found
+
+    for switch in switches:
+        resets = [
+            callback
+            for callback in descendants(switch)
+            if callback.fn is not None
+            and callback.fn.__name__ == "<lambda>"
+            and len(callback.outputs) == 2
+            and all(isinstance(item, gr.State) for item in callback.outputs)
+            and callback.outputs[0].value == []
+            and callback.outputs[1].value == []
+        ]
+        assert resets, f"{switch.fn.__name__} clears the alert queue and shown alerts"
