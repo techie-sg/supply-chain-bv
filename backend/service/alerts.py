@@ -372,6 +372,8 @@ class AlertCheck:
 
     available: bool
     alerts: list[dict[str, Any]]
+    # Pop-ups this check recorded; the rest were recorded earlier.
+    recorded: int = 0
 
 
 def check_alerts(
@@ -390,6 +392,7 @@ def check_alerts(
     if snapshot is None:
         return AlertCheck(available=False, alerts=[])
     settings = manager_preferences(manager_id).effective()
+    recorded = 0
     for result in evaluate(snapshot, settings, now):
         if not result.breached:
             continue
@@ -407,6 +410,7 @@ def check_alerts(
             engine,
         )
         if event is not None:
+            recorded += 1
             logger.info(
                 "Alert triggered",
                 code=result.code,
@@ -426,7 +430,42 @@ def check_alerts(
             for event in today
             if event.triggered_at >= recent_from
         ],
+        recorded=recorded,
     )
+
+
+@dataclass(frozen=True)
+class StoreCheck:
+    """One background check of every manager at a store."""
+
+    available: bool
+    recorded: dict[str, int]
+
+    @property
+    def total(self) -> int:
+        return sum(self.recorded.values())
+
+
+def check_store(
+    store_id: str = DEMO_STORE_ID,
+    now: datetime | None = None,
+    engine: Engine | None = None,
+) -> StoreCheck:
+    """Check every manager's alerts, so pop-ups are recorded with no page open.
+
+    The cron job runs this; open pages run `check_alerts` for their manager.
+    Both record through the same cooldown, so a breach is recorded once.
+    """
+    from service.managers import store_managers
+
+    now = now or datetime.now(TIMEZONE)
+    if live_snapshot(engine) is None:
+        return StoreCheck(available=False, recorded={})
+    recorded = {}
+    for manager in store_managers(store_id, engine):
+        check = check_alerts(manager.manager_id, store_id, now, engine)
+        recorded[manager.manager_id] = check.recorded
+    return StoreCheck(available=True, recorded=recorded)
 
 
 def diagnose(

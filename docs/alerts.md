@@ -188,9 +188,9 @@ The checker never calls the model.
 
 ### When it runs
 
-- Every 30 seconds while the page is open (`gr.Timer`).
-- After every chat answer.
-- After a scenario load and after any alert setting is saved.
+- Every 30 seconds while a page is open (`gr.Timer`), for that page's manager, and after a scenario load or manager switch.
+- Every minute for every manager from the `alerts` CLI job (`python cli.py alerts --runs 5 --every 60` on a 5-minute Railway cron, the shortest Railway allows), so pop-ups and daily counts are recorded with no page open. See the README, "Alert checks".
+- Pages and the job record through the same cooldown and lock, so a breach is recorded once.
 
 ### Clock
 

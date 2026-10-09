@@ -364,3 +364,25 @@ def test_live_snapshot_reads_the_loaded_rows(monkeypatch) -> None:
     assert len(data.orders) == 12 and data.hourly
     monkeypatch.setattr(alerts, "read_scenario_rows", lambda engine=None: [])
     assert alerts.live_snapshot() is None
+
+
+def test_store_check_records_for_every_manager(events, monkeypatch) -> None:
+    from service import managers
+
+    team = [
+        SimpleNamespace(manager_id=manager_id) for manager_id in ("ananya", "karthik")
+    ]
+    monkeypatch.setattr(managers, "store_managers", lambda store_id, engine=None: team)
+    first = alerts.check_store(now=THURSDAY)
+    assert first.available
+    assert first.recorded == {"ananya": 2, "karthik": 2} and first.total == 4
+    # Inside the cooldown, a second run records nothing new.
+    events.now = THURSDAY + timedelta(minutes=1)
+    again = alerts.check_store(now=events.now)
+    assert again.recorded == {"ananya": 0, "karthik": 0}
+
+
+def test_store_check_without_a_scenario(events, monkeypatch) -> None:
+    monkeypatch.setattr(alerts, "live_snapshot", lambda engine=None: None)
+    check = alerts.check_store(now=THURSDAY)
+    assert not check.available and check.recorded == {}

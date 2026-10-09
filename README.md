@@ -122,6 +122,21 @@ Each run also rebuilds every manager's memory digest (shown in Settings → Memo
 
 Locally: `uv run python cli.py review`.
 
+### Alert checks
+
+Alerts are checked in code against each manager's settings (see [alerts.md](docs/alerts.md)). Open pages check their own manager every 30 seconds; this cron job checks every manager, so pop-ups and the daily counts are recorded even when no page is open. Both share the same cooldown, so a breach is recorded once. Create a third cron service from the same repository with root `/backend`:
+
+| Setting | Value |
+| --- | --- |
+| Start command | `python cli.py alerts --runs 5 --every 60` |
+| Cron schedule | `*/5 * * * *` |
+| Variables | `DATABASE_URL` |
+| Healthcheck and public domain | None |
+
+Railway runs cron jobs at most every five minutes, so each run checks five times, one minute apart, and exits after about four minutes, before the next run starts (Railway skips a run while the previous one is still active). That gives one check a minute. To run it as an always-on worker instead, use `python cli.py alerts --runs 0` in a normal service. The job needs no Groq key: it calls no model.
+
+Locally: `uv run python cli.py alerts` checks once; `uv run python cli.py alerts --runs 0` keeps checking every minute until stopped.
+
 ## Code layout
 
 | Path | Purpose |
