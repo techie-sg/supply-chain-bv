@@ -3,7 +3,7 @@ Return a JSON array, usually []. Each item has code, value, reason and evidence.
 Each evidence entry has conversation_id, message_index and an exact quote.
 
 Propose a change ONLY when a newly summarized manager message contributes:
-1. An explicit lasting preference ("always", "from now on", "I prefer", "remember").
+1. An explicit lasting preference ("always", "from now on", "I prefer", "remember"), or a general instruction such as "keep answers short for me" with no temporary scope.
 2. Or the SAME answer preference requested in at least three distinct chats.
 
 Use only allowed_preferences and their allowed values. Include exact evidence

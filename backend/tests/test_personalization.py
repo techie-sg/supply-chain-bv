@@ -82,6 +82,9 @@ def chat(text, who="manager", messages=None):
         'An example: "Always keep your answers short."',
         "Please make this answer shorter.",
         "Keep your answers short for now.",
+        "Keep answers short for this chat.",
+        "Keep replies concise in this conversation.",
+        "Keep your replies short for the next answer.",
         "I prefer detailed explanations this shift.",
         "I don't prefer short answers.",
     ],
@@ -103,7 +106,7 @@ def test_ordinary_or_temporary_messages_do_not_even_read_the_profile(store, text
 
 def test_one_off_shorter_request_does_not_write_or_call_an_extractor(store):
     service = PersonalizationService("DS-1", "karthik")
-    conversation = chat("Keep your answers short.")
+    conversation = chat("Give me a short answer.")
     assert eligible(conversation.messages[0]["what"]) and not explicit(
         conversation.messages[0]["what"],
     )
@@ -113,8 +116,19 @@ def test_one_off_shorter_request_does_not_write_or_call_an_extractor(store):
     assert store[1] == store[2] == []
 
 
-def test_direct_lasting_request_saves_and_identical_repetition_does_not_rewrite(store):
-    text = "Always keep your answers short."
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Always keep your answers short.",
+        "keep answers short for me",
+        "Keep your answers short.",
+        "Please keep your replies concise.",
+    ],
+)
+def test_direct_lasting_request_saves_and_identical_repetition_does_not_rewrite(
+    store,
+    text,
+):
     changes = PersonalizationChanges(
         PersonalizationService("DS-1", "karthik"),
         text,
@@ -136,11 +150,11 @@ def test_direct_lasting_request_saves_and_identical_repetition_does_not_rewrite(
     "text,args",
     [
         (
-            "Keep your answers short.",
+            "Give me a short answer.",
             {
                 "code": "answer_length",
                 "value": "brief",
-                "quote": "Keep your answers short.",
+                "quote": "Give me a short answer.",
             },
         ),
         (
@@ -203,6 +217,32 @@ def test_tool_rejects_non_lasting_or_unsupported_changes(store, text, args):
     assert store[1] == []
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Keep answers short for this chat.",
+        "Keep replies concise for now.",
+        "Keep your answers detailed for this shift.",
+        "Keep answers short for the next shift.",
+        "Keep replies concise tomorrow.",
+        "Keep replies brief until the queue clears.",
+        "Keep answers about short shifts.",
+        'An example: "Keep answers short for me."',
+    ],
+)
+def test_general_request_does_not_bypass_temporary_or_quote_rules(store, text):
+    changes = PersonalizationChanges(
+        PersonalizationService("DS-1", "karthik"),
+        text,
+        lambda: uuid4(),
+    )
+    assert not explicit(text)
+    assert not json.loads(
+        changes.run({"code": "answer_length", "value": "brief", "quote": text}),
+    )["saved"]
+    assert not store[1]
+
+
 def test_explicit_change_remove_and_per_manager_isolation(store):
     profiles, writes, _, _ = store
     for text, value in [
@@ -259,7 +299,7 @@ def test_inferred_preference_requires_three_distinct_chats_and_new_evidence(
     store,
     monkeypatch,
 ):
-    conversations = [chat("Keep your answers short.") for _ in range(3)]
+    conversations = [chat("Give me a short answer.") for _ in range(3)]
     monkeypatch.setattr(
         module,
         "evidence_chats",

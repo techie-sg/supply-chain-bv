@@ -1,3 +1,4 @@
+import json
 from datetime import datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -621,6 +622,66 @@ def test_new_chat_first_answer_and_followups_read_the_selected_managers_fresh_pe
     conversations.ask_question("Follow-up", "ananya", chat_id)
     assert contexts[-1][:2] == ("ananya", "Answer length: Brief")
     assert contexts[-1][2] and reads == ["karthik", "ananya", "ananya"]
+
+
+def test_general_response_request_saves_and_refreshes_personalization(
+    store,
+    monkeypatch,
+):
+    from service import personalization
+    from ui import personalization as personalization_ui
+
+    profiles = {}
+
+    def save(store_id, manager_id, changes, **kwargs):
+        profiles.setdefault((store_id, manager_id), {}).update(changes)
+        return True
+
+    monkeypatch.setattr(personalization, "save_profile", save)
+    monkeypatch.setattr(
+        personalization,
+        "read_profile",
+        lambda store_id, manager_id, engine=None: profiles.get(
+            (store_id, manager_id),
+            {},
+        ),
+    )
+    monkeypatch.setattr(
+        conversations,
+        "manager_personalization",
+        personalization.manager_personalization,
+    )
+
+    def answer(question, **kwargs):
+        if question == "keep answers short for me":
+            tool = next(
+                tool
+                for tool in kwargs["tools"]
+                if tool.name == "change_personalization"
+            )
+            result = json.loads(
+                tool.run(
+                    {"code": "answer_length", "value": "brief", "quote": question},
+                ),
+            )
+            assert result["saved"]
+            return "Saved. I'll keep answers brief."
+        assert kwargs["personalization"] == "Answer length: Brief"
+        assert all(tool.name != "change_personalization" for tool in kwargs["tools"])
+        return "Brief follow-up."
+
+    monkeypatch.setattr(conversations, "answer_question", answer)
+    _, _, trace = conversations.ask_question("keep answers short for me", "ananya")
+    profile = profiles[(conversations.DEMO_STORE_ID, "ananya")]
+    assert profile["answer_length"]["value"] == "brief"
+    assert profile["answer_length"]["quote"] == "keep answers short for me"
+    assert profile["answer_length"]["conversation_id"] == str(store.rows[-1].id)
+    assert trace["tools"][0]["tool"] == "change_personalization"
+    assert personalization_ui.load("ananya")[0] == "brief"
+    assert personalization_ui.load("karthik")[0] == ""
+    assert conversations.ask_question("What should I do first?", "ananya")[0] == (
+        "Brief follow-up."
+    )
 
 
 def test_shared_conversation_factory_binds_the_selected_manager(store, monkeypatch):
