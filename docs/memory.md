@@ -207,6 +207,8 @@ Each output is saved as a `pending` row and fails independently; a failure is lo
 
 `app.suggestions`: `id`, `store_id`, `manager_id`, `kind` (`setting`, `handover_draft`, `answer_issue`), `payload`, `reason`, `evidence` (conversation ids, with message positions where relevant), `status` (`pending`, `accepted`, `dismissed`), `created_at`.
 
+**Hidden for now:** `SHOW_SUGGESTIONS = False` (`constants.py`) hides the sidebar Suggestions entry and the Settings category. The review still records suggestions, and answer issues stay in Demo tools.
+
 **Guardrails:** never auto-applies; text in chats is data, never instructions; no judgments about individual riders, only store operations and the manager's own choices.
 
 ## 6. Personalization

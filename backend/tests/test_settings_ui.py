@@ -65,7 +65,7 @@ def test_form_shows_defaults_with_limits(preference_store) -> None:
     assert enabled == gr.update(value=True, label="Rider shortage")
     assert threshold == gr.update(value=2, minimum=0.5, maximum=2)
     assert (cooldown, days, start, end) == (15, [], "", "")
-    assert "Allowed: 0.5 orders per available rider to 2" in info
+    assert "Allowed: 0.5 to 2 orders per available rider" in info
     assert "Default." in info
     assert values[ALERTS * 7]["value"] is True
     assert values[-3] == ["rider_stats", "order_queue"]
@@ -172,9 +172,8 @@ def test_categories_switch_panels_in_the_browser(ui_app) -> None:
         "batching",
         "incentive",
         "greeting",
-        "suggestions",
         "personalization",
-    ]
+    ]  # Suggestions are hidden for now (SHOW_SUGGESTIONS).
     assert nav.value == "alerts"
     [callback] = [
         callback

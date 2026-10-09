@@ -344,10 +344,7 @@ def test_diagnosis_shows_the_measure_drivers_and_today(events) -> None:
     assert found["limit"] == "above 2 orders per available rider"
     assert found["as_of"] == "20:14"
     assert [item["at"] for item in found["triggers"]] == ["20:30"]
-    assert (
-        found["allowed"]
-        == "0.5 orders per available rider to 2 orders per available rider"
-    )
+    assert found["allowed"] == "0.5 to 2 orders per available rider"
     assert any("order" in item for item in found["items"])
 
 

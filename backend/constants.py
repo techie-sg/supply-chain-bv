@@ -25,6 +25,9 @@ SUMMARY_IDLE_MINUTES = 10  # an idle chat is summarized in full
 SUMMARY_JOB_BATCH = 10  # idle chats summarized per run at most
 
 # Dreaming: a daily review of chats that proposes, never applies.
+# Suggestions are hidden from managers for now (sidebar and Settings); the daily
+# review still records them, and admins still see answer issues.
+SHOW_SUGGESTIONS = False
 DREAMING_MIN_CHATS = 3  # a settings suggestion needs evidence from this many chats
 DREAMING_RECENT_CHATS = 20  # chats read for settings suggestions
 

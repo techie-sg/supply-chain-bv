@@ -14,8 +14,8 @@ import gradio as gr
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
-from constants import DEMO_MANAGER_ID
-from domain.memory import BriefingView, PreferenceCode, Weekday
+from constants import DEMO_MANAGER_ID, SHOW_SUGGESTIONS
+from domain.memory import BriefingView, PreferenceCode, ValueType, Weekday
 from domain.preferences import EffectiveSetting, SettingDefinition
 from service.preferences import (
     PreferenceError,
@@ -119,12 +119,23 @@ class SettingsForm:
         return [self._component(code, name) for code, name in FORM_OUTPUTS]
 
 
+def _placeholder(code: str) -> str:
+    """A readable label until the catalogue's own name loads with the settings."""
+    return code.removesuffix("_alert").replace("_", " ").capitalize()
+
+
 def _info(setting: EffectiveSetting) -> str:
     definition = setting.definition
     state = "Your setting" if setting.customized else "Default"
+    # The checkboxes already name the views; the codes are for the assistant.
+    allowed = (
+        "one or more of the views above"
+        if definition.value_type == ValueType.VIEW_LIST
+        else limits(definition)
+    )
     return (
         f'<p class="setting-info">{escape(definition.description)} '
-        f"Allowed: {escape(limits(definition))}. <strong>{state}.</strong></p>"
+        f"Allowed: {escape(allowed)}. <strong>{state}.</strong></p>"
     )
 
 
@@ -452,7 +463,11 @@ def build(manager: gr.State, summary: gr.HTML | None = None) -> SettingsForm:
     )
     with gr.Row(elem_id="settings-layout"):
         nav = gr.Radio(
-            choices=[(title, key) for key, title, _ in CATEGORIES],
+            choices=[
+                (title, key)
+                for key, title, _ in CATEGORIES
+                if key != "suggestions" or SHOW_SUGGESTIONS
+            ],
             value="alerts",
             label="Settings categories",
             show_label=False,
@@ -472,7 +487,7 @@ def build(manager: gr.State, summary: gr.HTML | None = None) -> SettingsForm:
                 for code in ALERT_CODES:
                     with gr.Column(elem_classes="setting-card"):
                         with gr.Row():
-                            enabled = gr.Checkbox(label=code)
+                            enabled = gr.Checkbox(label=_placeholder(code))
                             _reset_button(code, resets)
                         info = gr.Markdown(elem_classes="setting-info-block")
                         with gr.Row():
@@ -484,7 +499,7 @@ def build(manager: gr.State, summary: gr.HTML | None = None) -> SettingsForm:
                                 maximum=240,
                                 min_width=140,
                             )
-                        with gr.Row():
+                        with gr.Row(elem_classes="alert-window"):
                             days = gr.CheckboxGroup(
                                 choices=DAY_CHOICES,
                                 label="Days (none ticked means every day)",
@@ -492,7 +507,7 @@ def build(manager: gr.State, summary: gr.HTML | None = None) -> SettingsForm:
                             )
                             start = gr.Textbox(
                                 label="From (HH:MM)",
-                                placeholder="19:00",
+                                placeholder="start of day",
                                 min_width=110,
                             )
                             end = gr.Textbox(
@@ -522,7 +537,7 @@ def build(manager: gr.State, summary: gr.HTML | None = None) -> SettingsForm:
                 with gr.Column(elem_classes="setting-card"):
                     with gr.Row():
                         surge = gr.Checkbox(
-                            label=PreferenceCode.SURGE_ONLY_BATCHING.value,
+                            label=_placeholder(PreferenceCode.SURGE_ONLY_BATCHING),
                         )
                         _reset_button(PreferenceCode.SURGE_ONLY_BATCHING, resets)
                     surge_info = gr.Markdown(elem_classes="setting-info-block")
