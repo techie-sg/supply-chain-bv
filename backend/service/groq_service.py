@@ -20,7 +20,8 @@ from pydantic import SecretStr
 from config import get_settings, require
 from constants import GROQ_MODEL
 from domain.chat import ChatMessage
-from service.llm_service import LLMService, Tool
+from domain.tools import Tool
+from service.llm_service import LLMService
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -32,7 +33,8 @@ TOOLS_UNAVAILABLE = (
     "(System note: your tools could not be used for this answer. Do not say you "
     "proposed, prepared or changed anything with a tool. If the manager asked to "
     "change a setting, say it could not be prepared this time and ask them to try "
-    "again or use the Settings tab.)"
+    "again or use the Settings tab. For operational questions, say the required "
+    "dispatch data could not be reached and do not invent figures.)"
 )
 
 
@@ -95,8 +97,9 @@ class GroqService(LLMService):
         """The reply's text; one retry with low reasoning effort if it is empty.
 
         gpt-oss models can spend the whole output budget on reasoning and
-        return no text. Retrying the same request with less reasoning leaves
-        room for the answer.
+        return no text. Retrying the same request with less reasoning usually
+        leaves room for the answer; if it is still empty, fail rather than save
+        an empty reply.
         """
         if response.text.strip():
             return response.text
@@ -108,7 +111,11 @@ class GroqService(LLMService):
         client: Any = self._client.model_copy(update={"reasoning_effort": "low"})
         if schemas:
             client = client.bind_tools(schemas, tool_choice="none")
-        return client.invoke(messages).text
+        retry = client.invoke(messages)
+        if not retry.text.strip():
+            logger.error("Model returned no answer")
+            raise RuntimeError("The model returned an empty answer.")
+        return retry.text
 
     def generate_with_tools(
         self,

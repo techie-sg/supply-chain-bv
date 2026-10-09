@@ -1,9 +1,11 @@
 import re
+from dataclasses import fields
 
 import pytest
 from catalogue import DEFINITIONS, definitions
 
 from domain.memory import PreferenceCategory, PreferenceCode
+from domain.preferences import SettingDefinition
 from service import preferences
 from service.preferences import PreferenceError, PreferenceService, validate
 
@@ -27,7 +29,12 @@ def test_catalogue_seed_matches_the_enums_and_its_own_limits() -> None:
         assert PreferenceCategory(definition.category)
         if not definition.locked:
             validate(
-                definition,
+                SettingDefinition(
+                    **{
+                        f.name: getattr(definition, f.name)
+                        for f in fields(SettingDefinition)
+                    },
+                ),
                 definition.default_enabled,
                 definition.default_value,
                 None,
@@ -166,6 +173,36 @@ def test_save_reports_each_item_and_keeps_going_after_a_rejection(store) -> None
     }
 
 
+def test_bulk_save_reads_once_and_tracks_repeated_codes(store, monkeypatch) -> None:
+    from unittest.mock import Mock
+
+    read = Mock(wraps=preferences.active_preferences)
+    monkeypatch.setattr(preferences, "active_preferences", read)
+    chat = service()
+    messages = chat.save(
+        [
+            {"code": "sla_dip_alert", "enabled": True, "value": 85},
+            {"code": "sla_dip_alert", "enabled": True, "value": 85},
+            {"code": "sla_dip_alert", "enabled": True, "value": 30},
+            {"code": "sla_dip_alert", "enabled": True, "value": 90},
+        ],
+    )
+    assert read.call_count == 1
+    assert len(messages) == 3 and messages[1].startswith("Not saved:")
+    assert store.statuses("sla_dip_alert") == ["superseded", "active"]
+    assert chat.current("sla_dip_alert").value == 90
+    assert read.call_count == 2  # No stale snapshot survives the save call.
+
+
+def test_empty_bulk_save_does_not_read_settings(store, monkeypatch) -> None:
+    from unittest.mock import Mock
+
+    read = Mock(side_effect=AssertionError("No database read needed"))
+    monkeypatch.setattr(preferences, "active_preferences", read)
+    assert service().save([]) == []
+    read.assert_not_called()
+
+
 def test_turning_an_alert_off_keeps_its_threshold(store) -> None:
     service().set("orders_piling_up_alert", False, 8)
     [row] = store.rows
@@ -217,7 +254,17 @@ def test_prompt_block_lists_every_item_with_state_and_limits(store) -> None:
 def test_validate_rejects_a_boolean_where_a_number_is_needed() -> None:
     definition = next(item for item in definitions() if item.code == "sla_dip_alert")
     with pytest.raises(PreferenceError, match="needs a number"):
-        validate(definition, True, True, None)
+        validate(
+            SettingDefinition(
+                **{
+                    f.name: getattr(definition, f.name)
+                    for f in fields(SettingDefinition)
+                },
+            ),
+            True,
+            True,
+            None,
+        )
 
 
 def test_manager_preferences_default_to_the_demo_manager() -> None:

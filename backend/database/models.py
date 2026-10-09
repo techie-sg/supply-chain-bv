@@ -27,6 +27,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database.session import Base
+from domain.chat import StoredMessage
 
 
 class Zone(Base):
@@ -234,10 +235,26 @@ class Conversation(Base):
             name="ck_conversations_messages_array",
         ),
         Index(
-            "ix_conversations_store_manager_updated",
+            "ix_conversations_store_manager_recency",
             "store_id",
             "manager_id",
             "updated_at",
+            "created_at",
+        ),
+        Index(
+            "ix_conversations_pending_summary",
+            "created_at",
+            postgresql_where=text(
+                "jsonb_array_length(messages) > 0 AND "
+                "coalesce(summary_covers_to, -1) < jsonb_array_length(messages) - 1",
+            ),
+        ),
+        Index(
+            "ix_conversations_pending_review",
+            "created_at",
+            postgresql_where=text(
+                "coalesce(dreamed_to, -1) < jsonb_array_length(messages) - 1",
+            ),
         ),
         {"schema": "app"},
     )
@@ -252,7 +269,7 @@ class Conversation(Base):
         String(32),
         ForeignKey("app.managers.manager_id", ondelete="RESTRICT"),
     )
-    messages: Mapped[list[dict[str, str]]] = mapped_column(
+    messages: Mapped[list[StoredMessage]] = mapped_column(
         JSONB,
         default=list,
         server_default="[]",

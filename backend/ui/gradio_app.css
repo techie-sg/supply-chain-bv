@@ -267,6 +267,11 @@ body { margin: 0; background: var(--desk-bg); }
 #conversation .prose :is(p, li) { font-size: inherit; line-height: inherit; }
 #conversation .prose :is(h1, h2, h3) { font-size: 16px; line-height: 1.4; }
 #conversation .prose :is(p, li, strong, h1, h2, h3) { color: inherit; }
+/* Inline code and code blocks: Gradio's default is a light fill, unreadable on the dark palette. */
+#conversation .prose :is(code, pre) { background: var(--desk-soft) !important; color: var(--desk-ink) !important; border: 1px solid var(--desk-line); border-radius: 5px; font-size: 12.5px; }
+#conversation .prose code { padding: 1px 5px; }
+#conversation .prose pre { padding: 10px 12px; overflow-x: auto; }
+#conversation .prose pre code { background: transparent !important; border: 0; padding: 0; }
 
 @media (max-width: 550px) {
   #conversation { width: 100% !important; }
@@ -413,6 +418,12 @@ p.settings-status { padding-left: 0; color: var(--desk-muted); }
 #conversation .prose p:has(> .message-time) { height: 0; margin: 0; line-height: 0; }
 #conversation .message-time { position: absolute; top: calc(100% + 12px); right: 36px; display: block; margin: 0; font-size: 11px; line-height: 16px; color: var(--desk-muted); opacity: .85; white-space: nowrap; }
 #conversation .message.bot .message-time { left: 36px; right: auto; }
+
+/* Collapsed panel under an answer: the tools and settings it was built from. */
+#conversation .agent-trace { margin-top: 8px; font-size: 12px; color: var(--desk-muted); }
+#conversation .agent-trace summary { cursor: pointer; }
+#conversation .agent-trace p { margin: 6px 0 2px; font-weight: 600; }
+#conversation .agent-trace ul { margin: 0; padding-left: 18px; }
 
 @media (max-width: 768px) {
   .column:has(> #chat-sidebar:not(.open)) :is(#manager-workspace, #settings-workspace, #demo-workspace) { padding-top: 44px; }

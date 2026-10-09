@@ -1,3 +1,7 @@
+from typing import Literal
+
+from domain.chat import StoredMessage
+
 """Integration checks against a dedicated TEST_DATABASE_URL."""
 
 import os
@@ -11,17 +15,20 @@ from sqlalchemy import Engine, delete, text
 from database.models import Conversation, HandoverNote, Suggestion
 from database.session import Base, build_engine
 from domain.memory import SuggestionStatus
-from queries.conversations import append_message, start_conversation
+from queries.conversations import (
+    append_message,
+    resume_conversation,
+    start_conversation,
+)
 from queries.dreaming import (
     add_suggestions,
     advance_dreamed_to,
     conversations_to_review,
-    dismiss_pending_drafts,
-    get_conversation,
     get_suggestion,
     latest_handover_notes,
     list_suggestions,
     recent_conversations,
+    replace_handover_draft,
     resolve_suggestion,
     save_handover_note,
 )
@@ -50,7 +57,7 @@ def review_engine() -> Iterator[Engine]:
         engine.dispose()
 
 
-def message(who: str, what: str) -> dict[str, str]:
+def message(who: Literal["manager", "assistant"], what: str) -> StoredMessage:
     return {"who": who, "what": what, "when": "2026-10-08T19:00:00+05:30"}
 
 
@@ -75,7 +82,7 @@ def test_chats_are_reviewed_from_their_position(review_engine: Engine) -> None:
     assert advance_dreamed_to(started.id, 1, None, review_engine)
     assert not advance_dreamed_to(started.id, 1, None, review_engine)
     assert conversations_to_review(review_engine) == []
-    reloaded = get_conversation(started.id, review_engine)
+    reloaded = resume_conversation(started.id, "DS-1", "karthik", review_engine)
     assert reloaded is not None and reloaded.dreamed_to == 1
     assert [
         item.id for item in recent_conversations("DS-1", "karthik", 5, review_engine)
@@ -94,7 +101,10 @@ def test_suggestions_are_listed_resolved_and_replaced(review_engine: Engine) -> 
         ],
         review_engine,
     )
-    assert dismiss_pending_drafts("DS-1", "karthik", "2026-10-08", review_engine) == 1
+    replace_handover_draft(
+        suggestion("handover_draft", {"shift": "2026-10-08", "note": "New"}),
+        review_engine,
+    )
     pending = list_suggestions(
         "DS-1",
         "karthik",
@@ -102,11 +112,27 @@ def test_suggestions_are_listed_resolved_and_replaced(review_engine: Engine) -> 
         ["pending"],
         engine=review_engine,
     )
-    assert sorted(item.kind for item in pending) == ["handover_draft", "setting"]
+    assert sorted(item.kind for item in pending) == [
+        "handover_draft",
+        "handover_draft",
+        "setting",
+    ]
     setting = next(item for item in pending if item.kind == "setting")
-    assert resolve_suggestion(setting.id, SuggestionStatus.ACCEPTED, review_engine)
-    assert not resolve_suggestion(setting.id, SuggestionStatus.DISMISSED, review_engine)
-    reloaded = get_suggestion(setting.id, review_engine)
+    assert resolve_suggestion(
+        setting.id,
+        SuggestionStatus.ACCEPTED,
+        "DS-1",
+        "karthik",
+        review_engine,
+    )
+    assert not resolve_suggestion(
+        setting.id,
+        SuggestionStatus.DISMISSED,
+        "DS-1",
+        "karthik",
+        review_engine,
+    )
+    reloaded = get_suggestion(setting.id, "DS-1", "karthik", review_engine)
     assert reloaded is not None and reloaded.status == "accepted"
 
 

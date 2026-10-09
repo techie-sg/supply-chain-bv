@@ -3,6 +3,7 @@ import pytest
 
 from service.alerts import AlertCheck
 from ui import alerts as alerts_ui
+from ui import chat as chat_ui
 from ui import gradio_app
 
 ALERT = {
@@ -175,42 +176,42 @@ def test_alert_question_names_the_alert_and_figures() -> None:
 
 def test_start_new_chat_from_an_alert(monkeypatch) -> None:
     monkeypatch.setattr(
-        gradio_app,
+        chat_ui,
         "start_new_conversation",
         lambda manager_id=None: "new-chat",
     )
-    history, message, chat_id, tab, queue = gradio_app.start_alert_chat(
+    history, message, chat_id, tab, queue = alerts_ui.start_alert_chat(
         [ALERT, PILING],
         "karthik",
     )
     assert history == [] and chat_id == "new-chat"
     assert message == alerts_ui.question(ALERT)
     assert tab == gr.update(selected="assistant") and queue == [PILING]
-    assert gradio_app.start_alert_chat([], "karthik") == (gr.skip(),) * 5
+    assert alerts_ui.start_alert_chat([], "karthik") == (gr.skip(),) * 5
 
 
-def block(kind, elem_id):
+def block(app, kind, elem_id):
     return next(
         item
-        for item in gradio_app.app.blocks.values()
+        for item in app.blocks.values()
         if isinstance(item, kind) and item.elem_id == elem_id
     )
 
 
-def callbacks(fn):
-    return [c for c in gradio_app.app.fns.values() if c.fn is fn]
+def callbacks(app, fn):
+    return [c for c in app.fns.values() if c.fn is fn]
 
 
-def test_pop_up_is_hidden_until_an_alert_fires_and_checks_are_wired() -> None:
-    assert block(gr.Column, "alert-popup").visible is False
-    timers = [b for b in gradio_app.app.blocks.values() if isinstance(b, gr.Timer)]
+def test_pop_up_is_hidden_until_an_alert_fires_and_checks_are_wired(ui_app) -> None:
+    assert block(ui_app, gr.Column, "alert-popup").visible is False
+    timers = [b for b in ui_app.blocks.values() if isinstance(b, gr.Timer)]
     assert [timer.value for timer in timers] == [alerts_ui.CHECK_SECONDS]
-    checks_ = callbacks(alerts_ui.queue_new)
+    checks_ = callbacks(ui_app, alerts_ui.queue_new)
     # The timer, page load and manager switch, and a scenario load.
     assert len(checks_) == 4
     manager = next(
         b
-        for b in gradio_app.app.blocks.values()
+        for b in ui_app.blocks.values()
         if isinstance(b, gr.State) and b.value == gradio_app.DEMO_MANAGER_ID
     )
     assert all(callback.inputs[0] is manager for callback in checks_)
@@ -218,27 +219,23 @@ def test_pop_up_is_hidden_until_an_alert_fires_and_checks_are_wired() -> None:
     assert tick.concurrency_id == "alerts"
 
 
-def test_buttons_are_wired_to_the_shown_alert() -> None:
+def test_buttons_are_wired_to_the_shown_alert(ui_app) -> None:
     def clicked(elem_id):
-        button = block(gr.Button, elem_id)
+        button = block(ui_app, gr.Button, elem_id)
         [callback] = [
-            c for c in gradio_app.app.fns.values() if (button._id, "click") in c.targets
+            c for c in ui_app.fns.values() if (button._id, "click") in c.targets
         ]
         return callback
 
     assert clicked("alert-dismiss").fn is alerts_ui.dismiss
     assert clicked("alert-diagnose").fn is alerts_ui.diagnosis
     chat = clicked("alert-chat")
-    assert chat.fn is gradio_app.start_alert_chat
+    assert chat.fn is alerts_ui.start_alert_chat
     assert chat.concurrency_id == "workspace"
-    sends = [
-        c
-        for c in gradio_app.app.fns.values()
-        if c.js == gradio_app.SEND_ALERT_QUESTION_JS
-    ]
+    sends = [c for c in ui_app.fns.values() if c.js == alerts_ui.SEND_ALERT_QUESTION_JS]
     assert len(sends) == 1
-    [render] = callbacks(alerts_ui.card)
-    assert block(gr.Column, "alert-popup") in render.outputs
+    [render] = callbacks(ui_app, alerts_ui.card)
+    assert block(ui_app, gr.Column, "alert-popup") in render.outputs
 
 
 @pytest.mark.parametrize("severity", ["critical", "warning"])

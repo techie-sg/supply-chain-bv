@@ -5,11 +5,11 @@ Current workstream ownership confirmed by Sunny on October 5, 2026:
 | Workstream | Owners | Scope |
 | --- | --- | --- |
 | 1. Retrieval evaluations | Ravi and Vishnu | Compare embedding models, chunk sizes and embedding/chunking approaches against a shared evaluation set. |
-| 2. Two MCP tools | Ravi and Vishnu | Build the two agreed operational tools and define their input/output contracts for integration. |
+| 2. Two dispatch tools | Ravi and Vishnu | Build the two agreed operational tools and define their input/output contracts for integration. |
 | 3. Memory | Sunny, Sharad and Ranjan | Design persistent preferences and episodes, relevant recall, updates/deletion, isolation and concise alerts; preserve existing procedural guidance. |
 | 4. Dreaming | Sunny, Sharad and Ranjan | Define and test a bounded reflection/consolidation process over recorded experience, with source evidence and reviewed changes. |
 
-This ownership supersedes the earlier assignment of MCP work to the setup
+This ownership supersedes the earlier assignment of tools work to the setup
 group. Memory design is a new learning area for Sunny and requires dedicated
 study as well as implementation. Detailed subtask allocation within each group
 remains to be agreed. The four workstreams are not implemented milestones.
@@ -31,7 +31,7 @@ Each group shares its listed tasks and coordinates integration and review with t
 | Database and retrieval | PostgreSQL, SQLAlchemy, and pgvector cosine search |
 | Migrations | Alembic; run manually from a local machine |
 | Embeddings | Jina API, `jina-embeddings-v5-text-nano` |
-| Answer generation | Groq, `openai/gpt-oss-20b` |
+| Answer generation | Groq, `openai/gpt-oss-120b` |
 | Chunking | Markdown sections by default; optional fixed-size character windows |
 | Scenario definitions | YAML starting snapshots: normal, backlog, rain |
 | Dependencies | uv; locked versions in `backend/uv.lock` |

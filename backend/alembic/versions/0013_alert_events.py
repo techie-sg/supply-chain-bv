@@ -7,8 +7,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "0012_alert_events"
-down_revision: str | Sequence[str] | None = "0011_memory_digests"
+revision: str = "0013_alert_events"
+down_revision: str | Sequence[str] | None = "0012_query_indexes"
 
 
 def upgrade() -> None:

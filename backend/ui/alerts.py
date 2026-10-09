@@ -5,6 +5,7 @@ settings saves. Code decides what fired (`service.alerts`); this module only
 queues new pop-ups for this page, renders the card and the diagnosis.
 """
 
+from dataclasses import dataclass
 from html import escape
 from typing import Any
 
@@ -14,6 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from constants import DEMO_MANAGER_ID
 from service.alerts import check_alerts, diagnose
+from ui import chat as chat_ui
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -232,4 +234,65 @@ def question(alert: dict[str, Any]) -> str:
         f"{alert['name']} alert at {alert['as_of']}: {alert['summary']} "
         f"(now {alert['value']}, my limit is {alert['limit']}). "
         "What is driving this, and what should I do first?"
+    )
+
+
+def start_alert_chat(
+    queue: list[dict[str, Any]] | None,
+    manager_id: str = DEMO_MANAGER_ID,
+) -> tuple[Any, Any, Any, Any, Any]:
+    """Start a new chat about the shown alert; its question is sent next."""
+    if not queue:
+        return gr.skip(), gr.skip(), gr.skip(), gr.skip(), gr.skip()
+    history, _, conversation_id, tab = chat_ui.clear_chat(manager_id)
+    return history, question(queue[0]), conversation_id, tab, queue[1:]
+
+
+# Sends the alert question through the normal send path, once it is in the box.
+SEND_ALERT_QUESTION_JS = """
+() => { setTimeout(() => document.querySelector('#send-message')?.click(), 80); }
+"""
+
+
+@dataclass
+class AlertComponents:
+    popup: gr.Column
+    close: gr.Button
+    card: gr.HTML
+    details: gr.HTML
+    diagnose: gr.Button
+    chat: gr.Button
+    timer: gr.Timer
+
+
+def build_popup() -> AlertComponents:
+    """The bottom-right pop-up, hidden until an alert fires, and its timer."""
+    with gr.Column(visible=False, elem_id="alert-popup") as popup:
+        close = gr.Button("✕", size="sm", elem_id="alert-dismiss", min_width=0)
+        card_html = gr.HTML(apply_default_css=False, elem_id="alert-card")
+        details = gr.HTML(
+            visible=False,
+            apply_default_css=False,
+            elem_id="alert-details",
+        )
+        with gr.Row(elem_id="alert-actions"):
+            diagnose_button = gr.Button(
+                "Diagnose",
+                size="sm",
+                elem_id="alert-diagnose",
+            )
+            chat_button = gr.Button(
+                "Start new chat",
+                variant="primary",
+                size="sm",
+                elem_id="alert-chat",
+            )
+    return AlertComponents(
+        popup,
+        close,
+        card_html,
+        details,
+        diagnose_button,
+        chat_button,
+        gr.Timer(CHECK_SECONDS),
     )

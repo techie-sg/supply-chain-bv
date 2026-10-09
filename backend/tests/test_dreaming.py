@@ -1,24 +1,30 @@
 from datetime import date, datetime
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import uuid4
 
 import pytest
 
 from database.models import Conversation, Suggestion
+from domain.chat import StoredMessage
 from domain.memory import SuggestionKind, SuggestionStatus
-from service import dreaming
-from service.dreaming import DreamingService, ReviewReport, json_array
+from service import dreaming, handover, memory, suggestions
+from service.dreaming import DreamingService, ReviewReport
 from service.preferences import PreferenceError, PreferenceService
 from service.rag import NO_GUIDANCE_ANSWER
 from service.scenarios import TIMEZONE
+from service.suggestions import json_array
 
 NOW = datetime(2026, 10, 8, 23, 30, tzinfo=TIMEZONE)
 TODAY = "2026-10-08T19:00:00+05:30"
 YESTERDAY = "2026-10-07T19:00:00+05:30"
 
 
-def message(who: str, what: str, when: str = TODAY) -> dict[str, str]:
+def message(
+    who: Literal["manager", "assistant"],
+    what: str,
+    when: str = TODAY,
+) -> StoredMessage:
     return {"who": who, "what": what, "when": when}
 
 
@@ -38,6 +44,7 @@ class FakeReviewStore:
     """In-memory stand-in for queries.dreaming."""
 
     def __init__(self) -> None:
+        self.preference_store: Any = None
         self.chats: list[Conversation] = []
         self.suggestions: list[Suggestion] = []
         self.notes: list = []
@@ -75,14 +82,20 @@ class FakeReviewStore:
             if item.kind in kinds and item.status in statuses
         ][:limit]
 
-    def get(self, suggestion_id, engine=None):
+    def get(self, suggestion_id, store_id="DS-1", manager_id="karthik", engine=None):
         return next(
-            (item for item in self.suggestions if item.id == suggestion_id),
+            (
+                item
+                for item in self.suggestions
+                if item.id == suggestion_id
+                and item.store_id == store_id
+                and item.manager_id == manager_id
+            ),
             None,
         )
 
-    def resolve(self, suggestion_id, status, engine=None):
-        item = self.get(suggestion_id)
+    def resolve(self, suggestion_id, status, store_id, manager_id, engine=None):
+        item = self.get(suggestion_id, store_id, manager_id)
         if item is None or item.status != SuggestionStatus.PENDING:
             return False
         item.status = status
@@ -99,6 +112,30 @@ class FakeReviewStore:
                 item.status = SuggestionStatus.DISMISSED
                 count += 1
         return count
+
+    def replace_draft(self, row, engine=None):
+        self.dismiss_drafts(row["store_id"], row["manager_id"], row["payload"]["shift"])
+        self.add([row])
+
+    def apply(
+        self,
+        suggestion_id,
+        store_id,
+        manager_id,
+        expected_payload,
+        *,
+        preference=None,
+        handover=None,
+        engine=None,
+    ):
+        item = self.get(suggestion_id, store_id, manager_id)
+        if item is None or item.status != SuggestionStatus.PENDING:
+            raise LookupError("That suggestion is no longer pending.")
+        if preference is not None:
+            self.preference_store.save(store_id, manager_id, **preference)
+        if handover is not None:
+            self.save_note(store_id, manager_id, *handover)
+        item.status = SuggestionStatus.ACCEPTED
 
     def save_note(self, store_id, manager_id, shift, note, engine=None):
         row = SimpleNamespace(shift=shift, note=note)
@@ -126,6 +163,7 @@ class FakeReviewStore:
 @pytest.fixture
 def review(monkeypatch, preference_store) -> FakeReviewStore:
     fake = FakeReviewStore()
+    fake.preference_store = preference_store
     for name, method in {
         "conversations_to_review": fake.to_review,
         "recent_conversations": fake.recent,
@@ -134,14 +172,16 @@ def review(monkeypatch, preference_store) -> FakeReviewStore:
         "list_suggestions": fake.list,
         "get_suggestion": fake.get,
         "resolve_suggestion": fake.resolve,
-        "dismiss_pending_drafts": fake.dismiss_drafts,
-        "save_handover_note": fake.save_note,
+        "replace_handover_draft": fake.replace_draft,
+        "apply_suggestion": fake.apply,
         "latest_handover_notes": fake.latest_notes,
         "all_managers": fake.all_managers,
         "get_digest": fake.get_digest,
         "save_digest": fake.save_digest,
     }.items():
-        monkeypatch.setattr(dreaming, name, method)
+        for module in (dreaming, suggestions, handover, memory):
+            if hasattr(module, name):
+                monkeypatch.setattr(module, name, method)
     return fake
 
 
@@ -227,8 +267,8 @@ def test_handover_draft_uses_todays_chats_and_replaces_a_pending_one(review) -> 
         return "  - Standby rider came in at 19:40.  "
 
     reviewer = service(reply)
-    assert reviewer.handover_draft("DS-1", "karthik", NOW.date())
-    assert reviewer.handover_draft("DS-1", "karthik", NOW.date())
+    assert reviewer.handover.handover_draft("DS-1", "karthik", NOW.date())
+    assert reviewer.handover.handover_draft("DS-1", "karthik", NOW.date())
     assert "Chat: Rain\n- Standby rider approved." in seen[0]
     assert "Old chat" not in seen[0]
     drafts = [item for item in review.suggestions if item.kind == "handover_draft"]
@@ -238,7 +278,7 @@ def test_handover_draft_uses_todays_chats_and_replaces_a_pending_one(review) -> 
         "note": "- Standby rider came in at 19:40.",
     }
     assert drafts[-1].reason == "Handover note for 8 Oct, drafted from 1 chat."
-    assert not reviewer.handover_draft("DS-1", "karthik", date(2026, 10, 9))
+    assert not reviewer.handover.handover_draft("DS-1", "karthik", date(2026, 10, 9))
 
 
 def test_handover_uses_recent_messages_for_an_unsummarized_chat(review) -> None:
@@ -249,13 +289,13 @@ def test_handover_uses_recent_messages_for_an_unsummarized_chat(review) -> None:
         seen.append(user_message)
         return "Note"
 
-    service(reply).handover_draft(
+    service(reply).handover.handover_draft(
         "DS-1",
         "karthik",
         NOW.date(),
     )
     assert "manager: Frozen orders waiting" in seen[0]
-    assert not service("   ").handover_draft("DS-1", "karthik", NOW.date())
+    assert not service("   ").handover.handover_draft("DS-1", "karthik", NOW.date())
 
 
 def test_settings_suggestions_keep_only_valid_supported_new_changes(review) -> None:
@@ -282,7 +322,7 @@ def test_settings_suggestions_keep_only_valid_supported_new_changes(review) -> N
         "]"
     ).replace("'", '"')
     reviewer = service(reply)
-    assert reviewer.settings_suggestions("DS-1", "karthik") == 1
+    assert reviewer.settings.settings_suggestions("DS-1", "karthik") == 1
     [suggestion] = review.suggestions
     assert suggestion.payload == {
         "code": "frozen_order_waiting_alert",
@@ -293,7 +333,7 @@ def test_settings_suggestions_keep_only_valid_supported_new_changes(review) -> N
     assert suggestion.reason == "Frozen orders came up often."
     assert len(suggestion.evidence) == 3
     # The same proposal is not repeated while pending (or after a dismissal).
-    assert reviewer.settings_suggestions("DS-1", "karthik") == 0
+    assert reviewer.settings.settings_suggestions("DS-1", "karthik") == 0
 
 
 def test_settings_suggestions_need_enough_summarized_chats(review) -> None:
@@ -302,7 +342,7 @@ def test_settings_suggestions_need_enough_summarized_chats(review) -> None:
     def reply(system_prompt, user_message):
         raise AssertionError("no model call expected")
 
-    assert service(reply).settings_suggestions("DS-1", "karthik") == 0
+    assert service(reply).settings.settings_suggestions("DS-1", "karthik") == 0
 
 
 def test_run_reviews_each_chat_and_isolates_failures(review) -> None:
@@ -362,13 +402,13 @@ def test_accepting_a_setting_saves_it_through_the_settings_path(
         ],
     )
     suggestion = review.suggestions[0]
-    assert dreaming.accept_suggestion(suggestion.id) == (
+    assert suggestions.accept_suggestion(suggestion.id, "DS-1", "karthik") == (
         "Saved. SLA dip: on, below 85%, at all times, at most every 60 min."
     )
     assert suggestion.status == "accepted"
     assert [row.code for row in preference_store.rows] == ["sla_dip_alert"]
     with pytest.raises(LookupError):
-        dreaming.accept_suggestion(suggestion.id)
+        suggestions.accept_suggestion(suggestion.id, "DS-1", "karthik")
 
 
 def test_accepting_a_handover_draft_saves_the_edited_note(review) -> None:
@@ -394,15 +434,18 @@ def test_accepting_a_handover_draft_saves_the_edited_note(review) -> None:
     )
     first, second = review.suggestions
     with pytest.raises(PreferenceError, match="empty"):
-        dreaming.accept_suggestion(second.id, "   ")
-    assert dreaming.accept_suggestion(first.id, "Edited note") == (
-        "Saved as the handover note for the next shift."
-    )
+        suggestions.accept_suggestion(second.id, "DS-1", "karthik", "   ")
+    assert suggestions.accept_suggestion(
+        first.id,
+        "DS-1",
+        "karthik",
+        "Edited note",
+    ) == ("Saved as the handover note for the next shift.")
     assert [(note.shift, note.note) for note in review.notes] == [
         (date(2026, 10, 8), "Edited note"),
     ]
-    assert dreaming.dismiss_suggestion(second.id)
-    assert dreaming.handover_block("DS-1") == "Handover from 8 Oct:\nEdited note"
+    assert suggestions.dismiss_suggestion(second.id, "DS-1", "karthik")
+    assert handover.handover_block("DS-1") == "Handover from 8 Oct:\nEdited note"
 
 
 def test_answer_issues_cannot_be_accepted(review) -> None:
@@ -419,15 +462,15 @@ def test_answer_issues_cannot_be_accepted(review) -> None:
         ],
     )
     with pytest.raises(LookupError, match="only reviewed"):
-        dreaming.accept_suggestion(review.suggestions[0].id)
-    assert [item.id for item in dreaming.open_answer_issues()] == [
+        suggestions.accept_suggestion(review.suggestions[0].id, "DS-1", "karthik")
+    assert [item.id for item in suggestions.open_answer_issues()] == [
         review.suggestions[0].id,
     ]
-    assert dreaming.pending_suggestions() == []
+    assert suggestions.pending_suggestions() == []
 
 
 def test_no_notes_means_no_handover_block(review) -> None:
-    assert dreaming.handover_block("DS-1") is None
+    assert handover.handover_block("DS-1") is None
 
 
 def test_run_review_uses_the_configured_model(
@@ -471,7 +514,7 @@ def test_digest_reads_last_week_summaries_and_keeps_eight_bullets(review) -> Non
         seen.append((system_prompt, user_message))
         return "Here you go:\n" + "\n".join(f"* item {n}" for n in range(10))
 
-    assert service(reply).memory_digest("DS-1", "karthik", NOW)
+    assert service(reply).memory.memory_digest("DS-1", "karthik", NOW)
     [(system_prompt, user_message)] = seen
     assert "at most 8 short bullets" in system_prompt
     assert user_message == "Chat on 8 Oct: Rain backlog\nRadius shrink deferred."
@@ -490,11 +533,11 @@ def test_digest_skips_the_model_when_its_sources_are_unchanged(review) -> None:
         return "- Rain backlog on 8 Oct."
 
     reviewer = service(reply)
-    assert reviewer.memory_digest("DS-1", "karthik", NOW)
-    assert not reviewer.memory_digest("DS-1", "karthik", NOW)
+    assert reviewer.memory.memory_digest("DS-1", "karthik", NOW)
+    assert not reviewer.memory.memory_digest("DS-1", "karthik", NOW)
     assert len(calls) == 1
     review.chats[0].summary_covers_to = 3
-    assert reviewer.memory_digest("DS-1", "karthik", NOW)
+    assert reviewer.memory.memory_digest("DS-1", "karthik", NOW)
     assert len(calls) == 2
 
 
@@ -505,14 +548,14 @@ def test_digest_clears_when_no_recent_chats_remain(review) -> None:
         built_at=NOW,
     )
     review.chats = [summarized(OLD, "Old")]
-    assert service("unused").memory_digest("DS-1", "karthik", NOW)
+    assert service("unused").memory.memory_digest("DS-1", "karthik", NOW)
     assert review.saved_digests == [("karthik", None, [])]
-    assert dreaming.memory_block("karthik") is None
+    assert memory.memory_block("karthik") is None
 
 
 def test_none_reply_saves_an_empty_digest(review) -> None:
     review.chats = [summarized(TODAY, "Greeting only.")]
-    assert service("NONE").memory_digest("DS-1", "karthik", NOW)
+    assert service("NONE").memory.memory_digest("DS-1", "karthik", NOW)
     assert review.saved_digests[0][1] is None
 
 
@@ -540,8 +583,9 @@ def test_memory_block_labels_the_digest_as_earlier_chats(review) -> None:
         sources=[],
         built_at=NOW,
     )
-    assert dreaming.memory_block("karthik") == (
+    assert memory.memory_block("karthik") == (
         "From this manager's chats in the 7 days before 8 Oct:\n"
         "- Z3 floods in heavy rain (said 6 Oct)."
     )
-    assert dreaming.memory_digest("karthik") is review.digests["karthik"]
+    view = memory.memory_digest("karthik")
+    assert view is not None and view.digest == review.digests["karthik"].digest

@@ -1,3 +1,7 @@
+from typing import Literal
+
+from domain.chat import StoredMessage
+
 """Integration checks against a dedicated TEST_DATABASE_URL."""
 
 import os
@@ -7,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 from conftest import ensure_managers
-from sqlalchemy import Engine, delete, select, text
+from sqlalchemy import Engine, delete, event, select, text
 from sqlalchemy.exc import IntegrityError
 
 from database.models import Conversation
@@ -17,8 +21,13 @@ from queries.conversations import (
     idle_unsummarized,
     latest_conversation,
     list_conversations,
+    read_answer_context,
+    read_details,
+    read_summary,
+    read_title_exchange,
     resume_conversation,
     save_summary,
+    selected_conversation_id,
     set_title,
     start_conversation,
 )
@@ -46,7 +55,7 @@ def conversation_engine() -> Iterator[Engine]:
         engine.dispose()
 
 
-def message(who: str, what: str) -> dict[str, str]:
+def message(who: Literal["manager", "assistant"], what: str) -> StoredMessage:
     return {"who": who, "what": what, "when": "2026-10-06T19:42:10+05:30"}
 
 
@@ -56,6 +65,151 @@ def test_new_conversation_is_empty_and_latest(conversation_engine: Engine) -> No
     assert started.messages == [] and started.summary is None
     latest = latest_conversation("DS-1", "karthik", conversation_engine)
     assert latest is not None and latest.id == started.id
+
+
+def test_start_returns_defaults_without_a_refresh_query(conversation_engine):
+    statements = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    event.listen(conversation_engine, "before_cursor_execute", record)
+    try:
+        started = start_conversation("DS-1", "karthik", conversation_engine)
+    finally:
+        event.remove(conversation_engine, "before_cursor_execute", record)
+    assert len(statements) == 1 and statements[0].startswith("INSERT")
+    assert started.id and started.created_at and started.updated_at
+    assert started.messages == []
+
+
+def test_small_chat_reads_preserve_scope_and_title_fallback(conversation_engine):
+    assert (
+        selected_conversation_id("DS-1", "karthik", engine=conversation_engine) is None
+    )
+    assert read_summary("DS-1", "karthik", engine=conversation_engine) is None
+    started = start_conversation("DS-1", "karthik", conversation_engine)
+    append_message(
+        started.id,
+        message("assistant", "Saved a setting."),
+        conversation_engine,
+    )
+    question = 'Can I batch "frozen" orders? ₹300'
+    append_message(started.id, message("manager", question), conversation_engine)
+    append_message(
+        started.id,
+        message("assistant", "Single drop."),
+        conversation_engine,
+    )
+    assert (
+        selected_conversation_id("DS-1", "karthik", engine=conversation_engine)
+        == started.id
+    )
+    view = read_summary("DS-1", "karthik", started.id, conversation_engine)
+    assert view == {
+        "summary": None,
+        "summary_covers_to": None,
+        "summarized_at": None,
+        "total": 3,
+    }
+    assert read_details("DS-1", "karthik", started.id, conversation_engine) == {
+        "id": started.id,
+        "title": question,
+    }
+    exchange = read_title_exchange("DS-1", "karthik", started.id, conversation_engine)
+    assert exchange["question"] == question and exchange["answer"] == "Saved a setting."
+    assert set_title(started.id, "Cold Chain", conversation_engine)
+    assert (
+        read_details("DS-1", "karthik", started.id, conversation_engine)["title"]
+        == "Cold Chain"
+    )
+    exchange = read_title_exchange("DS-1", "karthik", started.id, conversation_engine)
+    assert exchange["question"] is None and exchange["answer"] is None
+    for query in (
+        selected_conversation_id,
+        read_summary,
+        read_details,
+        read_title_exchange,
+    ):
+        for store_id, manager_id in (("DS-2", "karthik"), ("DS-1", "ananya")):
+            with pytest.raises(LookupError):
+                query(store_id, manager_id, started.id, conversation_engine)
+
+
+def test_title_reads_handle_empty_and_unanswered_chats(conversation_engine):
+    started = start_conversation("DS-1", "karthik", conversation_engine)
+    assert (
+        read_details("DS-1", "karthik", started.id, conversation_engine)["title"]
+        is None
+    )
+    assert (
+        read_title_exchange("DS-1", "karthik", engine=conversation_engine)["question"]
+        is None
+    )
+    append_message(started.id, message("manager", "Rain?"), conversation_engine)
+    exchange = read_title_exchange("DS-1", "karthik", engine=conversation_engine)
+    assert exchange["question"] == "Rain?" and exchange["answer"] is None
+
+
+@pytest.mark.parametrize("covers_to", [None, -25, -2, -1, 0, 3, 9, 19])
+@pytest.mark.parametrize("recent_messages", [0, 6, 30])
+def test_answer_context_matches_existing_history_window(
+    conversation_engine,
+    covers_to,
+    recent_messages,
+):
+    started = start_conversation("DS-1", "karthik", conversation_engine)
+    empty = read_answer_context(
+        "DS-1",
+        "karthik",
+        recent_messages,
+        started.id,
+        conversation_engine,
+    )
+    assert empty["messages"] == []
+    assert (
+        read_answer_context(
+            "DS-2",
+            "karthik",
+            recent_messages,
+            engine=conversation_engine,
+        )
+        is None
+    )
+    for index in range(20):
+        append_message(started.id, message("manager", f"q{index}"), conversation_engine)
+    if covers_to is not None:
+        save_summary(
+            started.id,
+            "Earlier decisions",
+            covers_to,
+            None,
+            conversation_engine,
+        )
+    context = read_answer_context(
+        "DS-1",
+        "karthik",
+        recent_messages,
+        started.id,
+        conversation_engine,
+    )
+    start = min(0 if covers_to is None else covers_to + 1, max(20 - recent_messages, 0))
+    assert context["id"] == started.id
+    assert context["summary"] == (
+        "Earlier decisions" if covers_to is not None else None
+    )
+    expected = [message("manager", f"q{index}") for index in range(20)][start:]
+    assert context["messages"] == expected
+    with pytest.raises(LookupError):
+        read_answer_context(
+            "DS-1",
+            "ananya",
+            recent_messages,
+            started.id,
+            conversation_engine,
+        )
+    with pytest.raises(ValueError):
+        read_answer_context("DS-1", "karthik", -1, engine=conversation_engine)
 
 
 def test_messages_are_appended_in_order(conversation_engine: Engine) -> None:

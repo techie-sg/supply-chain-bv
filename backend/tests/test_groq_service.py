@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 from pydantic import SecretStr
 
 from service import groq_service as groq
@@ -83,7 +84,7 @@ def test_groq_preserves_previous_user_and_assistant_turns(monkeypatch) -> None:
     ]
 
 
-class ToolClient:
+class FakeGroqClient:
     """Fake ChatGroq: replies from a script, recording each bound call."""
 
     def __init__(self, replies) -> None:
@@ -105,7 +106,7 @@ def text_reply(text):
 
 
 def echo_tool(calls):
-    from service.llm_service import Tool
+    from domain.tools import Tool
 
     def run(args):
         calls.append(args)
@@ -117,7 +118,7 @@ def echo_tool(calls):
 def test_tool_calls_run_and_their_results_reach_the_model(monkeypatch) -> None:
     from langchain_core.messages import AIMessage
 
-    client = ToolClient(
+    client = FakeGroqClient(
         [
             AIMessage(
                 content="",
@@ -148,7 +149,7 @@ def test_unknown_tools_are_reported_and_tool_rounds_are_capped(monkeypatch) -> N
             tool_calls=[{"name": name, "args": {"value": 1}, "id": name}],
         )
 
-    client = ToolClient(
+    client = FakeGroqClient(
         [call("missing"), call("propose"), call("propose"), text_reply("done")],
     )
     service = GroqService(api_key=SecretStr("key"))
@@ -213,7 +214,7 @@ def test_repeated_rejections_answer_without_tools_and_say_so(monkeypatch) -> Non
 
 
 def test_without_tools_the_plain_path_is_used(monkeypatch) -> None:
-    client = ToolClient([text_reply("plain")])
+    client = FakeGroqClient([text_reply("plain")])
     monkeypatch.setattr(GroqService, "_client", client)
     assert (
         GroqService(api_key=SecretStr("k")).generate_with_tools("s", "u", []) == "plain"
@@ -224,14 +225,15 @@ def test_without_tools_the_plain_path_is_used(monkeypatch) -> None:
 class Reasoning:
     """Fake ChatGroq whose default effort returns no text."""
 
-    def __init__(self, effort=None, replies=None) -> None:
+    def __init__(self, effort=None, replies=None, silent=False) -> None:
         self.effort = effort
+        self.silent = silent
         self.replies = replies if replies is not None else []
         self.seen: list[list] = []
         self.bound: list[str] = []
 
     def model_copy(self, update):
-        return Reasoning(update["reasoning_effort"], self.replies)
+        return Reasoning(update["reasoning_effort"], self.replies, self.silent)
 
     def bind_tools(self, schemas, tool_choice):
         self.bound.append(tool_choice)
@@ -239,7 +241,7 @@ class Reasoning:
 
     def invoke(self, messages):
         self.replies.append((self.effort, len(messages)))
-        text = "the answer" if self.effort == "low" else "  "
+        text = "the answer" if self.effort == "low" and not self.silent else "  "
         return SimpleNamespace(text=text, tool_calls=[], usage_metadata=None)
 
 
@@ -257,3 +259,17 @@ def test_an_empty_answer_after_tools_is_retried_without_tools(monkeypatch) -> No
     service = GroqService(api_key=SecretStr("key"))
     assert service.generate_with_tools("s", "u", [echo_tool([])]) == "the answer"
     assert client.replies[-1] == ("low", 2)
+
+
+@pytest.mark.parametrize("with_tools", [False, True])
+def test_empty_answers_are_rejected_before_being_saved(monkeypatch, with_tools) -> None:
+    # Empty even with low reasoning: fail rather than store an empty reply.
+    client = Reasoning(silent=True)
+    monkeypatch.setattr(GroqService, "_client", client)
+    service = GroqService(api_key=SecretStr("fake-key"))
+    with pytest.raises(RuntimeError, match="empty answer"):
+        if with_tools:
+            service.generate_with_tools("system", "question", [echo_tool([])])
+        else:
+            service.generate("system", "question")
+    assert client.replies[-1][0] == "low"

@@ -3,7 +3,6 @@
 import re
 from collections.abc import Callable, Sequence
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
@@ -12,39 +11,62 @@ import structlog
 from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
-from constants import DEMO_MANAGER_ID, DEMO_STORE_ID
+from constants import DEMO_MANAGER_ID, DEMO_STORE_ID, SUMMARY_RECENT_MESSAGES, TIMEZONE
 from database.models import Conversation
-from domain.chat import ChatMessage
+from domain.chat import (
+    AnswerResult,
+    AnswerTrace,
+    ChatMessage,
+    StoredMessage,
+    ToolCallTrace,
+)
+from domain.tools import Tool
 from queries.conversations import (
     append_message,
     latest_conversation,
     list_conversations,
+    read_answer_context,
+    read_details,
+    read_summary,
+    read_title_exchange,
     resume_conversation,
+    selected_conversation_id,
     set_title,
     start_conversation,
 )
+from resources import PROMPTS
 from service.alerts import alerts_block
-from service.dreaming import handover_block, memory_block
 from service.factory import create_llm_service
-from service.llm_service import Tool
-from service.preferences import PreferenceService, manager_preferences
+from service.handover import handover_block
+from service.memory import memory_block
+from service.preferences import PreferenceService, describe, manager_preferences
 from service.rag import answer_question
-from service.scenarios import TIMEZONE
 from service.setting_changes import SettingChange, SettingChanges, tidy_reply
-from service.summaries import history_start
+from service.tools import dispatch_tools, traced_tools
 
 logger = structlog.stdlib.get_logger(__name__)
 
-Answer = Callable[..., str]
+# An answer is the reply text, or the reply with its trace (tools used, settings).
+Answer = Callable[..., AnswerResult]
 Titler = Callable[[str, str], str]
-TITLE_PROMPT_PATH = (
-    Path(__file__).resolve().parent / "rag_data" / "prompts" / "conversation_title.md"
-)
+
+TITLE_PROMPT_PATH = PROMPTS / "conversation_title.md"
 TITLE_MAX_LENGTH = 60
 
 
-def new_message(who: Literal["manager", "assistant"], what: str) -> dict[str, str]:
-    return {"who": who, "what": what, "when": datetime.now(TIMEZONE).isoformat()}
+def new_message(
+    who: Literal["manager", "assistant"],
+    what: str,
+    trace: AnswerTrace | None = None,
+) -> StoredMessage:
+    message: StoredMessage = {
+        "who": who,
+        "what": what,
+        "when": datetime.now(TIMEZONE).isoformat(),
+    }
+    if trace:
+        message["trace"] = trace  # display only; never sent to the model
+    return message
 
 
 def clean_title(text: str) -> str | None:
@@ -58,7 +80,7 @@ def clean_title(text: str) -> str | None:
     return line or None
 
 
-def to_chat_messages(messages: Sequence[dict[str, str]]) -> list[ChatMessage]:
+def to_chat_messages(messages: Sequence[StoredMessage]) -> list[ChatMessage]:
     """Map stored messages to provider-independent chat roles, in order."""
     return [
         {
@@ -97,29 +119,34 @@ class ConversationService:
             )
         return latest_conversation(self.store_id, self.manager_id, self.engine)
 
-    def history(self) -> list[dict[str, str]]:
+    def history(self) -> list[StoredMessage]:
         """Stored messages of the latest conversation, without creating one."""
         conversation = self.selected()
         return list(conversation.messages) if conversation else []
 
     def summary_view(self) -> dict[str, Any] | None:
         """The open chat's summary state; None for no chat or an empty one."""
-        conversation = self.selected()
-        if conversation is None or not conversation.messages:
+        view = read_summary(
+            self.store_id,
+            self.manager_id,
+            self.conversation_id,
+            self.engine,
+        )
+        if view is None or not view["total"]:
             return None
-        covers_to = conversation.summary_covers_to
-        if not conversation.summary or covers_to is None:
+        covers_to = view["summary_covers_to"]
+        if not view["summary"] or covers_to is None:
             return {
                 "summary": None,
                 "covered": 0,
-                "total": len(conversation.messages),
+                "total": view["total"],
                 "summarized_at": None,
             }
         return {
-            "summary": conversation.summary,
+            "summary": view["summary"],
             "covered": covers_to + 1,
-            "total": len(conversation.messages),
-            "summarized_at": conversation.summarized_at,
+            "total": view["total"],
+            "summarized_at": view["summarized_at"],
         }
 
     def start_new(self) -> Conversation:
@@ -130,14 +157,18 @@ class ConversationService:
 
     def current_id(self) -> UUID | None:
         """The conversation new questions go to, if one exists."""
-        conversation = self.selected()
-        return conversation.id if conversation else None
+        return selected_conversation_id(
+            self.store_id,
+            self.manager_id,
+            self.conversation_id,
+            self.engine,
+        )
 
     def past(self, limit: int = 20) -> list[dict[str, Any]]:
         """Recent non-empty conversations, newest first."""
         return list_conversations(self.store_id, self.manager_id, limit, self.engine)
 
-    def resume(self, conversation_id: UUID) -> list[dict[str, str]]:
+    def resume(self, conversation_id: UUID) -> list[StoredMessage]:
         """Select a past conversation without changing its recency."""
         conversation = resume_conversation(
             conversation_id,
@@ -149,27 +180,41 @@ class ConversationService:
         logger.info("Conversation resumed", conversation_id=str(conversation.id))
         return list(conversation.messages)
 
-    def ask(self, question: str) -> str:
+    def ask(self, question: str) -> AnswerResult:
         """Store the question first, so a failed answer never loses it."""
-        conversation = self.selected() or self.start_new()
+        context = read_answer_context(
+            self.store_id,
+            self.manager_id,
+            SUMMARY_RECENT_MESSAGES,
+            self.conversation_id,
+            self.engine,
+        )
+        if context is None:
+            conversation = self.start_new()
+            context = {"id": conversation.id, "messages": [], "summary": None}
         # The summary stands in for older messages; recent ones stay word for word.
-        history = to_chat_messages(conversation.messages[history_start(conversation) :])
-        extra = {"summary": conversation.summary} if conversation.summary else {}
-        append_message(conversation.id, new_message("manager", question), self.engine)
-        reply = self.answer(question, history=history, **extra)
-        append_message(conversation.id, new_message("assistant", reply), self.engine)
-        return reply
+        history = to_chat_messages(context["messages"])
+        extra = {"summary": context["summary"]} if context["summary"] else {}
+        append_message(context["id"], new_message("manager", question), self.engine)
+        result = self.answer(question, history=history, **extra)
+        reply, trace = result.text, result.trace
+        append_message(
+            context["id"],
+            new_message("assistant", reply, trace),
+            self.engine,
+        )
+        return result
 
-    def note(self, text: str) -> dict[str, str] | None:
+    def note(self, text: str) -> StoredMessage | None:
         """Add an assistant note to the open chat, such as a confirmed setting.
 
         Stored like any reply, so later answers know what happened.
         """
-        conversation = self.selected()
-        if conversation is None:
+        conversation_id = self.current_id()
+        if conversation_id is None:
             return None
         message = new_message("assistant", text)
-        append_message(conversation.id, message, self.engine)
+        append_message(conversation_id, message, self.engine)
         return message
 
     def title_latest(self) -> str | None:
@@ -178,25 +223,15 @@ class ConversationService:
         Runs after the answer is shown. Any failure leaves the title unset, and
         the sidebar keeps showing the first question instead.
         """
-        conversation = self.selected()
-        if self.titler is None or conversation is None or conversation.title:
+        exchange = read_title_exchange(
+            self.store_id,
+            self.manager_id,
+            self.conversation_id,
+            self.engine,
+        )
+        if self.titler is None or exchange is None or exchange["title"]:
             return None
-        question = next(
-            (
-                item["what"]
-                for item in conversation.messages
-                if item["who"] == "manager"
-            ),
-            None,
-        )
-        answer = next(
-            (
-                item["what"]
-                for item in conversation.messages
-                if item["who"] == "assistant"
-            ),
-            None,
-        )
+        question, answer = exchange["question"], exchange["answer"]
         if question is None or answer is None:
             return None
         try:
@@ -204,10 +239,23 @@ class ConversationService:
         except (requests.RequestException, RuntimeError, ValueError):
             logger.warning("Could not title conversation", exc_info=True)
             return None
-        if title is None or not set_title(conversation.id, title, self.engine):
+        if title is None or not set_title(exchange["id"], title, self.engine):
             return None
-        logger.info("Conversation titled", conversation_id=str(conversation.id))
+        logger.info("Conversation titled", conversation_id=str(exchange["id"]))
         return title
+
+
+def _trace(
+    settings: PreferenceService,
+    tools: Sequence[ToolCallTrace] = (),
+) -> AnswerTrace:
+    """What the answer was built from: tool calls and the manager's own settings."""
+    return {
+        "tools": list(tools),
+        "preferences": [
+            describe(item) for item in settings.effective() if item.customized
+        ],
+    }
 
 
 def _answer(
@@ -217,20 +265,21 @@ def _answer(
     summary: str | None = None,
     preferences: PreferenceService | None = None,
     tools: Sequence[Tool] = (),
-) -> str:
-    """Answer with the settings, alerts, summary, last handover and memory."""
+) -> AnswerResult:
+    """Answer through RAG and the configured provider, recording local tool calls."""
     preferences = preferences or manager_preferences()
-    alerts = _alerts(preferences.manager_id)
-    return answer_question(
+    calls: list[ToolCallTrace] = []
+    reply = answer_question(
         question,
         history=history,
         preferences=preferences,
         summary=summary,
-        handover=handover_block(DEMO_STORE_ID),
+        handover=handover_block(preferences.store_id),
         memory=memory_block(preferences.manager_id),
-        tools=tools,
-        alerts=alerts,
+        tools=traced_tools([*tools, *dispatch_tools(preferences.store_id)], calls),
+        alerts=_alerts(preferences.manager_id),
     )
+    return AnswerResult(reply, _trace(preferences, calls))
 
 
 def _alerts(manager_id: str) -> str | None:
@@ -267,47 +316,57 @@ def ask_question(
     question: str,
     manager_id: str = DEMO_MANAGER_ID,
     conversation_id: str | None = None,
-) -> tuple[str, list[SettingChange]]:
-    """UI entry point: answer using the stored history of the latest chat.
+) -> tuple[str, list[SettingChange], AnswerTrace | None]:
+    """UI entry point: answer using the stored history of the selected chat.
 
-    Also returns the setting changes the assistant proposed in this answer;
-    none is saved until the manager confirms it.
+    Also returns the setting changes the assistant proposed in this answer
+    (none is saved until the manager confirms it) and the trace to show under it.
     """
     preferences = manager_preferences(manager_id)
     changes = SettingChanges(preferences)
     service = ConversationService(
         DEMO_STORE_ID,
         manager_id,
-        answer=lambda question, **kwargs: tidy_reply(
+        answer=lambda question, **kwargs: _tidied(
             _answer(
                 question,
                 preferences=preferences,
                 tools=[changes.tool()],
                 **kwargs,
             ),
-            changes.proposals,
+            changes,
         ),
         titler=_title,
         conversation_id=conversation_id,
     )
-    return service.ask(question), changes.proposals
+    result = service.ask(question)
+    return result.text, changes.proposals, result.trace
+
+
+def _tidied(
+    result: AnswerResult,
+    changes: SettingChanges,
+) -> AnswerResult:
+    return AnswerResult(tidy_reply(result.text, changes.proposals), result.trace)
 
 
 def add_note(
     text: str,
     manager_id: str = DEMO_MANAGER_ID,
     conversation_id: str | None = None,
-) -> dict[str, str] | None:
+) -> StoredMessage | None:
     """UI entry point: record an assistant note in the open chat."""
     return _service(manager_id, conversation_id).note(text)
 
 
-def conversation_history(
+def latest_conversation_state(
     manager_id: str = DEMO_MANAGER_ID,
-    conversation_id: str | None = None,
-) -> list[dict[str, str]]:
-    """UI entry point: stored messages to show when the page loads."""
-    return _service(manager_id, conversation_id).history()
+) -> tuple[list[StoredMessage], str | None]:
+    """Restore messages and the selected id from the same database read."""
+    conversation = _service(manager_id).selected()
+    if conversation is None:
+        return [], None
+    return list(conversation.messages), str(conversation.id)
 
 
 def start_new_conversation(manager_id: str = DEMO_MANAGER_ID) -> str:
@@ -323,7 +382,7 @@ def past_conversations(manager_id: str = DEMO_MANAGER_ID) -> list[dict[str, Any]
 def resume_past_conversation(
     conversation_id: str,
     manager_id: str = DEMO_MANAGER_ID,
-) -> list[dict[str, str]]:
+) -> list[StoredMessage]:
     """UI entry point: reopen a past conversation and continue it."""
     return _service(manager_id).resume(UUID(conversation_id))
 
@@ -355,11 +414,9 @@ def conversation_details(
     manager_id: str = DEMO_MANAGER_ID,
 ) -> dict[str, str | None]:
     """Read browser metadata scoped to the manager who owns the selected chat."""
-    conversation = _service(manager_id, conversation_id).selected()
-    if conversation is None:
-        raise LookupError(conversation_id)
-    first_question = next(
-        (item["what"] for item in conversation.messages if item["who"] == "manager"),
-        None,
+    row = read_details(
+        DEMO_STORE_ID,
+        manager_id,
+        UUID(conversation_id),
     )
-    return {"id": str(conversation.id), "title": conversation.title or first_question}
+    return {"id": str(row["id"]), "title": row["title"]}

@@ -1,26 +1,10 @@
 """The store's shift managers; each has a unique shift and their own settings and chats."""
 
-from dataclasses import dataclass
-
 from sqlalchemy import Engine
 
 from constants import DEMO_MANAGER_ID, DEMO_STORE_ID
+from domain.managers import ShiftManager
 from queries.managers import list_managers
-
-
-@dataclass(frozen=True)
-class ShiftManager:
-    manager_id: str
-    name: str
-    shift_id: str
-    shift_name: str
-    shift_start: str
-    shift_end: str
-
-    @property
-    def shift(self) -> str:
-        """For example "Evening shift, 14:00 to 22:00"."""
-        return f"{self.shift_name} shift, {self.shift_start} to {self.shift_end}"
 
 
 def store_managers(

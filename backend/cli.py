@@ -7,6 +7,7 @@ from pathlib import Path
 
 import structlog
 
+from database.session import database_resources
 from logging_config import configure_logging
 
 
@@ -40,7 +41,8 @@ def main(argv: list[str] | None = None) -> None:
     logger = structlog.stdlib.get_logger(__name__)
     logger.info("DispatchDesk command starting", command=args.command)
     try:
-        run_command(args)
+        with database_resources():
+            run_command(args)
     except Exception:
         logger.exception("DispatchDesk command failed", command=args.command)
         raise SystemExit(1) from None

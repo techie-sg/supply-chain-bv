@@ -1,3 +1,4 @@
+from dataclasses import fields
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
@@ -6,6 +7,7 @@ from catalogue import definitions
 
 from database.models import HourlyMetric, Order, Rider
 from domain.memory import AlertOptions
+from domain.preferences import SettingDefinition
 from service import alerts
 from service.alerts import Snapshot, evaluate, in_window, measure
 from service.preferences import EffectiveSetting, default_setting
@@ -27,12 +29,25 @@ def snapshot(key: str) -> Snapshot:
     )
 
 
+def catalogue() -> list[SettingDefinition]:
+    """The seeded catalogue as the plain definitions the services use."""
+    return [
+        SettingDefinition(
+            **{
+                field.name: getattr(row, field.name)
+                for field in fields(SettingDefinition)
+            },
+        )
+        for row in definitions()
+    ]
+
+
 def defaults() -> list[EffectiveSetting]:
-    return [default_setting(item) for item in definitions()]
+    return [default_setting(item) for item in catalogue()]
 
 
 def setting(code: str, value, options: dict | None = None, enabled=True):
-    definition = next(item for item in definitions() if item.code == code)
+    definition = next(item for item in catalogue() if item.code == code)
     return EffectiveSetting(
         definition,
         enabled,
