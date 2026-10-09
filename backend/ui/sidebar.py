@@ -13,13 +13,14 @@ from domain.managers import ShiftManager
 from service.conversations import (
     conversation_details,
     current_conversation_id,
+    latest_conversation_state,
     past_conversations,
     resume_past_conversation,
     title_latest_conversation,
 )
 from service.managers import choose_manager, store_managers
 from ui.browser import browser_script
-from ui.chat import chat_scope, restore_chat, to_display
+from ui.chat import chat_scope, to_display
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -69,11 +70,12 @@ def open_conversation(
 
 
 def restore_latest_conversation(manager_id: str) -> tuple[list[dict], str | None]:
-    history = restore_chat(manager_id)
     try:
-        return history, current_conversation_id(manager_id=manager_id)
+        messages, conversation_id = latest_conversation_state(manager_id=manager_id)
+        return to_display(messages), conversation_id
     except (SQLAlchemyError, RuntimeError):
-        return history, None
+        logger.warning("Could not restore the conversation", exc_info=True)
+        return [], None
 
 
 def restore_conversation(

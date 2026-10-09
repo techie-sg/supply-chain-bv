@@ -68,6 +68,71 @@ class FakeStore:
             raise LookupError(conversation_id)
         return row
 
+    def selected(self, store_id, manager_id, conversation_id=None, engine=None):
+        if conversation_id is not None:
+            return self.resume(conversation_id, store_id, manager_id, engine)
+        return self.latest(store_id, manager_id, engine)
+
+    def selected_id(self, *args):
+        row = self.selected(*args)
+        return row.id if row else None
+
+    def summary(self, *args):
+        row = self.selected(*args)
+        if row is None:
+            return None
+        return {
+            "summary": row.summary,
+            "summary_covers_to": row.summary_covers_to,
+            "summarized_at": row.summarized_at,
+            "total": len(row.messages),
+        }
+
+    def details(self, *args):
+        row = self.selected(*args)
+        return {
+            "id": row.id,
+            "title": row.title
+            or next(
+                (item["what"] for item in row.messages if item["who"] == "manager"),
+                None,
+            ),
+        }
+
+    def title_exchange(self, *args):
+        row = self.selected(*args)
+        if row is None:
+            return None
+        return {
+            "id": row.id,
+            "title": row.title,
+            "question": next(
+                (item["what"] for item in row.messages if item["who"] == "manager"),
+                None,
+            ),
+            "answer": next(
+                (item["what"] for item in row.messages if item["who"] == "assistant"),
+                None,
+            ),
+        }
+
+    def answer_context(
+        self,
+        store_id,
+        manager_id,
+        recent_messages,
+        conversation_id,
+        engine,
+    ):
+        row = self.selected(store_id, manager_id, conversation_id, engine)
+        if row is None:
+            return None
+        start = min(
+            0 if row.summary_covers_to is None else row.summary_covers_to + 1,
+            max(len(row.messages) - recent_messages, 0),
+        )
+        return {"id": row.id, "summary": row.summary, "messages": row.messages[start:]}
+
 
 @pytest.fixture
 def store(monkeypatch) -> FakeStore:
@@ -80,6 +145,11 @@ def store(monkeypatch) -> FakeStore:
     monkeypatch.setattr(conversations, "memory_block", lambda manager_id: None)
     monkeypatch.setattr(conversations, "list_conversations", fake.list)
     monkeypatch.setattr(conversations, "resume_conversation", fake.resume)
+    monkeypatch.setattr(conversations, "selected_conversation_id", fake.selected_id)
+    monkeypatch.setattr(conversations, "read_summary", fake.summary)
+    monkeypatch.setattr(conversations, "read_details", fake.details)
+    monkeypatch.setattr(conversations, "read_title_exchange", fake.title_exchange)
+    monkeypatch.setattr(conversations, "read_answer_context", fake.answer_context)
     return fake
 
 
@@ -199,9 +269,9 @@ def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> N
 
     monkeypatch.setattr(conversations, "answer_question", answer)
     assert conversations.ask_question("Hello")[:2] == ("reply", [])
-    assert conversations.conversation_history()[0]["what"] == "Hello"
+    assert conversations.latest_conversation_state()[0][0]["what"] == "Hello"
     conversations.start_new_conversation()
-    assert conversations.conversation_history() == []
+    assert conversations.latest_conversation_state()[0] == []
     assert {(row.store_id, row.manager_id) for row in store.rows} == {
         (conversations.DEMO_STORE_ID, conversations.DEMO_MANAGER_ID),
     }
@@ -541,6 +611,31 @@ def test_ui_summary_entry_point_uses_the_open_chat(store, monkeypatch) -> None:
     assert view is not None and view["covered"] == 2
 
 
+def test_summary_and_id_do_not_load_a_full_conversation(store, monkeypatch) -> None:
+    chat = service(lambda question, history: "reply")
+    chat.ask("Rain plan?")
+
+    def no_transcript():
+        raise AssertionError("Summary and id reads must not load messages")
+
+    monkeypatch.setattr(chat, "selected", no_transcript)
+    assert chat.current_id() == store.rows[-1].id
+    view = chat.summary_view()
+    assert view is not None and view["total"] == 2
+
+
+def test_restoring_messages_and_id_uses_one_read(store, monkeypatch) -> None:
+    from unittest.mock import Mock
+
+    row = store.start(conversations.DEMO_STORE_ID, conversations.DEMO_MANAGER_ID)
+    store.append(row.id, conversations.new_message("manager", "Rain plan?"))
+    read = Mock(wraps=store.latest)
+    monkeypatch.setattr(conversations, "latest_conversation", read)
+    messages, conversation_id = conversations.latest_conversation_state()
+    assert messages == row.messages and conversation_id == str(row.id)
+    read.assert_called_once()
+
+
 def test_note_is_stored_as_an_assistant_message_in_the_open_chat(store) -> None:
     chat = service(lambda question, history: "reply")
     assert chat.note("Saved.") is None
@@ -580,7 +675,7 @@ def test_ui_ask_returns_the_changes_the_assistant_proposed(
     # Nothing is saved until the manager confirms.
     assert preference_store.rows == []
     conversations.add_note("Saved.")
-    assert conversations.conversation_history()[-1]["what"] == "Saved."
+    assert conversations.latest_conversation_state()[0][-1]["what"] == "Saved."
 
 
 def test_selected_chat_cannot_be_read_or_written_by_another_manager(store):

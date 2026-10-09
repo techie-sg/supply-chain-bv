@@ -92,7 +92,6 @@ def persist_preference(
     )
     session.add(preference)
     session.flush()
-    session.refresh(preference)
     return preference
 
 

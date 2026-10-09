@@ -374,11 +374,15 @@ def test_page_load_restores_the_stored_conversation(
         },
     ]
     monkeypatch.setattr(
-        chat_ui,
-        "conversation_history",
-        lambda manager_id=None: stored,
+        sidebar_ui,
+        "latest_conversation_state",
+        lambda manager_id=None: (stored, "chat-id"),
     )
-    assert chat_ui.restore_chat() == [
+    history, conversation_id = sidebar_ui.restore_latest_conversation(
+        gradio_app.DEMO_MANAGER_ID,
+    )
+    assert conversation_id == "chat-id"
+    assert history == [
         {
             "role": "user",
             "content": timed("Should riders jump red lights?", "6 Oct, 21:05"),
@@ -396,8 +400,11 @@ def test_page_load_starts_empty_when_storage_is_unavailable(monkeypatch) -> None
     def unavailable(manager_id=None):
         raise RuntimeError("database down")
 
-    monkeypatch.setattr(chat_ui, "conversation_history", unavailable)
-    assert chat_ui.restore_chat() == []
+    monkeypatch.setattr(sidebar_ui, "latest_conversation_state", unavailable)
+    assert sidebar_ui.restore_latest_conversation(gradio_app.DEMO_MANAGER_ID) == (
+        [],
+        None,
+    )
 
 
 def test_sidebar_lists_past_chats_and_marks_the_open_one(monkeypatch) -> None:
@@ -607,6 +614,64 @@ def test_new_chat_waits_for_outstanding_workspace_callbacks(
         and chat_callback.concurrency_limit == callback.concurrency_limit
         for chat_callback in ui_app.fns.values()
         if chat_callback.fn is chat_ui.respond_to_pending
+    )
+
+
+def test_read_only_screens_do_not_wait_for_another_sessions_answer(ui_app):
+    readers = {
+        sidebar_ui.restore_conversation,
+        scenarios_ui.restore_workspace,
+        scenarios_ui.prepare_scenario,
+    }
+    callbacks = [callback for callback in ui_app.fns.values() if callback.fn in readers]
+    assert {callback.fn for callback in callbacks} == readers
+    assert all(callback.concurrency_id != "workspace" for callback in callbacks)
+    switches = [
+        callback
+        for callback in ui_app.fns.values()
+        if callback.fn is sidebar_ui.restore_latest_conversation
+    ]
+    assert switches and all(
+        callback.concurrency_id == "workspace" for callback in switches
+    )
+
+
+def test_failed_stream_unlocks_the_composer_without_discarding_its_draft(ui_app):
+    recoveries = [
+        callback
+        for callback in ui_app.fns.values()
+        if callback.fn is chat_ui.recover_composer
+    ]
+    assert len(recoveries) == 2
+    for callback in recoveries:
+        assert callback.trigger_only_on_failure
+        assert ui_app.fns[callback.trigger_after].fn is chat_ui.respond_to_pending
+        assert [output.elem_id for output in callback.outputs] == [
+            "chat-processing",
+            "send-message",
+            "message-input",
+        ]
+    assert chat_ui.recover_composer() == (
+        gr.update(visible=False),
+        gr.update(interactive=True),
+        gr.update(interactive=True),
+    )
+
+
+def test_active_chat_change_does_not_duplicate_sidebar_and_summary_reads(ui_app):
+    active_chat = next(
+        callback.outputs[2]
+        for callback in ui_app.fns.values()
+        if callback.fn is chat_ui.clear_chat
+    )
+    changes = [
+        callback
+        for callback in ui_app.fns.values()
+        if (active_chat._id, "change") in callback.targets
+    ]
+    assert all(
+        callback.fn not in {sidebar_ui.conversation_choices, summary_ui.summary_card}
+        for callback in changes
     )
 
 
@@ -896,8 +961,8 @@ def test_summary_popover_is_refreshed_with_the_chat(ui_app) -> None:
         if callback.fn is summary_ui.summary_card
     ]
     # Page load, switching manager, opening a chat, a scenario load, New chat,
-    # and after each answer.
-    assert len(refreshers) == 7
+    # and before title generation and after any summary folding for each answer.
+    assert len(refreshers) == 9
     assert all(trigger in callback.outputs for callback in refreshers)
     [click] = [
         callback
@@ -906,6 +971,13 @@ def test_summary_popover_is_refreshed_with_the_chat(ui_app) -> None:
     ]
     assert click.fn is summary_ui.summarize_now
     assert click.concurrency_id == "workspace"
+
+
+def test_answer_summary_is_available_before_title_generation(ui_app):
+    for title in ui_app.fns.values():
+        if title.fn is sidebar_ui.title_conversation:
+            preceding = ui_app.fns[title.trigger_after]
+            assert preceding.fn is summary_ui.summary_card
 
 
 CHANGE = {

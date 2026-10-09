@@ -195,6 +195,10 @@ def test_app_owner_reuses_the_engine_across_callback_threads_and_closes_it(
 
     build = Mock(return_value=action_engine)
     dispose = Mock(wraps=action_engine.dispose)
+    connections = []
+    # Start with an empty pool so the count measures callback connections.
+    action_engine.dispose()
+    event.listen(action_engine, "connect", lambda *args: connections.append(True))
     monkeypatch.setattr(resources, "build_engine", build)
     monkeypatch.setattr(action_engine, "dispose", dispose)
     with resources.database_resources():
@@ -205,4 +209,5 @@ def test_app_owner_reuses_the_engine_across_callback_threads_and_closes_it(
             assert list_definitions()
         build.assert_called_once_with()
         dispose.assert_not_called()
+        assert len(connections) == 1
     dispose.assert_called_once_with()

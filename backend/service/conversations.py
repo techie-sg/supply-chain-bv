@@ -10,7 +10,7 @@ import requests
 import structlog
 from sqlalchemy import Engine
 
-from constants import DEMO_MANAGER_ID, DEMO_STORE_ID, TIMEZONE
+from constants import DEMO_MANAGER_ID, DEMO_STORE_ID, SUMMARY_RECENT_MESSAGES, TIMEZONE
 from database.models import Conversation
 from domain.chat import (
     AnswerResult,
@@ -24,7 +24,12 @@ from queries.conversations import (
     append_message,
     latest_conversation,
     list_conversations,
+    read_answer_context,
+    read_details,
+    read_summary,
+    read_title_exchange,
     resume_conversation,
+    selected_conversation_id,
     set_title,
     start_conversation,
 )
@@ -35,7 +40,6 @@ from service.memory import memory_block
 from service.preferences import PreferenceService, describe, manager_preferences
 from service.rag import answer_question
 from service.setting_changes import SettingChange, SettingChanges, tidy_reply
-from service.summaries import history_start
 from service.tools import dispatch_tools, traced_tools
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -120,22 +124,27 @@ class ConversationService:
 
     def summary_view(self) -> dict[str, Any] | None:
         """The open chat's summary state; None for no chat or an empty one."""
-        conversation = self.selected()
-        if conversation is None or not conversation.messages:
+        view = read_summary(
+            self.store_id,
+            self.manager_id,
+            self.conversation_id,
+            self.engine,
+        )
+        if view is None or not view["total"]:
             return None
-        covers_to = conversation.summary_covers_to
-        if not conversation.summary or covers_to is None:
+        covers_to = view["summary_covers_to"]
+        if not view["summary"] or covers_to is None:
             return {
                 "summary": None,
                 "covered": 0,
-                "total": len(conversation.messages),
+                "total": view["total"],
                 "summarized_at": None,
             }
         return {
-            "summary": conversation.summary,
+            "summary": view["summary"],
             "covered": covers_to + 1,
-            "total": len(conversation.messages),
-            "summarized_at": conversation.summarized_at,
+            "total": view["total"],
+            "summarized_at": view["summarized_at"],
         }
 
     def start_new(self) -> Conversation:
@@ -146,8 +155,12 @@ class ConversationService:
 
     def current_id(self) -> UUID | None:
         """The conversation new questions go to, if one exists."""
-        conversation = self.selected()
-        return conversation.id if conversation else None
+        return selected_conversation_id(
+            self.store_id,
+            self.manager_id,
+            self.conversation_id,
+            self.engine,
+        )
 
     def past(self, limit: int = 20) -> list[dict[str, Any]]:
         """Recent non-empty conversations, newest first."""
@@ -167,15 +180,24 @@ class ConversationService:
 
     def ask(self, question: str) -> AnswerResult:
         """Store the question first, so a failed answer never loses it."""
-        conversation = self.selected() or self.start_new()
+        context = read_answer_context(
+            self.store_id,
+            self.manager_id,
+            SUMMARY_RECENT_MESSAGES,
+            self.conversation_id,
+            self.engine,
+        )
+        if context is None:
+            conversation = self.start_new()
+            context = {"id": conversation.id, "messages": [], "summary": None}
         # The summary stands in for older messages; recent ones stay word for word.
-        history = to_chat_messages(conversation.messages[history_start(conversation) :])
-        extra = {"summary": conversation.summary} if conversation.summary else {}
-        append_message(conversation.id, new_message("manager", question), self.engine)
+        history = to_chat_messages(context["messages"])
+        extra = {"summary": context["summary"]} if context["summary"] else {}
+        append_message(context["id"], new_message("manager", question), self.engine)
         result = self.answer(question, history=history, **extra)
         reply, trace = result.text, result.trace
         append_message(
-            conversation.id,
+            context["id"],
             new_message("assistant", reply, trace),
             self.engine,
         )
@@ -186,11 +208,11 @@ class ConversationService:
 
         Stored like any reply, so later answers know what happened.
         """
-        conversation = self.selected()
-        if conversation is None:
+        conversation_id = self.current_id()
+        if conversation_id is None:
             return None
         message = new_message("assistant", text)
-        append_message(conversation.id, message, self.engine)
+        append_message(conversation_id, message, self.engine)
         return message
 
     def title_latest(self) -> str | None:
@@ -199,25 +221,15 @@ class ConversationService:
         Runs after the answer is shown. Any failure leaves the title unset, and
         the sidebar keeps showing the first question instead.
         """
-        conversation = self.selected()
-        if self.titler is None or conversation is None or conversation.title:
+        exchange = read_title_exchange(
+            self.store_id,
+            self.manager_id,
+            self.conversation_id,
+            self.engine,
+        )
+        if self.titler is None or exchange is None or exchange["title"]:
             return None
-        question = next(
-            (
-                item["what"]
-                for item in conversation.messages
-                if item["who"] == "manager"
-            ),
-            None,
-        )
-        answer = next(
-            (
-                item["what"]
-                for item in conversation.messages
-                if item["who"] == "assistant"
-            ),
-            None,
-        )
+        question, answer = exchange["question"], exchange["answer"]
         if question is None or answer is None:
             return None
         try:
@@ -225,9 +237,9 @@ class ConversationService:
         except (requests.RequestException, RuntimeError, ValueError):
             logger.warning("Could not title conversation", exc_info=True)
             return None
-        if title is None or not set_title(conversation.id, title, self.engine):
+        if title is None or not set_title(exchange["id"], title, self.engine):
             return None
-        logger.info("Conversation titled", conversation_id=str(conversation.id))
+        logger.info("Conversation titled", conversation_id=str(exchange["id"]))
         return title
 
 
@@ -335,12 +347,14 @@ def add_note(
     return _service(manager_id, conversation_id).note(text)
 
 
-def conversation_history(
+def latest_conversation_state(
     manager_id: str = DEMO_MANAGER_ID,
-    conversation_id: str | None = None,
-) -> list[StoredMessage]:
-    """UI entry point: stored messages to show when the page loads."""
-    return _service(manager_id, conversation_id).history()
+) -> tuple[list[StoredMessage], str | None]:
+    """Restore messages and the selected id from the same database read."""
+    conversation = _service(manager_id).selected()
+    if conversation is None:
+        return [], None
+    return list(conversation.messages), str(conversation.id)
 
 
 def start_new_conversation(manager_id: str = DEMO_MANAGER_ID) -> str:
@@ -388,11 +402,9 @@ def conversation_details(
     manager_id: str = DEMO_MANAGER_ID,
 ) -> dict[str, str | None]:
     """Read browser metadata scoped to the manager who owns the selected chat."""
-    conversation = _service(manager_id, conversation_id).selected()
-    if conversation is None:
-        raise LookupError(conversation_id)
-    first_question = next(
-        (item["what"] for item in conversation.messages if item["who"] == "manager"),
-        None,
+    row = read_details(
+        DEMO_STORE_ID,
+        manager_id,
+        UUID(conversation_id),
     )
-    return {"id": str(conversation.id), "title": conversation.title or first_question}
+    return {"id": str(row["id"]), "title": row["title"]}
