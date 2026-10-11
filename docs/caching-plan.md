@@ -6,29 +6,29 @@
 
 ## 1. Caching Strategies for Agentic RAGs
 
-In an agentic RAG system there are several layers where you can cache. This project implements two core layers and identifies one optional advanced layer.
+In an agentic RAG system there are several layers where you can cache. This project implements two core layers (A and B) and identifies one optional advanced layer (C).
 
-### Layer B — Retrieval Cache (Vector Search Results)
-**What it caches:** The top-k document chunks returned by the pgvector cosine search for a given query embedding.
+### Layer A — Retrieval Cache (Vector Search Results)
+**What it caches:** The top-k document chunks returned by the pgvector cosine search for a given query.
 
-**Why it helps:** The corpus changes only when you re-ingest. Until that happens, the same embedding always returns the same chunks. The Postgres round-trip is ~10–30 ms; on repeated queries in the same session it adds up.
+**Why it helps:** The corpus changes only when you re-ingest. Until that happens, the same question always returns the same chunks. The Postgres round-trip is ~10–30 ms; on repeated queries in the same session it adds up.
 
-**Key:** Hash of the serialized embedding vector (or the query text, which is easier to hash).  
-**TTL:** Medium-to-long (e.g., 1 hour). You'd bust it manually if you re-ingest.  
-**Gotcha:** The retrieval query can include conversation history (see `retrieval_query()` in `service/rag.py:24`). For history-aware follow-ups the cache key must include the history, which reduces hit rate. Simpler to cache only standalone queries — or accept the lower hit rate and key on the full retrieval-query string.
+**Key:** `(query_text, top_k)` — the normalised question string plus the number of chunks requested.  
+**TTL:** Medium-to-long (e.g., 1 hour). Bust manually after re-ingestion.  
+**Gotcha:** The retrieval query can include conversation history (see `retrieval_query()` in [service/rag.py:24](service/rag.py#L24)). For history-aware follow-ups the cache key must include the history, which reduces hit rate. Simpler to key on query text only and accept the lower hit rate for follow-ups.
 
 **Example:**
 
 | | First call | Second call (same question) |
 |---|---|---|
-| **Input** | query text `"why did SLA drop last night?"` + `top_k=3` | same question, same top_k |
+| **Input** | `"why did SLA drop last night?"` + `top_k=3` | same question, same top_k |
 | **Cache key** | `("why did sla drop last night?", 3)` | `("why did sla drop last night?", 3)` |
 | **Cache value stored** | `[{"chunk_id": "sop#4", "content": "During peak hours...", "similarity": 0.91}, ...]` (3 chunks) | — already in cache |
-| **What happens** | MISS → pgvector cosine search runs (~20 ms) → stores the 3 chunks | HIT → returns stored chunks immediately (~0 ms), Postgres is never queried |
+| **What happens** | MISS → embed query → pgvector search (~20 ms) → store chunks | HIT → return chunks instantly (~0 ms), Jina API and Postgres both skipped |
 
 ---
 
-### Layer C — Tool Result Cache (Historical Metrics)
+### Layer B — Historical Metrics Tool Cache
 **What it caches:** The return value of `get_delivery_metrics(store_id, date, start_hour, end_hour)`.
 
 **Why it helps:** Historical data never changes. The current implementation hits the database for every single call, including repeated identical queries in the same session (e.g., two questions about "last Tuesday 8–10 pm").
@@ -44,7 +44,37 @@ In an agentic RAG system there are several layers where you can cache. This proj
 | **Input** | `get_delivery_metrics("store_bng_01", "2026-10-08", 20, 22)` | `get_delivery_metrics("store_bng_01", "2026-10-08", 20, 22)` |
 | **Cache key** | `("store_bng_01", "2026-10-08", 20, 22)` | `("store_bng_01", "2026-10-08", 20, 22)` |
 | **Cache value stored** | Full metrics dict: `{"hourly": [...], "period_summary": {...}, "cache_hit": False, ...}` | — already in cache |
-| **What happens** | MISS → SQL query runs (~15 ms) → stores result dict, `cache_hit=False` returned to UI | HIT → returns stored dict immediately (~0 ms), `cache_hit=True` returned to UI → green badge shown |
+| **What happens** | MISS → SQL query runs (~15 ms) → store result, `cache_hit=False` returned to UI | HIT → return stored dict (~0 ms), `cache_hit=True` returned to UI → green badge shown |
+
+---
+
+### Layer C — Semantic Cache (Optional / Future)
+
+Layers A and B use **exact-match** keys. A differently-worded question (`"what caused deliveries to slow down yesterday?"` vs `"why did SLA drop last night?"`) is a complete miss even though both would retrieve the same chunks. Layer C addresses this.
+
+**How it works:** Instead of matching on the query string, a semantic cache embeds the new query and does an ANN lookup over previously cached query embeddings. If the closest match is above a cosine similarity threshold (e.g., 0.95), it returns the stored chunks without touching the vector store.
+
+```
+New query: "what caused deliveries to slow down yesterday?"
+  → embed → [0.019, -0.044, 0.181, ...]
+  → ANN search over cached query embeddings
+  → closest match: "why did SLA drop last night?" (similarity 0.97 > threshold)
+  → HIT: return its cached chunks, Postgres never queried
+```
+
+**Why it's worth knowing about:** Karthik rephrases the same operational questions across shifts ("what's wrong right now?" / "what's the current situation?" / "why are things slow?"). Exact-match misses all of these. Semantic caching would converge them onto the same cached chunks.
+
+**Challenges:**
+
+| Challenge | Detail |
+|---|---|
+| **Cache needs its own vector store** | A second mini-index of cached query embeddings. Every lookup is itself a similarity search, adding ~5–15 ms overhead on every request, hit or miss. |
+| **Threshold tuning** | Too high (0.99): barely better than exact match. Too low (0.85): `"why are riders slow?"` may cross-hit `"why are pickers slow?"` — wrong chunks returned silently. Requires per-corpus tuning. |
+| **Invalidation is harder** | With exact-match, you evict one key. With semantic caching, a corpus update may make many ANN neighbours stale — you typically have to flush the entire semantic cache. |
+| **Stale embeddings** | Changing the embedding model puts all cached query embeddings in a different vector space. ANN lookups return garbage until you flush and track the model version. |
+| **Library overhead** | `GPTCache` (main open-source option) pulls in FAISS or Hnswlib. Non-trivial setup cost for a demo. |
+
+**Decision for this project:** Out of scope. The benefit is outweighed by complexity, threshold risk, and invalidation difficulty for a single-shift demo. Layers A and B deliver the observable speed-up the tasks require.
 
 ---
 
@@ -52,11 +82,9 @@ In an agentic RAG system there are several layers where you can cache. This proj
 
 | Layer | Cache it? | TTL | Reason |
 |---|---|---|---|
-| B — Retrieval (vector search) | **Yes** | 60 min | Corpus is static between ingestion runs |
-| C — Historical Metrics Tool | **Yes** | Infinite (or 24 h) | Historical data never mutates |
-| S — Semantic Cache | **Optional** | — | Handles differently-worded questions; see section below |
-
-**Important limitation — exact-match only:** Both core caches use the query string as the key. A differently-worded question (`"what caused deliveries to slow down yesterday?"` vs `"why did SLA drop last night?"`) is a complete miss even though both would retrieve the same chunks. See Layer S below for how to handle this.
+| A — Retrieval (vector search) | **Yes** | 60 min | Corpus is static between ingestion runs |
+| B — Historical Metrics Tool | **Yes** | Infinite (or 24 h) | Historical data never mutates |
+| C — Semantic Cache | **Optional** | — | Handles rephrased questions; complexity outweighs benefit for this demo |
 
 **Chosen library: `cachetools`**
 
@@ -73,41 +101,7 @@ If the project moves to multiple workers (e.g., `gunicorn -w 4`), the switch to 
 
 ---
 
-## 3. Layer S — Semantic Cache (Optional / Future)
-
-### What it is
-
-Instead of requiring an exact string match, a semantic cache does an ANN lookup over previously cached query embeddings. If a new query's embedding is within a cosine similarity threshold (e.g., 0.95) of a cached one, it returns the stored chunks rather than hitting the vector store again.
-
-```
-New query: "what caused deliveries to slow down yesterday?"
-  → embed → [0.019, -0.044, 0.181, ...]
-  → ANN search over cached query embeddings
-  → closest match: "why did SLA drop last night?" (similarity 0.97 > threshold)
-  → HIT: return its cached chunks without touching Postgres
-```
-
-### Why it's worth knowing about
-
-Karthik rephrases the same operational questions across shifts ("what's wrong right now?" / "what's the current situation?" / "why are things slow?"). With exact-match caching these all miss. With semantic caching they'd converge on the same cached chunks.
-
-### Challenges
-
-| Challenge | Detail |
-|---|---|
-| **The cache itself needs a vector store** | You maintain a second mini-index of cached query embeddings. Each cache lookup is itself a similarity search, adding ~5–15 ms overhead on every request (miss or hit). |
-| **Threshold tuning** | Too high (0.99): barely better than exact match. Too low (0.85): semantically different questions share chunks incorrectly (e.g., "why are riders slow?" and "why are pickers slow?" may cross-hit). Threshold needs tuning per corpus. |
-| **Cache invalidation is harder** | With exact-match, you know exactly which key to evict. With semantic caching, one corpus update may invalidate many entries whose ANN neighbours are now wrong — you typically have to flush the whole semantic cache. |
-| **Stale embeddings** | If you change embedding models or re-ingest the corpus with a new model, all cached query embeddings are in a different vector space and the ANN lookups return garbage. Requires a cache flush + model version tracking. |
-| **Library overhead** | `GPTCache` (the main open-source option) adds a non-trivial dependency tree (FAISS or Hnswlib for the ANN index). For a demo this is significant setup cost. |
-
-### Decision for this project
-
-Out of scope. The benefit (fewer corpus round-trips on rephrased questions) is outweighed by the added complexity, threshold risk, and invalidation difficulty for a single-shift demo. Exact-match caching on Layer B and C delivers the observable speed-up the tasks require.
-
----
-
-## 4. Caching with Personalization in Play
+## 3. Caching with Personalization in Play
 
 ### How personalization flows through the pipeline
 
@@ -125,10 +119,10 @@ Personalization never touches the retrieval step — it enters the pipeline *aft
 
 ### What this means for the caches
 
-**Layer B (Retrieval Cache) — safe, no conflict.**  
+**Layer A (Retrieval Cache) — safe, no conflict.**  
 The cache key is `(query_text, top_k)`. Personalization is not part of the key and not part of retrieval. Two managers asking the same question get the same cached chunks (correct — the underlying dispatch guidance is the same). Their answers then diverge at the LLM step because each has a different personalization context injected. The cache correctly serves a shared, personalization-agnostic intermediate result.
 
-**Layer C (Metrics Tool Cache) — safe, no conflict.**  
+**Layer B (Metrics Tool Cache) — safe, no conflict.**  
 The cache key is `(store_id, date, start_hour, end_hour)`. Raw metrics rows are factual and identical regardless of who asks. Personalization only shapes how the LLM narrates those numbers. The cache stores data, not narrative.
 
 ### The rule of thumb
@@ -146,8 +140,8 @@ A manager's stored preferences (e.g., "alert me when orders per rider > 2") are 
 
 | What is cached | Contains personalization? | Safe to share across managers? |
 |---|---|---|
-| Retrieved chunks (Layer B) | No — pure corpus content | Yes |
-| Metrics rows (Layer C) | No — raw DB data | Yes |
+| Retrieved chunks (Layer A) | No — pure corpus content | Yes |
+| Metrics rows (Layer B) | No — raw DB data | Yes |
 | LLM final answer | Yes — shaped by personalization | No — do not cache |
 
 ---
@@ -165,8 +159,8 @@ A manager's stored preferences (e.g., "alert me when orders per rider > 2") are 
 | File | Change |
 |---|---|
 | `backend/domain/chat.py` | Add `cache_hit: bool \| None` field to `ToolCallTrace` typed dict |
-| `backend/service/rag.py` | Add retrieval cache (Layer B) |
-| `backend/service/tools.py` | Add metrics cache (Layer C); propagate `cache_hit` into `ToolCallTrace` |
+| `backend/service/rag.py` | Add retrieval cache (Layer A) |
+| `backend/service/tools.py` | Add metrics cache (Layer B); propagate `cache_hit` into `ToolCallTrace` |
 | `backend/ui/chat.py` | Render a cache hit/miss badge in `_tool_line()` (Task 25 partial) |
 | `backend/config.py` | Add `cache_ttl_retrieval_sec` setting so the retrieval TTL is configurable via `.env` |
 
