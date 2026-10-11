@@ -17,6 +17,15 @@ In an agentic RAG system there are several layers where you can cache. Below are
 **TTL:** No expiry needed — embeddings are deterministic for a fixed model.  
 **Risk:** None. The model doesn't change mid-run, and the key is content-addressed.
 
+**Example:**
+
+| | First call | Second call (same question) |
+|---|---|---|
+| **Input** | `"why did SLA drop last night?"` | `"why did SLA drop last night?"` |
+| **Cache key** | `sha256("why did sla drop last night?")` → `"a3f8c1..."` | `sha256("why did sla drop last night?")` → `"a3f8c1..."` |
+| **Cache value stored** | `[0.021, -0.047, 0.183, ...]` (1024 floats) | — already in cache |
+| **What happens** | MISS → calls Jina API (~300 ms) → stores the vector | HIT → returns stored vector immediately (~0 ms), Jina is never called |
+
 ---
 
 ### Layer B — Retrieval Cache (Vector Search Results)
@@ -28,6 +37,15 @@ In an agentic RAG system there are several layers where you can cache. Below are
 **TTL:** Medium-to-long (e.g., 1 hour). You'd bust it manually if you re-ingest.  
 **Gotcha:** The retrieval query can include conversation history (see `retrieval_query()` in `service/rag.py:24`). For history-aware follow-ups the cache key must include the history, which reduces hit rate. Simpler to cache only standalone queries — or accept the lower hit rate and key on the full retrieval-query string.
 
+**Example:**
+
+| | First call | Second call (same question) |
+|---|---|---|
+| **Input** | query text `"why did SLA drop last night?"` + `top_k=3` | same question, same top_k |
+| **Cache key** | `("why did sla drop last night?", 3)` | `("why did sla drop last night?", 3)` |
+| **Cache value stored** | `[{"chunk_id": "sop#4", "content": "During peak hours...", "similarity": 0.91}, ...]` (3 chunks) | — already in cache |
+| **What happens** | MISS → pgvector cosine search runs (~20 ms) → stores the 3 chunks | HIT → returns stored chunks immediately (~0 ms), Postgres is never queried |
+
 ---
 
 ### Layer C — Tool Result Cache (Historical Metrics)
@@ -38,6 +56,15 @@ In an agentic RAG system there are several layers where you can cache. Below are
 **Key:** `(store_id, date, start_hour, end_hour)` — exact tuple.  
 **TTL:** Very long or infinite (data is immutable).  
 **Evidence for Task 22:** This is the clearest "cache miss → cache hit" demo: ask the same historical-metrics question twice; the second call should show a cache hit badge and near-zero latency.
+
+**Example:**
+
+| | First call | Second call (same period) |
+|---|---|---|
+| **Input** | `get_delivery_metrics("store_bng_01", "2026-10-08", 20, 22)` | `get_delivery_metrics("store_bng_01", "2026-10-08", 20, 22)` |
+| **Cache key** | `("store_bng_01", "2026-10-08", 20, 22)` | `("store_bng_01", "2026-10-08", 20, 22)` |
+| **Cache value stored** | Full metrics dict: `{"hourly": [...], "period_summary": {...}, "cache_hit": False, ...}` | — already in cache |
+| **What happens** | MISS → SQL query runs (~15 ms) → stores result dict, `cache_hit=False` returned to UI | HIT → returns stored dict immediately (~0 ms), `cache_hit=True` returned to UI → green badge shown |
 
 ---
 
