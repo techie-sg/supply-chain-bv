@@ -6,27 +6,9 @@
 
 ## 1. Caching Strategies for Agentic RAGs
 
-In an agentic RAG system there are several layers where you can cache. Below are the three relevant ones for this project:
+In an agentic RAG system there are several layers where you can cache. Below are the two relevant ones for this project.
 
-### Layer A — Query Embedding Cache
-**What it caches:** The float vector that `embed_query("why are deliveries slipping?")` returns from the embedding API.
-
-**Why it helps:** The same question text always produces the same vector. An API call to Jina (or any provider) is ~200–400 ms. A cache hit costs microseconds.
-
-**Key:** Hash of the normalized query string.  
-**TTL:** No expiry needed — embeddings are deterministic for a fixed model.  
-**Risk:** None. The model doesn't change mid-run, and the key is content-addressed.
-
-**Example:**
-
-| | First call | Second call (same question) |
-|---|---|---|
-| **Input** | `"why did SLA drop last night?"` | `"why did SLA drop last night?"` |
-| **Cache key** | `sha256("why did sla drop last night?")` → `"a3f8c1..."` | `sha256("why did sla drop last night?")` → `"a3f8c1..."` |
-| **Cache value stored** | `[0.021, -0.047, 0.183, ...]` (1024 floats) | — already in cache |
-| **What happens** | MISS → calls Jina API (~300 ms) → stores the vector | HIT → returns stored vector immediately (~0 ms), Jina is never called |
-
----
+> **Note on Layer A (Query Embedding Cache):** A common third layer caches the embedding vector itself, keyed on the query text. However, if Layer B is keyed on query text (our approach), a repeated identical question hits Layer B first and the embedding step is never reached — making Layer A redundant for this pipeline. Layer A is only useful when the embedding is needed before the cache lookup (e.g., Layer B keyed on vector hash), or when the same embedding feeds multiple downstream tasks. We skip it here.
 
 ### Layer B — Retrieval Cache (Vector Search Results)
 **What it caches:** The top-k document chunks returned by the pgvector cosine search for a given query embedding.
@@ -72,9 +54,11 @@ In an agentic RAG system there are several layers where you can cache. Below are
 
 | Layer | Cache it? | TTL | Reason |
 |---|---|---|---|
-| A — Query Embedding | **Yes** | No expiry | Deterministic; embedding API is the most expensive external call |
+| A — Query Embedding | **No** | — | Redundant when Layer B is keyed on query text; B hits before A is ever needed |
 | B — Retrieval (vector search) | **Yes** | 60 min | Corpus is static between ingestion runs |
 | C — Historical Metrics Tool | **Yes** | Infinite (or 24 h) | Historical data never mutates |
+
+**Important limitation — exact-match only:** Both caches use the query string as the key. A differently-worded question (`"what caused deliveries to slow down yesterday?"` vs `"why did SLA drop last night?"`) is a complete miss even though both retrieve the same chunks. Handling semantically similar queries requires a **semantic cache** (ANN search over previously cached query embeddings, e.g. `GPTCache`) — meaningful added complexity that is out of scope for this demo.
 
 **Chosen library: `cachetools`**
 
@@ -104,7 +88,7 @@ If the project moves to multiple workers (e.g., `gunicorn -w 4`), the switch to 
 | File | Change |
 |---|---|
 | `backend/domain/chat.py` | Add `cache_hit: bool \| None` field to `ToolCallTrace` typed dict |
-| `backend/service/rag.py` | Add embedding cache (Layer A) and retrieval cache (Layer B) |
+| `backend/service/rag.py` | Add retrieval cache (Layer B) |
 | `backend/service/tools.py` | Add metrics cache (Layer C); propagate `cache_hit` into `ToolCallTrace` |
 | `backend/ui/chat.py` | Render a cache hit/miss badge in `_tool_line()` (Task 25 partial) |
 | `backend/config.py` | Add `cache_ttl_retrieval_sec` setting so the retrieval TTL is configurable via `.env` |
@@ -136,46 +120,32 @@ class CacheStore:
         ...
 ```
 
-A module-level singleton per cache type (embedding, retrieval, metrics, live) is the simplest pattern. Singletons are reset on process restart, which is fine for a demo.
+A module-level singleton per cache type (retrieval, metrics) is the simplest pattern. Singletons are reset on process restart, which is fine for a demo.
 
 ---
 
-#### Task 22b — Embedding cache in `service/rag.py`
+#### Task 22b — Retrieval cache in `service/rag.py`
 
 In `RAGService.answer_question`:
-- Before calling `self.embedding_service.embed_query(...)`, check the embedding cache keyed on the retrieval query string.
-- On miss: embed and store.
-- The returned value includes a `cache_hit` bool (for logging only; not in the trace, since embedding is not a tool call).
+- Build the query text first (already done via `retrieval_query()`).
+- Check the retrieval cache keyed on `(query_text, top_k)` before embedding or querying Postgres.
+- On miss: embed and retrieve as today, then store the chunks.
+- On hit: skip both the Jina API call and the pgvector search entirely.
 
 ```python
-# Key: retrieval_query(question, history)
 query_text = retrieval_query(question, history)
-embedding, emb_hit = EMBEDDING_CACHE.get(query_text)
-if not emb_hit:
-    embedding = self.embedding_service.embed_query(query_text)
-    EMBEDDING_CACHE.set(query_text, embedding)
-```
-
----
-
-#### Task 22c — Retrieval cache in `service/rag.py`
-
-After the embedding step:
-- Check a retrieval cache keyed on `(query_text, top_k)`.
-- On miss: call `retrieve(...)` and store.
-
-```python
 chunks, ret_hit = RETRIEVAL_CACHE.get((query_text, top_k))
 if not ret_hit:
+    embedding = self.embedding_service.embed_query(query_text)
     chunks = retrieve(query_embedding=embedding, match_count=top_k)
     RETRIEVAL_CACHE.set((query_text, top_k), chunks)
 ```
 
-Log both `emb_cache_hit` and `retrieval_cache_hit` in the existing `logger.info("RAG answer completed", ...)` call.
+Log `retrieval_cache_hit` in the existing `logger.info("RAG answer completed", ...)` call.
 
 ---
 
-#### Task 22d — Metrics tool cache in `service/tools.py`
+#### Task 22c — Metrics tool cache in `service/tools.py`
 
 In `get_delivery_metrics`:
 - Before calling `read_delivery_metrics(...)`, check the metrics cache keyed on `(store_id, date, start_hour, end_hour)`.
@@ -186,7 +156,7 @@ The existing `_invoke` helper already `json.dumps` the result — the `cache_hit
 
 ---
 
-#### Task 22e — `domain/chat.py`: update `ToolCallTrace`
+#### Task 22d — `domain/chat.py`: update `ToolCallTrace`
 
 ```python
 class ToolCallTrace(TypedDict, total=False):
@@ -200,7 +170,7 @@ class ToolCallTrace(TypedDict, total=False):
 
 ---
 
-#### Task 22f — `_record_call` in `service/tools.py`
+#### Task 22e — `_record_call` in `service/tools.py`
 
 Read `data.get("cache_hit")` and add it to the trace entry.
 
@@ -246,7 +216,7 @@ Add the badge styles to the existing theme CSS (two rules: `.cache-hit` green, `
 
 | Test file | What to test |
 |---|---|
-| `tests/test_rag.py` | Cache hit on second call with same query; cache miss on first; `emb_cache_hit` and `retrieval_cache_hit` logged correctly |
+| `tests/test_rag.py` | Cache hit on second call with same query; cache miss on first; `retrieval_cache_hit` logged correctly; differently-worded question produces a miss |
 | `tests/test_tools.py` | `get_delivery_metrics` returns `cache_hit=False` on first call, `cache_hit=True` on second identical call |
 | `tests/test_gradio_app.py` or `tests/test_chat_ui.py` | `_tool_line` renders `cache-hit` badge when `cache_hit=True`, `cache-miss` badge when `False`, and neither when `None` |
 
