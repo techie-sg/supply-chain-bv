@@ -290,3 +290,59 @@ def test_providers_without_tool_support_answer_without_tools() -> None:
             "parameters": {"type": "object"},
         },
     }
+
+
+def _retrieval(monkeypatch, calls: list) -> None:
+    def retrieve(**kwargs: Any) -> list[dict]:
+        calls.append(kwargs)
+        return [{"chunk_id": "doc#rain", "content": "Slow down in rain."}]
+
+    monkeypatch.setattr(rag, "retrieve", retrieve)
+
+
+def test_repeat_question_is_served_from_cache(monkeypatch) -> None:
+    embeddings, calls = FakeEmbeddingService(), []
+    _retrieval(monkeypatch, calls)
+    service = RAGService(embeddings, FakeLLMService())
+
+    service.answer_question("Why slow in rain?")
+    assert rag.pop_retrieval_trace()["cache"] == "miss"
+    service.answer_question("  why SLOW in  rain? ")
+    trace = rag.pop_retrieval_trace()
+
+    assert trace["cache"] == "hit"
+    assert trace["chunks"] == ["doc#rain"]
+    assert len(embeddings.questions) == 1
+    assert len(calls) == 1
+
+
+def test_cache_key_separates_top_k_history_and_questions(monkeypatch) -> None:
+    embeddings, calls = FakeEmbeddingService(), []
+    _retrieval(monkeypatch, calls)
+    service = RAGService(embeddings, FakeLLMService())
+    history: list[ChatMessage] = [{"role": "user", "content": "Rain?"}]
+
+    service.answer_question("Why slow?", top_k=3)
+    service.answer_question("Why slow?", top_k=2)
+    service.answer_question("Why slow?", top_k=3, history=history)
+    service.answer_question("Why late?", top_k=3)
+
+    assert len(calls) == 4
+
+
+def test_cache_off_and_empty_results_are_not_cached(monkeypatch) -> None:
+    from service.cache import TTLCache
+
+    embeddings, calls = FakeEmbeddingService(), []
+    _retrieval(monkeypatch, calls)
+    off = RAGService(embeddings, FakeLLMService(), cache=TTLCache(0, 10))
+    off.answer_question("q")
+    assert rag.pop_retrieval_trace()["cache"] == "off"
+    off.answer_question("q")
+    assert len(calls) == 2
+
+    monkeypatch.setattr(rag, "retrieve", lambda **kwargs: [])
+    empty = RAGService(embeddings, FakeLLMService(), cache=TTLCache(10, 10))
+    empty.answer_question("none")
+    empty.answer_question("none")
+    assert len(embeddings.questions) == 4

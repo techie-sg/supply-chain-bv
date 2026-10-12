@@ -40,6 +40,16 @@ def pytest_unconfigure() -> None:
 
 
 @pytest.fixture(autouse=True)
+def fresh_caches():
+    """Process-wide caches would otherwise carry results between tests."""
+    from service.cache import reset_caches
+
+    reset_caches()
+    yield
+    reset_caches()
+
+
+@pytest.fixture(autouse=True)
 def restrict_database_connections(monkeypatch):
     """Unit tests mock the database; integration tests explicitly opt in."""
     test_url = os.environ.get("TEST_DATABASE_URL")

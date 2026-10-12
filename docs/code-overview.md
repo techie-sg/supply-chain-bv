@@ -155,7 +155,7 @@ Mapped to [tasks.md](initial/tasks.md):
 | --- | --- | --- |
 | 1 | Docs, corpus (now PDF), ingestion, retrieval, prompt, Gradio UI, deploy | Done |
 | 2 | Tools (`get_live_dispatch_status`, `get_delivery_metrics`), memory schema and recall, agent-trace panel | **Not started.** Scenario data exists in Postgres but is not wired to the LLM |
-| 3 | Guardrail layer, caching with TTL, cache/guardrail/freshness badges | Not started (prompt-level rules, now including scope) |
+| 3 | Guardrail layer, caching with TTL, cache/guardrail/freshness badges | Caching and cache badges built on `feat/retrieval-cache` (see [caching.md](caching.md)); guardrail layer not started (prompt-level rules, now including scope) |
 | 4 | Trace ids, eval harness, error analysis, dashboard, edge cases | **Eval harness in progress** on this branch: 65-row dataset, retrieval metrics, LLM judge, and (new) the retrieval-only embedding/chunking sweep is done. The judged comparison of the top setups is blocked on the Groq quota (N9). Trace ids and dashboard not started |
 
 ## 9. Recommended next steps

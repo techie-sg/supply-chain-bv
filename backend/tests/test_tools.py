@@ -243,3 +243,39 @@ def test_plain_text_local_results_are_also_traced():
     local = Tool("local", "A local tool.", {"type": "object"}, lambda args: "proposal")
     assert tools.traced_tools([local], trace)[0].run({}) == "proposal"
     assert trace[0]["tool"] == "local" and trace[0]["error"] is None
+
+
+def test_metrics_repeat_is_a_cache_hit_kept_out_of_the_model_result(
+    monkeypatch,
+    historical,
+):
+    read = Mock(return_value=historical)
+    monkeypatch.setattr(tools, "read_delivery_metrics", read)
+    trace = []
+    wrapped = tools.traced_tools(tools.dispatch_tools("S-1"), trace)
+    args = {"store_id": "S-1", "date": "2026-10-02", "start_hour": 18, "end_hour": 20}
+
+    first = wrapped[1].run(args)
+    second = wrapped[1].run(args)
+
+    assert first == second
+    assert "cache_hit" not in json.loads(second)
+    assert [call["cache_hit"] for call in trace] == [False, True]
+    assert all(call["latency_ms"] >= 0 for call in trace)
+    read.assert_called_once()
+
+
+def test_in_progress_period_is_cached_only_briefly(monkeypatch, historical):
+    today = datetime.now(TZ)
+    hour = today.hour
+    ttl = tools._metrics_ttl(today.date(), min(hour + 1, 24), 86400)
+    assert ttl == tools.IN_PROGRESS_METRICS_TTL_SEC
+    assert tools._metrics_ttl(date(2020, 1, 1), 22, 86400) == 86400
+
+
+def test_metrics_errors_are_not_cached(monkeypatch):
+    read = Mock(return_value=MetricRows(rows=[], known_store_ids=["S-1"]))
+    monkeypatch.setattr(tools, "read_delivery_metrics", read)
+    for _ in range(2):
+        tools.get_delivery_metrics("S-1", "2026-10-02", 18, 20)
+    assert read.call_count == 2

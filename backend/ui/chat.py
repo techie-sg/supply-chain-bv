@@ -86,17 +86,45 @@ def _tool_line(call: Mapping[str, Any]) -> str:
     return text
 
 
+def _cache_badge(call: Mapping[str, Any]) -> str:
+    """A cache hit/miss badge with the call's time; nothing for uncached tools."""
+    hit = call.get("cache_hit")
+    if hit is None:
+        return ""
+    ms = call.get("latency_ms")
+    label = f"cache {'hit' if hit else 'miss'}" + (f" · {ms:g} ms" if ms else "")
+    return f' <span class="badge cache-{"hit" if hit else "miss"}">{label}</span>'
+
+
+def _retrieval_line(retrieval: Mapping[str, Any]) -> str:
+    """How the playbook excerpts were served: from the cache or the vector DB."""
+    source = {"hit": "cache hit", "miss": "cache miss (vector DB)"}.get(
+        str(retrieval.get("cache")),
+        "cache off (vector DB)",
+    )
+    chunks = len(retrieval.get("chunks") or [])
+    return f"{source} · {chunks} chunk{'s' if chunks != 1 else ''} · {retrieval.get('ms', 0):g} ms"
+
+
 def _trace_html(trace: Mapping[str, Any] | None) -> str:
     """A collapsed panel: tool calls, and the manager's own settings in effect."""
-    if not trace or not (trace.get("tools") or trace.get("preferences")):
+    if not trace or not (
+        trace.get("tools") or trace.get("preferences") or trace.get("retrieval")
+    ):
         return ""
     tools = trace.get("tools") or []
-    rows = [f"<li>{escape(_tool_line(call))}</li>" for call in tools]
+    rows = [
+        f"<li>{escape(_tool_line(call))}{_cache_badge(call)}</li>" for call in tools
+    ]
     preferences = [
         f"<li>{escape(item)}</li>" for item in trace.get("preferences") or []
     ]
     count = f"{len(tools)} tool call{'s' if len(tools) != 1 else ''}"
     body = f"<p>Tools</p><ul>{''.join(rows) or '<li>None used</li>'}</ul>"
+    if retrieval := trace.get("retrieval"):
+        body += (
+            f"<p>Retrieval</p><ul><li>{escape(_retrieval_line(retrieval))}</li></ul>"
+        )
     if preferences:
         body += f"<p>Your settings applied</p><ul>{''.join(preferences)}</ul>"
     return (
