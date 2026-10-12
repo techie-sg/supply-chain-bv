@@ -1422,7 +1422,7 @@ def test_trace_shows_retrieval_cache_state_on_its_own() -> None:
 
 
 def test_tool_cache_badges_and_unchanged_legacy_traces() -> None:
-    call = {"tool": "get_delivery_metrics", "arguments": {}, "error": None}
+    call: dict = {"tool": "get_delivery_metrics", "arguments": {}, "error": None}
     hit = chat_ui._trace_html({"tools": [{**call, "cache_hit": True, "latency_ms": 2}]})
     miss = chat_ui._trace_html(
         {"tools": [{**call, "cache_hit": False, "latency_ms": 38}]},

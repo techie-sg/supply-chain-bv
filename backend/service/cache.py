@@ -13,7 +13,8 @@ from config import get_settings
 class Cache(Protocol):
     """What callers need; a Redis-backed class can replace the in-memory one."""
 
-    enabled: bool
+    @property
+    def enabled(self) -> bool: ...
 
     def get(self, key: str) -> Any | None: ...
 

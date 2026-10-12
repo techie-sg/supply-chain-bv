@@ -292,6 +292,12 @@ def test_providers_without_tool_support_answer_without_tools() -> None:
     }
 
 
+def _cache_state() -> str:
+    trace = rag.pop_retrieval_trace()
+    assert trace is not None
+    return trace["cache"]
+
+
 def _retrieval(monkeypatch, calls: list) -> None:
     def retrieve(**kwargs: Any) -> list[dict]:
         calls.append(kwargs)
@@ -301,15 +307,17 @@ def _retrieval(monkeypatch, calls: list) -> None:
 
 
 def test_repeat_question_is_served_from_cache(monkeypatch) -> None:
-    embeddings, calls = FakeEmbeddingService(), []
+    embeddings = FakeEmbeddingService()
+    calls: list[dict] = []
     _retrieval(monkeypatch, calls)
     service = RAGService(embeddings, FakeLLMService())
 
     service.answer_question("Why slow in rain?")
-    assert rag.pop_retrieval_trace()["cache"] == "miss"
+    assert _cache_state() == "miss"
     service.answer_question("  why SLOW in  rain? ")
     trace = rag.pop_retrieval_trace()
 
+    assert trace is not None
     assert trace["cache"] == "hit"
     assert trace["chunks"] == ["doc#rain"]
     assert len(embeddings.questions) == 1
@@ -317,7 +325,8 @@ def test_repeat_question_is_served_from_cache(monkeypatch) -> None:
 
 
 def test_cache_key_separates_top_k_history_and_questions(monkeypatch) -> None:
-    embeddings, calls = FakeEmbeddingService(), []
+    embeddings = FakeEmbeddingService()
+    calls: list[dict] = []
     _retrieval(monkeypatch, calls)
     service = RAGService(embeddings, FakeLLMService())
     history: list[ChatMessage] = [{"role": "user", "content": "Rain?"}]
@@ -333,11 +342,12 @@ def test_cache_key_separates_top_k_history_and_questions(monkeypatch) -> None:
 def test_cache_off_and_empty_results_are_not_cached(monkeypatch) -> None:
     from service.cache import TTLCache
 
-    embeddings, calls = FakeEmbeddingService(), []
+    embeddings = FakeEmbeddingService()
+    calls: list[dict] = []
     _retrieval(monkeypatch, calls)
     off = RAGService(embeddings, FakeLLMService(), cache=TTLCache(0, 10))
     off.answer_question("q")
-    assert rag.pop_retrieval_trace()["cache"] == "off"
+    assert _cache_state() == "off"
     off.answer_question("q")
     assert len(calls) == 2
 
