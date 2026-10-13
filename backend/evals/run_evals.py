@@ -271,7 +271,7 @@ def main() -> None:  # pragma: no cover
         _write(args.out, results)
 
     metric_keys = [f"{m}@{k}" for m in ("hit", "recall", "precision") for k in KS] + [
-        "mrr"
+        "mrr",
     ]
     if args.judge:
         metric_keys += [*JUDGE_CHECKS, "pass"]
