@@ -123,7 +123,7 @@ def main() -> None:  # pragma: no cover
     store = json.loads(CACHE.read_text()) if CACHE.exists() else {}
     parser = CachedParser()
     chunks = {name: load_chunks(parser, s) for name, s in CHUNKINGS.items()}
-    keys = [f"{m}@{k}" for m in ("hit", "recall") for k in KS] + ["mrr"]
+    keys = [f"{m}@{k}" for m in ("hit", "recall", "precision") for k in KS] + ["mrr"]
 
     results: list[dict[str, Any]] = []
     for chunking, model, tasks in CONFIGS:
