@@ -270,9 +270,9 @@ def main() -> None:  # pragma: no cover
         # Save what finished, so a rate-limit crash can resume with --answers.
         _write(args.out, results)
 
-    metric_keys = [
-        f"{m}@{k}" for m in ("hit", "recall", "precision") for k in KS
-    ] + ["mrr"]
+    metric_keys = [f"{m}@{k}" for m in ("hit", "recall", "precision") for k in KS] + [
+        "mrr"
+    ]
     if args.judge:
         metric_keys += [*JUDGE_CHECKS, "pass"]
         print(f"\nAnswer model: {rag.llm_service.model}, judge: {judge_llm.model}")
