@@ -18,6 +18,7 @@ from domain.chat import (
     AnswerResult,
     AnswerTrace,
     ChatMessage,
+    RetrievalTrace,
     StoredMessage,
     ToolCallTrace,
 )
@@ -53,7 +54,7 @@ from service.preferences import (
     describe,
     manager_preferences,
 )
-from service.rag import answer_question
+from service.rag import answer_question, pop_retrieval_trace
 from service.setting_changes import SettingChange, SettingChanges, tidy_reply
 from service.tools import dispatch_tools, traced_tools
 
@@ -266,14 +267,18 @@ class ConversationService:
 def _trace(
     settings: PreferenceService,
     tools: Sequence[ToolCallTrace] = (),
+    retrieval: RetrievalTrace | None = None,
 ) -> AnswerTrace:
     """What the answer was built from: tool calls and the manager's own settings."""
-    return {
+    trace: AnswerTrace = {
         "tools": list(tools),
         "preferences": [
             describe(item) for item in settings.effective() if item.customized
         ],
     }
+    if retrieval:
+        trace["retrieval"] = retrieval
+    return trace
 
 
 def _answer(
@@ -291,6 +296,7 @@ def _answer(
     """
     preferences = preferences or manager_preferences()
     calls: list[ToolCallTrace] = []
+    pop_retrieval_trace()  # drop any left over from an earlier answer
     reply = answer_question(
         question,
         history=history,
@@ -301,7 +307,7 @@ def _answer(
         tools=traced_tools([*tools, *dispatch_tools(preferences.store_id)], calls),
         alerts=_alerts(preferences.manager_id),
     )
-    return AnswerResult(reply, _trace(preferences, calls))
+    return AnswerResult(reply, _trace(preferences, calls, pop_retrieval_trace()))
 
 
 def _alerts(manager_id: str) -> str | None:

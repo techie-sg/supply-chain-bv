@@ -468,6 +468,9 @@ p.settings-status { padding-left: 0; color: var(--desk-muted); }
 #conversation .agent-trace summary { cursor: pointer; }
 #conversation .agent-trace p { margin: 6px 0 2px; font-weight: 600; }
 #conversation .agent-trace ul { margin: 0; padding-left: 18px; }
+#conversation .agent-trace .badge { padding: 1px 6px; border-radius: 8px; font-size: 11px; }
+#conversation .agent-trace .cache-hit { background: #d9f2e1; color: #17653a; }
+#conversation .agent-trace .cache-miss { background: #ececec; color: #555; }
 
 @media (max-width: 768px) {
   .column:has(> #chat-sidebar:not(.open)) :is(#manager-workspace, #settings-workspace, #handover-workspace, #demo-workspace) { padding-top: 44px; }

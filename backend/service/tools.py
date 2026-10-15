@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Sequence
+from contextvars import ContextVar
 from dataclasses import replace
 from datetime import date as _date
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import partial
 from time import perf_counter
 from typing import Any
@@ -18,11 +19,22 @@ from constants import TIMEZONE
 from domain.chat import ToolCallTrace
 from domain.tools import LiveStatusInput, MetricsInput, Tool
 from queries.tools import read_delivery_metrics, read_live_dispatch
+from service.cache import cache_key, metrics_cache
 from service.scenarios import scenario_metadata
 
 logger = structlog.stdlib.get_logger(__name__)
 
 STALE_AFTER_SEC = 300  # live data older than this is flagged stale
+IN_PROGRESS_METRICS_TTL_SEC = (
+    60  # a period that includes the current hour can still change
+)
+
+# Whether the last metrics lookup on this thread came from the cache; read once
+# by _record_call so the flag reaches the trace but never the model's tool result.
+_metrics_cache_hit: ContextVar[bool | None] = ContextVar(
+    "metrics_cache_hit",
+    default=None,
+)
 
 
 LIVE_DESCRIPTION = (
@@ -209,6 +221,12 @@ def get_delivery_metrics(
             reason="end_hour_not_after_start_hour",
         )
 
+    key = cache_key(store_id, date, start_hour, end_hour)
+    cache = metrics_cache()
+    if cache.enabled and (hit := cache.get(key)) is not None:
+        _metrics_cache_hit.set(True)
+        return hit
+
     data = read_delivery_metrics(store_id, day, start_hour, end_hour)
     rows = data.rows
     if not rows:
@@ -233,7 +251,7 @@ def get_delivery_metrics(
     total_riders = sum(r.riders_online for r in rows)
     total_orders = sum(r.orders for r in rows)
 
-    return {
+    result = {
         "store_id": store_id,
         "period": {
             "date": date,
@@ -272,6 +290,20 @@ def get_delivery_metrics(
         },
         "source": "hourly_metrics (historical aggregates)",
     }
+    if cache.enabled:
+        _metrics_cache_hit.set(False)
+        cache.set(key, result, _metrics_ttl(day, end_hour, cache.ttl))
+    return result
+
+
+def _metrics_ttl(day: _date, end_hour: int, ttl: float) -> float:
+    """Full TTL for a finished period; a short one while it still includes now."""
+    period_end = datetime.combine(day, datetime.min.time(), TIMEZONE) + timedelta(
+        hours=end_hour,
+    )
+    if period_end <= datetime.now(TIMEZONE):
+        return ttl
+    return min(ttl, IN_PROGRESS_METRICS_TTL_SEC)
 
 
 def _invoke(
@@ -327,6 +359,7 @@ def _record_call(
     arguments: dict[str, Any],
 ) -> str:
     started = perf_counter()
+    _metrics_cache_hit.set(None)
     output = (
         tool.run(arguments)
         if isinstance(arguments, dict)
@@ -338,21 +371,26 @@ def _record_call(
         parsed = {}
     data = parsed if isinstance(parsed, dict) else {}
     error = data.get("error")
-    trace.append(
-        {
-            "tool": tool.name,
-            "arguments": arguments if isinstance(arguments, dict) else {},
-            "error": error.get("code") if isinstance(error, dict) else None,
-            "as_of": data.get("as_of"),
-            "stale": bool(data.get("stale")),
-        },
-    )
+    duration_ms = round((perf_counter() - started) * 1000, 2)
+    cache_hit = _metrics_cache_hit.get()
+    entry: ToolCallTrace = {
+        "tool": tool.name,
+        "arguments": arguments if isinstance(arguments, dict) else {},
+        "error": error.get("code") if isinstance(error, dict) else None,
+        "as_of": data.get("as_of"),
+        "stale": bool(data.get("stale")),
+    }
+    if cache_hit is not None:  # only cacheable tools; live-status entries unchanged
+        entry["cache_hit"] = cache_hit
+        entry["latency_ms"] = duration_ms
+    trace.append(entry)
     logger.info(
         "Tool call",
         tool=tool.name,
         arguments=arguments,
-        duration_ms=round((perf_counter() - started) * 1000, 2),
+        duration_ms=duration_ms,
         is_error=bool(error),
+        cache_hit=cache_hit,
     )
     return output
 

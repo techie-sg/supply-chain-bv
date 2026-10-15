@@ -1,16 +1,18 @@
 from collections.abc import Sequence
+from contextvars import ContextVar
 from datetime import datetime
 from time import perf_counter
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import structlog
 
 from config import get_settings
 from constants import NO_GUIDANCE_ANSWER, TIMEZONE
-from domain.chat import ChatMessage
+from domain.chat import ChatMessage, RetrievalTrace
 from domain.tools import Tool
 from queries.vector_store import retrieve
 from resources import PROMPTS
+from service.cache import Cache, cache_key, retrieval_cache
 from service.embedding_service import EmbeddingService
 from service.factory import create_embedding_service, create_llm_service
 from service.llm_service import LLMService
@@ -19,6 +21,20 @@ logger = structlog.stdlib.get_logger(__name__)
 
 
 PROMPT_PATH = PROMPTS / "dispatch_manager_system.md"
+
+# How the latest retrieval on this thread was served; read once by the caller
+# that builds the answer trace, so answer_question's signature stays unchanged.
+_retrieval_trace: ContextVar[RetrievalTrace | None] = ContextVar(
+    "retrieval_trace",
+    default=None,
+)
+
+
+def pop_retrieval_trace() -> RetrievalTrace | None:
+    """The last retrieval's {cache, chunks, ms}, cleared so it is never reused."""
+    trace = _retrieval_trace.get()
+    _retrieval_trace.set(None)
+    return trace
 
 
 def retrieval_query(
@@ -45,9 +61,39 @@ class RAGService:
         self,
         embedding_service: EmbeddingService,
         llm_service: LLMService,
+        cache: Cache | None = None,
     ) -> None:
         self.embedding_service = embedding_service
         self.llm_service = llm_service
+        self.cache = cache or retrieval_cache()
+
+    def _retrieve(self, query: str, top_k: int) -> list[dict[str, Any]]:
+        """Chunks for the query, from the cache when the same one was just asked."""
+        started = perf_counter()
+        # Model and adapters decide the vector space, so they are part of the key.
+        key = cache_key(
+            self.embedding_service.model,
+            getattr(self.embedding_service, "task_adapters", None),
+            top_k,
+            " ".join(query.casefold().split()),
+        )
+        state: Literal["hit", "miss", "off"]
+        cached = self.cache.get(key) if self.cache.enabled else None
+        if cached is not None:
+            results, state = list(cached), "hit"
+        else:
+            embedding = self.embedding_service.embed_query(query)
+            results = retrieve(query_embedding=embedding, match_count=top_k)
+            if results and self.cache.enabled:
+                self.cache.set(key, tuple(results))
+            state = "miss" if self.cache.enabled else "off"
+        trace: RetrievalTrace = {
+            "cache": state,
+            "chunks": [result["chunk_id"] for result in results],
+            "ms": round((perf_counter() - started) * 1000, 1),
+        }
+        _retrieval_trace.set(trace)
+        return results
 
     def answer_question(
         self,
@@ -74,10 +120,7 @@ class RAGService:
         if top_k < 1:
             raise ValueError("top_k must be positive")
         started = perf_counter()
-        query_embedding = self.embedding_service.embed_query(
-            retrieval_query(question, history),
-        )
-        results = retrieve(query_embedding=query_embedding, match_count=top_k)
+        results = self._retrieve(retrieval_query(question, history), top_k)
         if not results:
             logger.warning("No guidance retrieved", top_k=top_k)
             return NO_GUIDANCE_ANSWER
@@ -132,9 +175,11 @@ class RAGService:
                 history=history,
             )
         )
+        retrieval_trace = _retrieval_trace.get()
         logger.info(
             "RAG answer completed",
             retrieved_chunks=len(results),
+            retrieval_cache=retrieval_trace["cache"] if retrieval_trace else None,
             duration_ms=round((perf_counter() - started) * 1000, 2),
         )
         return answer

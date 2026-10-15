@@ -1400,3 +1400,34 @@ def test_switching_manager_records_the_choice_in_the_url(ui_app) -> None:
     # browser, so the URL reads the picker.
     assert len(urls) == 2
     assert all(url.inputs == [picker] for url in urls)
+
+
+def test_trace_shows_retrieval_cache_state_on_its_own() -> None:
+    html = chat_ui._trace_html(
+        {
+            "tools": [],
+            "preferences": [],
+            "retrieval": {"cache": "hit", "chunks": ["a#1", "a#2"], "ms": 0.4},
+        },
+    )
+    assert "cache hit · 2 chunks · 0.4 ms" in html
+    miss = chat_ui._trace_html(
+        {
+            "tools": [],
+            "preferences": [],
+            "retrieval": {"cache": "miss", "chunks": [], "ms": 31},
+        },
+    )
+    assert "cache miss (vector DB) · 0 chunks · 31 ms" in miss
+
+
+def test_tool_cache_badges_and_unchanged_legacy_traces() -> None:
+    call: dict = {"tool": "get_delivery_metrics", "arguments": {}, "error": None}
+    hit = chat_ui._trace_html({"tools": [{**call, "cache_hit": True, "latency_ms": 2}]})
+    miss = chat_ui._trace_html(
+        {"tools": [{**call, "cache_hit": False, "latency_ms": 38}]},
+    )
+    assert 'cache-hit">cache hit · 2 ms' in hit
+    assert 'cache-miss">cache miss · 38 ms' in miss
+    assert "badge" not in chat_ui._trace_html({"tools": [call], "preferences": []})
+    assert chat_ui._trace_html({"tools": [], "preferences": []}) == ""

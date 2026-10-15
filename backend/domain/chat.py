@@ -15,11 +15,20 @@ class ToolCallTrace(TypedDict):
     error: str | None
     as_of: str | None
     stale: bool
+    cache_hit: NotRequired[bool | None]
+    latency_ms: NotRequired[float]
+
+
+class RetrievalTrace(TypedDict):
+    cache: Literal["hit", "miss", "off"]
+    chunks: list[str]
+    ms: float
 
 
 class AnswerTrace(TypedDict):
     tools: list[ToolCallTrace]
     preferences: list[str]
+    retrieval: NotRequired[RetrievalTrace]
 
 
 class StoredMessage(TypedDict):

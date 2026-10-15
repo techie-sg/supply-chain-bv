@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     chunking_strategy: str = "markdown_sections"
     chunk_size: int = Field(default=DEFAULT_CHUNK_SIZE, gt=0)
     chunk_overlap: int = Field(default=DEFAULT_CHUNK_OVERLAP, ge=0)
+    # In-memory cache of retrieved chunks; 0 disables. Re-ingestion cannot clear it,
+    # so the TTL is also how long old chunks can be served after a re-ingest.
+    retrieval_cache_ttl_s: int = Field(default=600, ge=0)
+    retrieval_cache_max_entries: int = Field(default=256, ge=0)
+    # Historical metrics for periods that are fully in the past; 0 disables.
+    metrics_cache_ttl_s: int = Field(default=86400, ge=0)
+    metrics_cache_max_entries: int = Field(default=256, ge=0)
     # Testing aid: when set, every alert uses this cooldown (minutes) instead of
     # its own, so a lasting breach pops up again sooner. Leave unset normally.
     alert_cooldown_override_min: int | None = Field(default=None, ge=1, le=240)
