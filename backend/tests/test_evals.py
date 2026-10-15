@@ -33,6 +33,8 @@ def test_retrieval_scores():
     assert scores["recall@1"] == 0.0
     assert scores["recall@3"] == 1.0
     assert scores["mrr"] == 0.5
+    assert scores["precision@1"] == 0.0
+    assert scores["precision@3"] == 2 / 3
     assert retrieval_scores(["a"], ["a"], ["x"])["mrr"] == 0.0
 
 

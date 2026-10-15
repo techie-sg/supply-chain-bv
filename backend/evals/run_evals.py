@@ -127,7 +127,7 @@ def load_chunks(
             d.metadata["doc_id"] for d in documents if d.metadata["source"] == source
         )
         groups += chunk_sections(
-            parser.to_markdown(BACKEND_DIR / source),
+            parser.to_markdown(CORPUS_DIR / Path(source).name),
             bodies,
             doc_id,
         )
@@ -150,7 +150,8 @@ def retrieval_scores(
     relevant: list[str],
     ranked: list[str] | list[set[str]],
 ) -> dict[str, float]:
-    """Hit@k and MRR use the must-find chunks; recall@k uses every useful chunk.
+    """Hit@k and MRR use the must-find chunks; recall@k uses every useful chunk;
+    precision@k is the share of the top k chunks holding at least one of them.
     A ranked item may be a set of section IDs when one chunk spans sections."""
     groups = [g if isinstance(g, set) else {g} for g in ranked]
     scores = {}
@@ -158,6 +159,7 @@ def retrieval_scores(
         top = set().union(*groups[:k])
         scores[f"hit@{k}"] = float(bool(top & set(relevant)))
         scores[f"recall@{k}"] = len(top & set(expected)) / len(expected)
+        scores[f"precision@{k}"] = sum(bool(g & set(expected)) for g in groups[:k]) / k
     rank = next((i for i, g in enumerate(groups, 1) if g & set(relevant)), None)
     scores["mrr"] = 1 / rank if rank else 0.0
     return scores
@@ -268,7 +270,9 @@ def main() -> None:  # pragma: no cover
         # Save what finished, so a rate-limit crash can resume with --answers.
         _write(args.out, results)
 
-    metric_keys = [f"{m}@{k}" for m in ("hit", "recall") for k in KS] + ["mrr"]
+    metric_keys = [f"{m}@{k}" for m in ("hit", "recall", "precision") for k in KS] + [
+        "mrr",
+    ]
     if args.judge:
         metric_keys += [*JUDGE_CHECKS, "pass"]
         print(f"\nAnswer model: {rag.llm_service.model}, judge: {judge_llm.model}")
