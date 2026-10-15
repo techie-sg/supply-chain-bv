@@ -9,7 +9,7 @@ import csv
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
-from statistics import median
+from statistics import median, quantiles
 from time import perf_counter
 
 from constants import DEMO_STORE_ID, TIMEZONE
@@ -31,13 +31,20 @@ def timed(call: Callable[..., object], *args: object) -> float:
 
 
 def row(path: str, cold: list[float], warm: list[float], hit_rate: float | None):
+    cold_p50 = median(cold)
+    warm_p50 = median(warm)
+    cold_p75 = quantiles(cold, n=4)[2] if len(cold) > 1 else cold[0]
+    warm_p75 = quantiles(warm, n=4)[2] if len(warm) > 1 else warm[0]
     return {
         "path": path,
         "cold_calls": len(cold),
         "warm_calls": len(warm),
-        "cold_p50_ms": round(median(cold), 2),
-        "warm_p50_ms": round(median(warm), 2),
-        "speedup_x": round(median(cold) / median(warm), 1),
+        "cold_p50_ms": round(cold_p50, 2),
+        "cold_p75_ms": round(cold_p75, 2),
+        "warm_p50_ms": round(warm_p50, 2),
+        "warm_p75_ms": round(warm_p75, 2),
+        "speedup_p50_x": round(cold_p50 / warm_p50, 1),
+        "speedup_p75_x": round(cold_p75 / warm_p75, 1),
         "hit_rate": "" if hit_rate is None else hit_rate,
     }
 
