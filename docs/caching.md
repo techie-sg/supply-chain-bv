@@ -50,4 +50,15 @@ Both are capped by `*_CACHE_MAX_ENTRIES` (default 256); the oldest entry is evic
 4. `RETRIEVAL_CACHE_TTL_S=5`, wait 5 s, ask again: miss.
 
 ## Latency evidence (task 23)
-Not recorded yet. Capture the `ms` values from the trace (or the `duration_ms` log lines) for a miss and a hit on the same question and add them here.
+Measured 2026-10-15 with `cd backend && uv run python -m evals.cache_latency --date 2026-10-07` (raw numbers in `backend/evals/cache-latency.csv`). Local pgvector, Jina `jina-embeddings-v5-text-nano`, default TTLs, single process. Retrieval used 10 corpus questions, each asked once cold then 3 more times; metrics used one 8-10pm period asked once cold then 3 more times.
+
+| Path | Cold (miss), p50 | Warm (hit), p50 | Hit rate |
+|---|---|---|---|
+| Retrieval (Jina embed + pgvector) | 530 ms | < 0.1 ms | 75% (30 of 40) |
+| `get_delivery_metrics` | 16 ms | < 0.1 ms | 75% (3 of 4) |
+| `get_live_dispatch_status` (never cached) | 85 ms first call, 17 ms after | no cache | n/a |
+
+- The 75% hit rate is set by the script (1 miss then 3 repeats). It is not a production hit rate, which depends on how often managers repeat questions.
+- Retrieval dominates: nearly all of the 530 ms is the Jina network call (about 500 ms in the logs); the database part is small.
+- The live-status first call is slower only because of connection warm-up. It is not a cache effect.
+- Timings are from one local run, not repeated across runs.
