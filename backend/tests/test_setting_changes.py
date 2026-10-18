@@ -320,3 +320,28 @@ def test_an_echoed_tool_result_or_empty_reply_is_replaced(store) -> None:
     assert tidy_reply('{"note": "plain JSON answer"}', [change]).startswith("{")
     two = tidy_reply("", [change, change])
     assert two.startswith("Proposed changes")
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("Turn on the SLA dip alert at 85%", True),
+        ("Alert me when orders waiting go above 6 minutes", True),
+        ("Turn off the orders piling up alert", True),
+        ("Set the incentive cap to 300", True),
+        ("What are my alerts?", False),
+        ("Orders are piling up, what should I do first?", False),
+        ("Rider shortage alert at 20:14: what should I do first?", False),
+    ],
+)
+def test_requests_to_change_a_setting_are_recognized(question, expected) -> None:
+    assert SettingChanges.looks_like_request(question) is expected
+
+
+def test_rejections_are_kept_for_the_reply(store) -> None:
+    changes = SettingChanges(prefs())
+    changes.run({"code": "rider_shortage_alert", "action": "set", "value": 3})
+    assert changes.proposals == []
+    assert changes.rejections == [
+        "Rider shortage must be 0.5 to 2 orders per available rider.",
+    ]

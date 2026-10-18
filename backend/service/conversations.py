@@ -379,15 +379,16 @@ def ask_question(
             if greeting is not None:
                 text, calls = greeting
                 return AnswerResult(text, _trace(preferences, calls))
-        return _tidied(
-            _answer(
-                question,
-                preferences=preferences,
-                tools=[changes.tool()],
-                **kwargs,
-            ),
-            changes,
+        result = _answer(
+            question,
+            preferences=preferences,
+            tools=[changes.tool()],
+            **kwargs,
         )
+        tried = changes.proposals or changes.rejections
+        if not tried and changes.looks_like_request(question):
+            result = _second_try(question, changes, preferences, result)
+        return _tidied(result, changes, question)
 
     service = ConversationService(
         DEMO_STORE_ID,
@@ -420,19 +421,84 @@ def _briefing(
         return None
 
 
+SETTING_CHANGE_PROMPT_PATH = PROMPTS / "setting_change.md"
+# Wording that tells the manager a change awaits their approval.
+CLAIMS_PROPOSAL = re.compile(
+    r"requires\s+your\s+(?:approval|confirmation)|proposed\s+(?:action|change|setting)",
+    re.IGNORECASE,
+)
+
+
+def _second_try(
+    question: str,
+    changes: SettingChanges,
+    preferences: PreferenceService,
+    first: AnswerResult,
+) -> AnswerResult:
+    """Ask once more, with only the settings tool, for a message that asks to
+    change a setting but got no proposal.
+
+    With the full answer prompt some models describe the change instead of
+    calling the tool, which leaves no Confirm card. A short prompt with one
+    tool is far more reliable. The reply is then written from the result.
+    """
+    calls: list[ToolCallTrace] = []
+    tool = traced_tools([changes.tool()], calls)[0]
+    try:
+        create_llm_service().generate_with_tools(
+            system_prompt=SETTING_CHANGE_PROMPT_PATH.read_text(encoding="utf-8"),
+            user_message=(
+                f"{preferences.prompt_block()}\n\n"
+                f"The manager's latest message:\n{question}"
+            ),
+            tools=[tool],
+        )
+    except (requests.RequestException, RuntimeError, ValueError):
+        logger.warning("Second try for a setting change failed", exc_info=True)
+    logger.info(
+        "Setting change second try",
+        proposed=len(changes.proposals),
+        rejected=len(changes.rejections),
+    )
+    trace = first.trace
+    if calls:
+        trace = (
+            {**trace, "tools": [*trace["tools"], *calls]}
+            if trace
+            else _trace(preferences, calls)
+        )
+    if changes.proposals:
+        return AnswerResult(tidy_reply("", changes.proposals), trace)
+    if changes.rejections:
+        return AnswerResult(
+            f"Not changed: {changes.rejections[-1]} Nothing was saved.",
+            trace,
+        )
+    return AnswerResult(first.text, trace)
+
+
 def _tidied(
     result: AnswerResult,
     changes: SettingChanges,
+    question: str = "",
 ) -> AnswerResult:
-    if not changes.proposals and re.search(
+    claims_card = re.search(
         r"\b(?:press|click)\s+\*{0,2}confirm\b",
         result.text,
         re.IGNORECASE,
-    ):
-        return AnswerResult(
-            "I couldn't prepare that setting change. Nothing was saved. You can update it in Settings or specify the setting and value again.",
-            result.trace,
+    ) or (
+        # Dispatch advice also says "requires your approval"; only a message
+        # asking for a setting change must not end with that and no card.
+        changes.looks_like_request(question) and CLAIMS_PROPOSAL.search(result.text)
+    )
+    if not changes.proposals and claims_card:
+        # Say why when the tool refused, such as a value outside the limits.
+        text = (
+            f"Not changed: {changes.rejections[-1]} Nothing was saved."
+            if changes.rejections
+            else "I couldn't prepare that setting change. Nothing was saved. You can update it in Settings or specify the setting and value again."
         )
+        return AnswerResult(text, result.trace)
     return AnswerResult(tidy_reply(result.text, changes.proposals), result.trace)
 
 

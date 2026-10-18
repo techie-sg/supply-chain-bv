@@ -923,3 +923,96 @@ def test_the_handover_card_is_only_for_handover_chats_without_messages(
     assert conversations.handover_card(started) is None
     # The handover the chat was opened with is still known.
     assert conversations.conversation_handover(started) == note_id
+
+
+class SettingsModel:
+    """Fake model for the second try: calls the settings tool with `args`."""
+
+    def __init__(self, args):
+        self.args = args
+        self.prompts: list[str] = []
+
+    def generate_with_tools(self, system_prompt, user_message, tools, history=None):
+        self.prompts.append(system_prompt)
+        if self.args is not None:
+            tools[0].run(self.args)
+        return "NONE"
+
+
+def test_second_try_proposes_when_the_first_answer_only_described_it(
+    preference_store,
+    monkeypatch,
+) -> None:
+    preferences = PreferenceService("DS-1", "karthik")
+    changes = conversations.SettingChanges(preferences)
+    model = SettingsModel({"code": "sla_dip_alert", "action": "set", "value": 85})
+    monkeypatch.setattr(conversations, "create_llm_service", lambda: model)
+    first = AnswerResult(
+        "Proposed action (requires your approval): turn on SLA dip at 85%.",
+        {"tools": [], "preferences": []},
+    )
+    result = conversations._second_try(
+        "Turn on the SLA dip alert at 85%",
+        changes,
+        preferences,
+        first,
+    )
+    assert [change.code for change in changes.proposals] == ["sla_dip_alert"]
+    assert "Press **Confirm**" in result.text
+    assert result.trace is not None and len(result.trace["tools"]) == 1
+    assert "setting change" in model.prompts[0].lower()
+
+
+def test_second_try_reports_a_limit_and_keeps_other_replies(
+    preference_store,
+    monkeypatch,
+) -> None:
+    preferences = PreferenceService("DS-1", "karthik")
+    changes = conversations.SettingChanges(preferences)
+    monkeypatch.setattr(
+        conversations,
+        "create_llm_service",
+        lambda: SettingsModel({"code": "rider_shortage_alert", "value": 3}),
+    )
+    first = AnswerResult("Which alert do you mean?")
+    result = conversations._second_try(
+        "Set the alert to 3",
+        changes,
+        preferences,
+        first,
+    )
+    assert result.text.startswith("Not changed: Rider shortage must be 0.5")
+    changes = conversations.SettingChanges(preferences)
+    monkeypatch.setattr(
+        conversations,
+        "create_llm_service",
+        lambda: SettingsModel(None),
+    )
+    result = conversations._second_try(
+        "Set the alert to 3",
+        changes,
+        preferences,
+        first,
+    )
+    assert result.text == "Which alert do you mean?"
+
+
+def test_a_described_setting_change_without_a_card_is_never_shown(
+    preference_store,
+) -> None:
+    changes = conversations.SettingChanges(PreferenceService("DS-1", "karthik"))
+    claim = AnswerResult("Proposed action (requires your approval): SLA dip at 85%.")
+    shown = conversations._tidied(claim, changes, "Turn on the SLA dip alert at 85%")
+    assert shown.text.startswith("I couldn't prepare that setting change")
+    # Dispatch advice uses the same wording and is left alone.
+    dispatch = AnswerResult(
+        "Proposed action (requires your approval): call the standby rider.",
+    )
+    kept = conversations._tidied(dispatch, changes, "Orders are piling up, what first?")
+    assert kept.text == dispatch.text
+    changes.rejections.append("Rider shortage must be 0.5 to 2.")
+    refused = conversations._tidied(claim, changes, "Set the rider shortage alert to 3")
+    assert (
+        refused.text
+        == "Not changed: Rider shortage must be 0.5 to 2. Nothing was saved."
+    )

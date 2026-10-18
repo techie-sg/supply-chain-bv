@@ -218,8 +218,10 @@ def test_ask_uses_the_briefing_only_for_greetings(monkeypatch) -> None:
         "SettingChanges",
         lambda preferences: SimpleNamespace(
             proposals=[],
+            rejections=[],
             tool=lambda: None,
             direct_request=lambda question: None,
+            looks_like_request=lambda question: False,
         ),
     )
     monkeypatch.setattr(

@@ -167,15 +167,42 @@ def _merge(
     return True, value, options or None
 
 
+CHANGE_WORDS = re.compile(
+    r"\b(?:set|change|update|turn\s+(?:on|off)|switch\s+(?:on|off)|enable|disable"
+    r"|raise|lower|increase|decrease|reset|alert\s+me|notify\s+me|warn\s+me"
+    r"|remind\s+me)\b",
+    re.IGNORECASE,
+)
+SETTING_WORDS = re.compile(
+    r"\b(?:alerts?|threshold|cooldown|incentive\s+cap|batching|briefing|greeting"
+    r"|settings?|preferences?)\b"
+    r"|\b(?:alert|notify|warn|remind)\s+me\b",
+    re.IGNORECASE,
+)
+
+
 class SettingChanges:
     """The setting-change tool for one chat turn; collects valid proposals."""
 
     def __init__(self, preferences: PreferenceService) -> None:
         self.preferences = preferences
         self.proposals: list[SettingChange] = []
+        # Why the tool refused, in order; shown when nothing was proposed.
+        self.rejections: list[str] = []
 
     def tool(self) -> Tool:
         return Tool(TOOL_NAME, TOOL_DESCRIPTION, TOOL_PARAMETERS, self.run)
+
+    @staticmethod
+    def looks_like_request(question: str) -> bool:
+        """Whether the message asks to change a setting, judged by its words.
+
+        Needs a change word and a setting word, so "what are my alerts?" or a
+        question about an alert that fired does not count.
+        """
+        return bool(
+            CHANGE_WORDS.search(question) and SETTING_WORDS.search(question),
+        )
 
     @staticmethod
     def direct_request(question: str) -> dict[str, Any] | None:
@@ -201,6 +228,7 @@ class SettingChanges:
             change = self.propose(args)
         except PreferenceError as exc:
             logger.info("Setting change rejected", code=args.get("code"))
+            self.rejections.append(str(exc))
             return json.dumps(
                 {"status": "rejected", "reason": str(exc), "saved": False},
             )
