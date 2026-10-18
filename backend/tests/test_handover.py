@@ -159,6 +159,17 @@ def shifts(monkeypatch) -> FakeShifts:
     }.items():
         monkeypatch.setattr(handover, name, method)
     monkeypatch.setattr(handover, "store_managers", lambda store_id=None: MANAGERS)
+    # The page lists the last 7 days from now; pin now to the tests' own day.
+    real_past = handover.past_handovers
+    monkeypatch.setattr(
+        handover_ui,
+        "past_handovers",
+        lambda store_id="DS-BLR-014", now=None, engine=None: real_past(
+            store_id,
+            now or ENDED,
+            engine,
+        ),
+    )
     return fake
 
 

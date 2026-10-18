@@ -379,15 +379,17 @@ def ask_question(
             if greeting is not None:
                 text, calls = greeting
                 return AnswerResult(text, _trace(preferences, calls))
-        return _tidied(
-            _answer(
-                question,
-                preferences=preferences,
-                tools=[changes.tool()],
-                **kwargs,
-            ),
-            changes,
+        if changes.about_settings(question):
+            settled = _settings_pass(question, changes, preferences)
+            if settled is not None:
+                return settled
+        result = _answer(
+            question,
+            preferences=preferences,
+            tools=[changes.tool()],
+            **kwargs,
         )
+        return _tidied(result, changes, question)
 
     service = ConversationService(
         DEMO_STORE_ID,
@@ -420,19 +422,75 @@ def _briefing(
         return None
 
 
+SETTING_CHANGE_PROMPT_PATH = PROMPTS / "setting_change.md"
+# Wording that tells the manager a change awaits their approval.
+CLAIMS_PROPOSAL = re.compile(
+    r"requires\s+your\s+(?:approval|confirmation)|proposed\s+(?:action|change|setting)",
+    re.IGNORECASE,
+)
+
+
+def _settings_pass(
+    question: str,
+    changes: SettingChanges,
+    preferences: PreferenceService,
+) -> AnswerResult | None:
+    """Try a message about settings with a short prompt and only the settings tool.
+
+    With the full answer prompt some models describe a change instead of
+    calling the tool, which leaves no Confirm card; a short prompt with one
+    tool is far more reliable. Returns the reply when a change was proposed or
+    refused, else None so the message gets a normal answer.
+    """
+    calls: list[ToolCallTrace] = []
+    tool = traced_tools([changes.tool()], calls)[0]
+    try:
+        create_llm_service().generate_with_tools(
+            system_prompt=SETTING_CHANGE_PROMPT_PATH.read_text(encoding="utf-8"),
+            user_message=(
+                f"{preferences.prompt_block()}\n\n"
+                f"The manager's latest message:\n{question}"
+            ),
+            tools=[tool],
+        )
+    except (requests.RequestException, RuntimeError, ValueError):
+        logger.warning("Settings pass failed", exc_info=True)
+    logger.info(
+        "Settings pass",
+        proposed=len(changes.proposals),
+        rejected=len(changes.rejections),
+    )
+    if changes.proposals:
+        text = tidy_reply("", changes.proposals)
+    elif changes.rejections:
+        text = f"Not changed: {changes.rejections[-1]} Nothing was saved."
+    else:
+        return None
+    return AnswerResult(text, _trace(preferences, calls))
+
+
 def _tidied(
     result: AnswerResult,
     changes: SettingChanges,
+    question: str = "",
 ) -> AnswerResult:
-    if not changes.proposals and re.search(
+    claims_card = re.search(
         r"\b(?:press|click)\s+\*{0,2}confirm\b",
         result.text,
         re.IGNORECASE,
-    ):
-        return AnswerResult(
-            "I couldn't prepare that setting change. Nothing was saved. You can update it in Settings or specify the setting and value again.",
-            result.trace,
+    ) or (
+        # Dispatch advice also says "requires your approval"; only a message
+        # asking for a setting change must not end with that and no card.
+        changes.about_settings(question) and CLAIMS_PROPOSAL.search(result.text)
+    )
+    if not changes.proposals and claims_card:
+        # Say why when the tool refused, such as a value outside the limits.
+        text = (
+            f"Not changed: {changes.rejections[-1]} Nothing was saved."
+            if changes.rejections
+            else "I couldn't prepare that setting change. Nothing was saved. You can update it in Settings or specify the setting and value again."
         )
+        return AnswerResult(text, result.trace)
     return AnswerResult(tidy_reply(result.text, changes.proposals), result.trace)
 
 

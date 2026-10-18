@@ -167,23 +167,50 @@ def _merge(
     return True, value, options or None
 
 
+# Words a message uses when it is about the manager's alerts or settings,
+# however it is phrased ("ping me", "let me know when", "make the cap 400").
+SETTING_TOPIC = re.compile(
+    r"\b(?:alerts?|alerted|alerting|notif\w*|warn\w*|remind\w*|ping\s+me"
+    r"|let\s+me\s+know|tell\s+me\s+when|threshold|limits?|cooldown|cap"
+    r"|incentive|batching|briefing|greeting|settings?|preferences?)\b",
+    re.IGNORECASE,
+)
+# The question a chat started from an alert pop-up asks: about dispatch, not settings.
+ALERT_CHAT_QUESTION = re.compile(r"\balert at \d{1,2}:\d{2}:", re.IGNORECASE)
+
+
 class SettingChanges:
     """The setting-change tool for one chat turn; collects valid proposals."""
 
     def __init__(self, preferences: PreferenceService) -> None:
         self.preferences = preferences
         self.proposals: list[SettingChange] = []
+        # Why the tool refused, in order; shown when nothing was proposed.
+        self.rejections: list[str] = []
 
     def tool(self) -> Tool:
         return Tool(TOOL_NAME, TOOL_DESCRIPTION, TOOL_PARAMETERS, self.run)
 
     @staticmethod
+    def about_settings(question: str) -> bool:
+        """Whether the message may ask to change a setting, judged by its topic.
+
+        Deliberately broad: the settings-only pass decides whether it really
+        is a change, and replies NONE when it is not.
+        """
+        return bool(SETTING_TOPIC.search(question)) and not ALERT_CHAT_QUESTION.search(
+            question,
+        )
+
+    @staticmethod
     def direct_request(question: str) -> dict[str, Any] | None:
         """Recognize a simple cap request; existing validation still owns limits."""
         match = re.fullmatch(
-            r"\s*(?:please\s+)?(?:set|change|update)\s+(?:my\s+|the\s+)?"
+            r"\s*(?:please\s+)?(?:can\s+you\s+)?"
+            r"(?:set|change|update|make|put|raise|lower|increase|decrease)\s+"
+            r"(?:my\s+|the\s+)?"
             r"incentive\s+cap\s+(?:to\s+|at\s+)?(?:₹\s*)?"
-            r"(\d+(?:\.\d+)?)\s*(?:rupees|INR)?[.!]?\s*",
+            r"(\d+(?:\.\d+)?)\s*(?:rupees|INR)?[.!?]?\s*",
             question,
             flags=re.IGNORECASE,
         )
@@ -201,6 +228,7 @@ class SettingChanges:
             change = self.propose(args)
         except PreferenceError as exc:
             logger.info("Setting change rejected", code=args.get("code"))
+            self.rejections.append(str(exc))
             return json.dumps(
                 {"status": "rejected", "reason": str(exc), "saved": False},
             )
