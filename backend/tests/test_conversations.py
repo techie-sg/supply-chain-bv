@@ -583,7 +583,11 @@ def test_policy_questions_do_not_read_dispatch_rows(monkeypatch) -> None:
     monkeypatch.setattr(conversations, "answer_question", lambda *a, **k: "policy")
     result = conversations._answer("Can riders jump red lights?", history=[])
     reply, trace = result.text, result.trace
-    assert reply == "policy" and trace == {"tools": [], "preferences": []}
+    assert reply == "policy" and trace == {
+        "tools": [],
+        "preferences": [],
+        "guardrail": {"status": "pass", "findings": []},
+    }
 
 
 def test_new_chat_first_answer_and_followups_read_the_selected_managers_fresh_personalization(

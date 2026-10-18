@@ -7,5 +7,6 @@ RESOURCE_DIR = BACKEND_DIR / "resources"
 PROMPTS = RESOURCE_DIR / "prompts"
 CORPUS_DIR = RESOURCE_DIR / "corpus"
 SCENARIO_DIR = RESOURCE_DIR / "scenarios"
+GUARDRAILS_DIR = RESOURCE_DIR / "guardrails"
 # This is a persistent source identity, retained when files move on disk.
 CORPUS_SOURCE_PREFIX = "service/rag_data/corpus"

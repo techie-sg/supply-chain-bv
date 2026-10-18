@@ -17,7 +17,7 @@ from pydantic import BaseModel, ValidationError
 
 from constants import TIMEZONE
 from domain.chat import ToolCallTrace
-from domain.tools import LiveStatusInput, MetricsInput, Tool
+from domain.tools import LiveStatusInput, MetricsInput, Tool, ToolResult
 from queries.tools import read_delivery_metrics, read_live_dispatch
 from service.cache import cache_key, metrics_cache
 from service.scenarios import scenario_metadata
@@ -356,6 +356,7 @@ def dispatch_tools(store_id: str) -> list[Tool]:
 def _record_call(
     tool: Tool,
     trace: list[ToolCallTrace],
+    results: list[ToolResult] | None,
     arguments: dict[str, Any],
 ) -> str:
     started = perf_counter()
@@ -384,6 +385,8 @@ def _record_call(
         entry["cache_hit"] = cache_hit
         entry["latency_ms"] = duration_ms
     trace.append(entry)
+    if results is not None:
+        results.append({"tool": tool.name, "result": data})
     logger.info(
         "Tool call",
         tool=tool.name,
@@ -398,6 +401,13 @@ def _record_call(
 def traced_tools(
     tools: Sequence[Tool],
     trace: list[ToolCallTrace],
+    results: list[ToolResult] | None = None,
 ) -> list[Tool]:
-    """Record actual tool executions without maintaining another model loop."""
-    return [replace(tool, run=partial(_record_call, tool, trace)) for tool in tools]
+    """Record actual tool executions without maintaining another model loop.
+
+    `results` also keeps what each call returned, for the guardrail checks;
+    it is never stored with the message.
+    """
+    return [
+        replace(tool, run=partial(_record_call, tool, trace, results)) for tool in tools
+    ]
