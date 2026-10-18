@@ -221,7 +221,7 @@ def test_ask_uses_the_briefing_only_for_greetings(monkeypatch) -> None:
             rejections=[],
             tool=lambda: None,
             direct_request=lambda question: None,
-            looks_like_request=lambda question: False,
+            about_settings=lambda question: False,
         ),
     )
     monkeypatch.setattr(

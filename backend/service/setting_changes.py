@@ -167,18 +167,16 @@ def _merge(
     return True, value, options or None
 
 
-CHANGE_WORDS = re.compile(
-    r"\b(?:set|change|update|turn\s+(?:on|off)|switch\s+(?:on|off)|enable|disable"
-    r"|raise|lower|increase|decrease|reset|alert\s+me|notify\s+me|warn\s+me"
-    r"|remind\s+me)\b",
+# Words a message uses when it is about the manager's alerts or settings,
+# however it is phrased ("ping me", "let me know when", "make the cap 400").
+SETTING_TOPIC = re.compile(
+    r"\b(?:alerts?|alerted|alerting|notif\w*|warn\w*|remind\w*|ping\s+me"
+    r"|let\s+me\s+know|tell\s+me\s+when|threshold|limits?|cooldown|cap"
+    r"|incentive|batching|briefing|greeting|settings?|preferences?)\b",
     re.IGNORECASE,
 )
-SETTING_WORDS = re.compile(
-    r"\b(?:alerts?|threshold|cooldown|incentive\s+cap|batching|briefing|greeting"
-    r"|settings?|preferences?)\b"
-    r"|\b(?:alert|notify|warn|remind)\s+me\b",
-    re.IGNORECASE,
-)
+# The question a chat started from an alert pop-up asks: about dispatch, not settings.
+ALERT_CHAT_QUESTION = re.compile(r"\balert at \d{1,2}:\d{2}:", re.IGNORECASE)
 
 
 class SettingChanges:
@@ -194,23 +192,25 @@ class SettingChanges:
         return Tool(TOOL_NAME, TOOL_DESCRIPTION, TOOL_PARAMETERS, self.run)
 
     @staticmethod
-    def looks_like_request(question: str) -> bool:
-        """Whether the message asks to change a setting, judged by its words.
+    def about_settings(question: str) -> bool:
+        """Whether the message may ask to change a setting, judged by its topic.
 
-        Needs a change word and a setting word, so "what are my alerts?" or a
-        question about an alert that fired does not count.
+        Deliberately broad: the settings-only pass decides whether it really
+        is a change, and replies NONE when it is not.
         """
-        return bool(
-            CHANGE_WORDS.search(question) and SETTING_WORDS.search(question),
+        return bool(SETTING_TOPIC.search(question)) and not ALERT_CHAT_QUESTION.search(
+            question,
         )
 
     @staticmethod
     def direct_request(question: str) -> dict[str, Any] | None:
         """Recognize a simple cap request; existing validation still owns limits."""
         match = re.fullmatch(
-            r"\s*(?:please\s+)?(?:set|change|update)\s+(?:my\s+|the\s+)?"
+            r"\s*(?:please\s+)?(?:can\s+you\s+)?"
+            r"(?:set|change|update|make|put|raise|lower|increase|decrease)\s+"
+            r"(?:my\s+|the\s+)?"
             r"incentive\s+cap\s+(?:to\s+|at\s+)?(?:₹\s*)?"
-            r"(\d+(?:\.\d+)?)\s*(?:rupees|INR)?[.!]?\s*",
+            r"(\d+(?:\.\d+)?)\s*(?:rupees|INR)?[.!?]?\s*",
             question,
             flags=re.IGNORECASE,
         )

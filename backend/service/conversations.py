@@ -379,15 +379,16 @@ def ask_question(
             if greeting is not None:
                 text, calls = greeting
                 return AnswerResult(text, _trace(preferences, calls))
+        if changes.about_settings(question):
+            settled = _settings_pass(question, changes, preferences)
+            if settled is not None:
+                return settled
         result = _answer(
             question,
             preferences=preferences,
             tools=[changes.tool()],
             **kwargs,
         )
-        tried = changes.proposals or changes.rejections
-        if not tried and changes.looks_like_request(question):
-            result = _second_try(question, changes, preferences, result)
         return _tidied(result, changes, question)
 
     service = ConversationService(
@@ -429,18 +430,17 @@ CLAIMS_PROPOSAL = re.compile(
 )
 
 
-def _second_try(
+def _settings_pass(
     question: str,
     changes: SettingChanges,
     preferences: PreferenceService,
-    first: AnswerResult,
-) -> AnswerResult:
-    """Ask once more, with only the settings tool, for a message that asks to
-    change a setting but got no proposal.
+) -> AnswerResult | None:
+    """Try a message about settings with a short prompt and only the settings tool.
 
-    With the full answer prompt some models describe the change instead of
-    calling the tool, which leaves no Confirm card. A short prompt with one
-    tool is far more reliable. The reply is then written from the result.
+    With the full answer prompt some models describe a change instead of
+    calling the tool, which leaves no Confirm card; a short prompt with one
+    tool is far more reliable. Returns the reply when a change was proposed or
+    refused, else None so the message gets a normal answer.
     """
     calls: list[ToolCallTrace] = []
     tool = traced_tools([changes.tool()], calls)[0]
@@ -454,27 +454,19 @@ def _second_try(
             tools=[tool],
         )
     except (requests.RequestException, RuntimeError, ValueError):
-        logger.warning("Second try for a setting change failed", exc_info=True)
+        logger.warning("Settings pass failed", exc_info=True)
     logger.info(
-        "Setting change second try",
+        "Settings pass",
         proposed=len(changes.proposals),
         rejected=len(changes.rejections),
     )
-    trace = first.trace
-    if calls:
-        trace = (
-            {**trace, "tools": [*trace["tools"], *calls]}
-            if trace
-            else _trace(preferences, calls)
-        )
     if changes.proposals:
-        return AnswerResult(tidy_reply("", changes.proposals), trace)
-    if changes.rejections:
-        return AnswerResult(
-            f"Not changed: {changes.rejections[-1]} Nothing was saved.",
-            trace,
-        )
-    return AnswerResult(first.text, trace)
+        text = tidy_reply("", changes.proposals)
+    elif changes.rejections:
+        text = f"Not changed: {changes.rejections[-1]} Nothing was saved."
+    else:
+        return None
+    return AnswerResult(text, _trace(preferences, calls))
 
 
 def _tidied(
@@ -489,7 +481,7 @@ def _tidied(
     ) or (
         # Dispatch advice also says "requires your approval"; only a message
         # asking for a setting change must not end with that and no card.
-        changes.looks_like_request(question) and CLAIMS_PROPOSAL.search(result.text)
+        changes.about_settings(question) and CLAIMS_PROPOSAL.search(result.text)
     )
     if not changes.proposals and claims_card:
         # Say why when the tool refused, such as a value outside the limits.

@@ -326,16 +326,30 @@ def test_an_echoed_tool_result_or_empty_reply_is_replaced(store) -> None:
     ("question", "expected"),
     [
         ("Turn on the SLA dip alert at 85%", True),
-        ("Alert me when orders waiting go above 6 minutes", True),
-        ("Turn off the orders piling up alert", True),
-        ("Set the incentive cap to 300", True),
-        ("What are my alerts?", False),
+        ("I want to be warned if more than 12 orders are waiting", True),
+        ("Let me know when riders are short, like more than 1.5 orders each", True),
+        ("Ping me only on weekends for rider shortage", True),
+        ("Lower the wait time limit to 6 mins", True),
+        ("Make my incentive cap 400", True),
+        ("What are my alerts?", True),
         ("Orders are piling up, what should I do first?", False),
-        ("Rider shortage alert at 20:14: what should I do first?", False),
+        ("Rider shortage alert at 20:14: 3 orders per rider. What should I do?", False),
     ],
 )
-def test_requests_to_change_a_setting_are_recognized(question, expected) -> None:
-    assert SettingChanges.looks_like_request(question) is expected
+def test_messages_about_settings_are_recognized(question, expected) -> None:
+    assert SettingChanges.about_settings(question) is expected
+
+
+@pytest.mark.parametrize(
+    ("question", "value"),
+    [
+        ("Make my incentive cap 400", 400),
+        ("Can you raise the incentive cap to 450?", 450),
+    ],
+)
+def test_more_ways_to_set_the_incentive_cap(question, value) -> None:
+    arguments = SettingChanges.direct_request(question)
+    assert arguments is not None and arguments["value"] == value
 
 
 def test_rejections_are_kept_for_the_reply(store) -> None:

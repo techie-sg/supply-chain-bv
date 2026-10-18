@@ -939,7 +939,7 @@ class SettingsModel:
         return "NONE"
 
 
-def test_second_try_proposes_when_the_first_answer_only_described_it(
+def test_settings_pass_proposes_with_a_short_prompt(
     preference_store,
     monkeypatch,
 ) -> None:
@@ -947,23 +947,18 @@ def test_second_try_proposes_when_the_first_answer_only_described_it(
     changes = conversations.SettingChanges(preferences)
     model = SettingsModel({"code": "sla_dip_alert", "action": "set", "value": 85})
     monkeypatch.setattr(conversations, "create_llm_service", lambda: model)
-    first = AnswerResult(
-        "Proposed action (requires your approval): turn on SLA dip at 85%.",
-        {"tools": [], "preferences": []},
-    )
-    result = conversations._second_try(
-        "Turn on the SLA dip alert at 85%",
+    result = conversations._settings_pass(
+        "I'd like SLA alerts below 85%",
         changes,
         preferences,
-        first,
     )
+    assert result is not None and "Press **Confirm**" in result.text
     assert [change.code for change in changes.proposals] == ["sla_dip_alert"]
-    assert "Press **Confirm**" in result.text
     assert result.trace is not None and len(result.trace["tools"]) == 1
     assert "setting change" in model.prompts[0].lower()
 
 
-def test_second_try_reports_a_limit_and_keeps_other_replies(
+def test_settings_pass_reports_a_limit_or_hands_back(
     preference_store,
     monkeypatch,
 ) -> None:
@@ -974,27 +969,24 @@ def test_second_try_reports_a_limit_and_keeps_other_replies(
         "create_llm_service",
         lambda: SettingsModel({"code": "rider_shortage_alert", "value": 3}),
     )
-    first = AnswerResult("Which alert do you mean?")
-    result = conversations._second_try(
-        "Set the alert to 3",
+    result = conversations._settings_pass(
+        "Warn me above 3 per rider",
         changes,
         preferences,
-        first,
     )
+    assert result is not None
     assert result.text.startswith("Not changed: Rider shortage must be 0.5")
+    # Not a change: the message gets the normal answer instead.
     changes = conversations.SettingChanges(preferences)
     monkeypatch.setattr(
         conversations,
         "create_llm_service",
         lambda: SettingsModel(None),
     )
-    result = conversations._second_try(
-        "Set the alert to 3",
-        changes,
-        preferences,
-        first,
+    assert (
+        conversations._settings_pass("What are my alerts?", changes, preferences)
+        is None
     )
-    assert result.text == "Which alert do you mean?"
 
 
 def test_a_described_setting_change_without_a_card_is_never_shown(
