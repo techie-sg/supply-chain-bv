@@ -212,8 +212,8 @@ class OpenRouterService(LLMService):
                 messages.append(
                     {"role": "tool", "tool_call_id": call_id, "content": result},
                 )
-        # Nemotron's free endpoint does not accept tool_choice="none". Finish
-        # with the collected results and no offered tools, without reexecuting.
+        # Finish with the collected results and no offered tools, without
+        # reexecuting any local actions.
         messages.append(
             {
                 "role": "user",

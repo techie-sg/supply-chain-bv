@@ -282,6 +282,8 @@ def test_ui_entry_points_use_the_demo_store_and_manager(store, monkeypatch) -> N
         personalization=None,
         tools=(),
         alerts=None,
+        tool_trace=None,
+        tool_results=None,
     ):
         seen.append(preferences)
         assert [tool.name for tool in tools] == [
@@ -367,9 +369,7 @@ def test_ui_browse_entry_points(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None, handover=None, personalization=None, tools=(), alerts=None: (
-            "reply"
-        ),
+        lambda question, **kwargs: "reply",
     )
     conversations.ask_question("Earlier")
     earlier_id = conversations.current_conversation_id()
@@ -401,6 +401,8 @@ def test_a_handover_chat_answers_with_its_own_note(store, monkeypatch) -> None:
         personalization=None,
         tools=(),
         alerts=None,
+        tool_trace=None,
+        tool_results=None,
     ):
         seen.append(handover)
         return "reply"
@@ -502,9 +504,7 @@ def test_ui_title_entry_point_uses_the_configured_model(store, monkeypatch) -> N
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None, handover=None, personalization=None, tools=(), alerts=None: (
-            "Use the standby rider."
-        ),
+        lambda question, **kwargs: "Use the standby rider.",
     )
     monkeypatch.setattr(conversations, "set_title", lambda *args, **kwargs: True)
     conversations.ask_question("Rain plan?")
@@ -551,7 +551,12 @@ def test_dispatch_tools_share_the_rag_path_and_record_their_results(
 
     def answer(question, **kwargs):
         seen.update(kwargs)
-        tool = next(t for t in kwargs["tools"] if t.name == "get_live_dispatch_status")
+        traced = conversations.traced_tools(
+            kwargs["tools"],
+            kwargs["tool_trace"],
+            kwargs["tool_results"],
+        )
+        tool = next(t for t in traced if t.name == "get_live_dispatch_status")
         result = json.loads(tool.run({"store_id": "S-9"}))
         assert result["as_of"] == "2026-10-09T20:14:00+05:30"
         return "from tools"
@@ -753,7 +758,11 @@ def test_setting_proposals_are_traced_without_a_scenario(monkeypatch) -> None:
     )
 
     def answer(question, **kwargs):
-        kwargs["tools"][0].run({"code": "incentive_cap", "value": 300})
+        conversations.traced_tools(
+            kwargs["tools"],
+            kwargs["tool_trace"],
+            kwargs["tool_results"],
+        )[0].run({"code": "incentive_cap", "value": 300})
         return "Press Confirm."
 
     monkeypatch.setattr(conversations, "answer_question", answer)
@@ -813,9 +822,7 @@ def test_ui_summary_entry_point_uses_the_open_chat(store, monkeypatch) -> None:
     monkeypatch.setattr(
         conversations,
         "answer_question",
-        lambda question, *, history, preferences, summary=None, handover=None, personalization=None, tools=(), alerts=None: (
-            "reply"
-        ),
+        lambda question, **kwargs: "reply",
     )
     conversations.ask_question("Rain plan?")
     view = conversations.conversation_summary()
@@ -878,6 +885,8 @@ def test_ui_ask_returns_the_changes_the_assistant_proposed(
         personalization=None,
         tools=(),
         alerts=None,
+        tool_trace=None,
+        tool_results=None,
     ):
         tool = next(t for t in tools if t.name == "propose_setting_change")
         tool.run({"code": "sla_dip_alert", "action": "set", "value": 85})

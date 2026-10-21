@@ -1,29 +1,36 @@
+import json
+import re
 from collections.abc import Sequence
 from contextvars import ContextVar
 from datetime import datetime
+from functools import partial
 from time import perf_counter
 from typing import Any, Literal, Protocol
 
+import requests
 import structlog
+from pydantic import ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 
 from config import get_settings
 from constants import NO_GUIDANCE_ANSWER, TIMEZONE
-from domain.chat import ChatMessage, RetrievalTrace
-from domain.tools import Tool
+from domain.chat import ChatMessage, RetrievalTrace, ToolCallTrace
+from domain.tools import PlaybookSearchInput, Tool, ToolResult
 from queries.vector_store import retrieve
 from resources import PROMPTS
 from service.cache import Cache, cache_key, retrieval_cache
 from service.embedding_service import EmbeddingService
 from service.factory import create_embedding_service, create_llm_service
 from service.llm_service import LLMService
+from service.tools import traced_tools
 
 logger = structlog.stdlib.get_logger(__name__)
 
 
 PROMPT_PATH = PROMPTS / "dispatch_manager_system.md"
+POLICY_CITATION = re.compile(r"\bDD-[A-Z0-9]+-\d{3}(?:#[\w-]+)?\b")
 
-# How the latest retrieval on this thread was served; read once by the caller
-# that builds the answer trace, so answer_question's signature stays unchanged.
+# Search activity for this answer, read once by the caller building its trace.
 _retrieval_trace: ContextVar[RetrievalTrace | None] = ContextVar(
     "retrieval_trace",
     default=None,
@@ -41,7 +48,7 @@ def retrieval_query(
     question: str,
     history: Sequence[ChatMessage] | None = None,
 ) -> str:
-    """Text embedded for retrieval; follow-ups include the latest exchange."""
+    """Baseline query for offline retrieval evals, independent of agent search."""
     if not history:
         return question
     recent_exchange = "\n".join(
@@ -92,8 +99,80 @@ class RAGService:
             "chunks": [result["chunk_id"] for result in results],
             "ms": round((perf_counter() - started) * 1000, 1),
         }
+        previous = _retrieval_trace.get()
+        if previous is not None:
+            trace["chunks"] = list(
+                dict.fromkeys([*previous["chunks"], *trace["chunks"]]),
+            )
+            trace["ms"] = round(previous["ms"] + trace["ms"], 1)
+            if previous["cache"] == "miss":
+                trace["cache"] = "miss"
         _retrieval_trace.set(trace)
         return results
+
+    def search_tool(self, top_k: int = 3) -> Tool:
+        """Policy retrieval through the same tool contract as live dispatch."""
+        if top_k < 1:
+            raise ValueError("top_k must be positive")
+        return Tool(
+            name="search_playbook",
+            description=(
+                "Look up dispatch policies, limits and permitted actions. "
+                "Required before policy advice or operational recommendations. "
+                "For policy-only questions, such as whether riders may jump "
+                "red lights, use this tool without fetching orders or riders. "
+                "For decisions about specific orders or riders, fetch their "
+                "facts first, then search applicable rules. Skip for facts-only "
+                "reports, settings and conversation. Cite returned chunk IDs; "
+                "search again if evidence is missing."
+            ),
+            parameters=PlaybookSearchInput.model_json_schema(),
+            run=partial(self._search, top_k=top_k),
+        )
+
+    def _search(self, arguments: dict[str, Any], *, top_k: int) -> str:
+        try:
+            query = PlaybookSearchInput.model_validate(arguments).query
+        except ValidationError as exc:
+            return json.dumps(
+                {
+                    "error": {
+                        "code": "INVALID_INPUT",
+                        "message": "Supply a non-empty, self-contained query.",
+                        "details": exc.errors(include_input=False, include_url=False),
+                    },
+                },
+            )
+        try:
+            results = self._retrieve(query, top_k)
+        except (
+            requests.RequestException,
+            SQLAlchemyError,
+            RuntimeError,
+            ValueError,
+        ) as exc:
+            logger.warning("Playbook search failed", error_type=type(exc).__name__)
+            return json.dumps(
+                {
+                    "error": {
+                        "code": "GUIDANCE_UNAVAILABLE",
+                        "message": (
+                            "The playbook could not be reached. Do not invent "
+                            "policy or recommend actions without it. You may "
+                            "still fetch and report operational facts."
+                        ),
+                    },
+                    "sources": [],
+                },
+            )
+        if not results:
+            return json.dumps(
+                {
+                    "error": {"code": "NO_GUIDANCE", "message": NO_GUIDANCE_ANSWER},
+                    "sources": [],
+                },
+            )
+        return json.dumps({"query": query, "sources": results})
 
     def answer_question(
         self,
@@ -106,35 +185,33 @@ class RAGService:
         personalization: str | None = None,
         tools: Sequence[Tool] = (),
         alerts: str | None = None,
+        tool_trace: list[ToolCallTrace] | None = None,
+        tool_results: list[ToolResult] | None = None,
     ) -> str:
-        """Retrieve evidence and answer using the injected provider services.
+        """Answer with on-demand policy retrieval and the other local tools.
 
         With preferences, the model sees the manager's settings and applies them.
         With tools, the model may call them before answering; the settings tool
         only proposes changes, which the manager confirms outside the model.
         `summary` stands in for older messages that `history` no longer holds.
         `handover` is the latest shift's handover notes; `personalization` contains
-        durable saved response preferences. It does not affect retrieval.
+        durable saved response preferences. The model chooses search queries
+        from the current request, history and any facts it fetched.
         `alerts` lists the manager's alerts firing now, computed from live data.
         """
-        if top_k < 1:
-            raise ValueError("top_k must be positive")
+        search = self.search_tool(top_k)
         started = perf_counter()
-        results = self._retrieve(retrieval_query(question, history), top_k)
-        if not results:
-            logger.warning("No guidance retrieved", top_k=top_k)
-            return NO_GUIDANCE_ANSWER
-
-        context = self._build_context(results)
-        user_message = f"Retrieved context:\n\n{context}\n\nQuestion: {question}"
+        _retrieval_trace.set(None)
+        results = tool_results if tool_results is not None else []
+        result_start = len(results)
+        user_message = f"Question: {question}"
         if history:
             user_message = (
                 "The manager is continuing the conversation above. Interpret the "
                 "latest message using the previous user and assistant messages. "
-                "The playbook excerpts below are retrieved reference material, "
-                "not text pasted by the manager. Answer the manager's latest "
-                "message, not the excerpts.\n\n"
-                f"<context>\n{context}\n</context>\n\n"
+                "Resolve references before searching the playbook. Earlier "
+                "policy citations are not evidence for this answer; search for "
+                "the relevant policy again when needed.\n\n"
                 f"Question: {question}"
             )
         if summary:
@@ -158,37 +235,42 @@ class RAGService:
         if preferences is not None:
             user_message = f"{preferences.prompt_block()}\n\n{user_message}"
         system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
-        if tools:
-            today = datetime.now(TIMEZONE).date().isoformat()
-            system_prompt += f"\n\nToday's date is {today} (Asia/Kolkata)."
-        answer = (
-            self.llm_service.generate_with_tools(
-                system_prompt=system_prompt,
-                user_message=user_message,
-                tools=tools,
-                history=history,
-            )
-            if tools
-            else self.llm_service.generate(
-                system_prompt=system_prompt,
-                user_message=user_message,
-                history=history,
-            )
+        today = datetime.now(TIMEZONE).date().isoformat()
+        system_prompt += f"\n\nToday's date is {today} (Asia/Kolkata)."
+        answer = self.llm_service.generate_with_tools(
+            system_prompt=system_prompt,
+            user_message=user_message,
+            tools=traced_tools(
+                [search, *tools],
+                tool_trace if tool_trace is not None else [],
+                results,
+            ),
+            history=history,
         )
+        answer = self._check_sources(answer, results[result_start:])
         retrieval_trace = _retrieval_trace.get()
         logger.info(
             "RAG answer completed",
-            retrieved_chunks=len(results),
+            retrieved_chunks=len(retrieval_trace["chunks"]) if retrieval_trace else 0,
             retrieval_cache=retrieval_trace["cache"] if retrieval_trace else None,
             duration_ms=round((perf_counter() - started) * 1000, 2),
         )
         return answer
 
     @staticmethod
-    def _build_context(results: list[dict[str, Any]]) -> str:
-        return "\n\n---\n\n".join(
-            f"[Source: {result['chunk_id']}]\n{result['content']}" for result in results
-        )
+    def _check_sources(answer: str, results: list[ToolResult]) -> str:
+        """Reject citations not retrieved in this answer, including old chat IDs."""
+        sources = {
+            source["chunk_id"]
+            for result in results
+            if result["tool"] == "search_playbook" and not result["result"].get("error")
+            for source in result["result"].get("sources", [])
+        }
+        allowed = sources | {source.split("#", 1)[0] for source in sources}
+        if any(citation not in allowed for citation in POLICY_CITATION.findall(answer)):
+            logger.warning("Answer cited policy not retrieved in this turn")
+            return NO_GUIDANCE_ANSWER
+        return answer
 
 
 def answer_question(
@@ -201,6 +283,8 @@ def answer_question(
     personalization: str | None = None,
     tools: Sequence[Tool] = (),
     alerts: str | None = None,
+    tool_trace: list[ToolCallTrace] | None = None,
+    tool_results: list[ToolResult] | None = None,
 ) -> str:
     """UI entry point composing the configured services."""
     settings = get_settings()
@@ -218,4 +302,6 @@ def answer_question(
         personalization=personalization,
         tools=tools,
         alerts=alerts,
+        tool_trace=tool_trace,
+        tool_results=tool_results,
     )
