@@ -271,7 +271,9 @@ def respond_to_pending(
     try:
         yield chat(message, previous, manager_id, conversation_id)
     except gr.Error:
-        yield previous, message, gr.skip()
+        # The manager's message is already stored. Keep it visible, including
+        # when the answer fails, and retain the draft for an explicit retry.
+        yield history, message, gr.skip()
         raise
 
 

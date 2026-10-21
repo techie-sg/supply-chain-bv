@@ -210,14 +210,23 @@ class ConversationService:
             conversation = self.start_new()
             context = {"id": conversation.id, "messages": [], "summary": None}
         # The summary stands in for older messages; recent ones stay word for word.
-        history = to_chat_messages(context["messages"])
+        messages = context["messages"]
+        retry = bool(
+            messages
+            and messages[-1]["who"] == "manager"
+            and messages[-1]["what"] == question,
+        )
+        # A retry reuses the last unanswered question. It is the current turn,
+        # not another copy in the model's preceding history.
+        history = to_chat_messages(messages[:-1] if retry else messages)
         self.conversation_id = context["id"]
         extra: dict[str, Any] = {}
         if context["summary"]:
             extra["summary"] = context["summary"]
         if context.get("handover_note_id"):
             extra["handover_note_id"] = context["handover_note_id"]
-        append_message(context["id"], new_message("manager", question), self.engine)
+        if not retry:
+            append_message(context["id"], new_message("manager", question), self.engine)
         result = self.answer(question, history=history, **extra)
         reply, trace = result.text, result.trace
         append_message(

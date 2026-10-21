@@ -21,6 +21,7 @@ Both are capped by `*_CACHE_MAX_ENTRIES` (default 256); the oldest entry is evic
 ### Metrics rules
 - Only successful results are cached; errors (invalid period, unknown store, no data) are always recomputed.
 - `cache_hit` is **not** part of the result sent to the model or of the cached value; it is recorded on the trace only.
+- Loading or reloading a scenario retires the app process's metrics cache after the database reset succeeds. The next metrics request reads the new rows. In-flight requests cannot repopulate the replacement cache with old results. Policy retrieval entries remain available.
 
 ## Trace and badges
 - `AnswerTrace.retrieval = {cache: hit|miss|off, chunks: [chunk_id], ms}` is shown in the agent-trace panel, e.g. `Retrieval: cache hit · 3 chunks · 0.4 ms` or `cache miss (vector DB) · 3 chunks · 31 ms`.
@@ -31,7 +32,7 @@ Both are capped by `*_CACHE_MAX_ENTRIES` (default 256); the oldest entry is evic
 - Older stored messages without these keys display exactly as before.
 
 ## Code map
-- `service/cache.py`: `TTLCache` (lock, injectable clock, eviction, `hits`/`misses`, `stats()`), `cache_key`, lazy singletons `retrieval_cache()` / `metrics_cache()`, `reset_caches()`. A `Cache` Protocol is the seam for Redis.
+- `service/cache.py`: `TTLCache` (lock, injectable clock, eviction, `hits`/`misses`, `stats()`), `cache_key`, lazy singletons `retrieval_cache()` / `metrics_cache()`, `invalidate_metrics_cache()` for scenario resets, `reset_caches()` for both caches. A `Cache` Protocol is the seam for Redis.
 - `config.py`: `retrieval_cache_ttl_s`, `retrieval_cache_max_entries`, `metrics_cache_ttl_s`, `metrics_cache_max_entries`.
 - `domain/chat.py`: `RetrievalTrace`; optional `ToolCallTrace.cache_hit/latency_ms`.
 - `ui/chat.py`, `ui/gradio_app.css`: retrieval line and badges.
@@ -41,7 +42,7 @@ Both are capped by `*_CACHE_MAX_ENTRIES` (default 256); the oldest entry is evic
 - **Staleness after re-ingest:** ingestion is a separate process and cannot clear the app's memory. Old chunks can be served for up to the retrieval TTL (or until restart).
 - **Per process:** each worker has its own cache; hit rates drop with more workers and a restart empties it.
 - **Redis later:** implement the `Cache` Protocol (`enabled`, `get`, `set(key, value, ttl)`), serialize values as JSON, and add a corpus version to the retrieval key (or flush on ingest) so re-ingestion invalidates it.
-- The metrics TTL treats "period end is in the past (Asia/Kolkata)" as final; synthetic data that is edited after the fact stays cached up to 24 h.
+- The metrics TTL treats "period end is in the past (Asia/Kolkata)" as final. Scenario loads clear the app process's metrics cache; manual database edits or resets from another process can stay cached up to 24 h.
 - Not built: semantic (similarity-based) caching, which adds a second vector index, a tunable threshold and harder invalidation.
 
 ## Verify

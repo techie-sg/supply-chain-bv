@@ -165,3 +165,80 @@ def test_large_chat_review_is_batched_and_resumes(context):
     assert service.review(c, extract) == 0
     assert batches[-2:] == [300, 360]
     assert c.personalization_covers_to == 419
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Order waiting alert threshold: 3 minutes.",
+        "Incentive cap: 300 rupees.",
+        "surge_only_batching: true.",
+        "Cold-chain isolation: off.",
+    ],
+)
+def test_dreaming_cannot_store_operational_setting_assignments(context, text):
+    c = chat(text)
+    assert (
+        PersonalizationService("S", "M").review(c, lambda *args: candidate(c, text))
+        == 0
+    )
+    assert not context[1]
+    assert c.personalization_covers_to == 0
+
+
+def test_mixed_personal_and_operational_context_keeps_only_personal_details(context):
+    c = chat(
+        "My name is Casey. My email is casey@example.com. Keep replies short. Set my order waiting alert threshold to 3 minutes.",
+    )
+    extracted = "Name: Casey. Email: casey@example.com. Keep replies short. Order waiting alert threshold: 3 minutes."
+    assert (
+        PersonalizationService("S", "M").review(
+            c,
+            lambda *args: candidate(c, extracted),
+        )
+        == 1
+    )
+    saved = context[0][NOTES]["value"]
+    assert (
+        "Casey" in saved
+        and "casey@example.com" in saved
+        and "Keep replies short" in saved
+    )
+    assert "threshold" not in saved and "3 minutes" not in saved
+
+
+def test_existing_learned_settings_do_not_enter_chat_context(context):
+    context[0][NOTES] = item(
+        "Name: Casey. Order waiting alert threshold: 3 minutes.",
+        "dreaming",
+    )
+    block = PersonalizationService("S", "M").prompt_block()
+    assert "Casey" in block and "threshold" not in block
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Explain rider shortage alerts in plain language.",
+        "Explain the rider shortage alert in 3 bullet points.",
+    ],
+)
+def test_personal_instructions_about_explaining_alerts_are_preserved(context, text):
+    c = chat(text)
+    assert (
+        PersonalizationService("S", "M").review(c, lambda *args: candidate(c, text))
+        == 1
+    )
+    assert context[0][NOTES]["value"] == text
+
+
+def test_compound_sentence_keeps_a_name_but_excludes_a_setting(context):
+    c = chat("My name is Casey and my incentive cap is 300 rupees.")
+    assert (
+        PersonalizationService("S", "M").review(
+            c,
+            lambda *args: candidate(c, "Name: Casey and incentive cap: 300 rupees."),
+        )
+        == 1
+    )
+    assert context[0][NOTES]["value"] == "Name: Casey"

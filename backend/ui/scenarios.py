@@ -377,7 +377,8 @@ def build_scenarios(
             gr.HTML(
                 '<div class="loader-heading"><h2>Summary &amp; personalization</h2>'
                 "<p>Run a batch for all managers without waiting for chats to "
-                "become idle. Suggested preferences still need approval.</p></div>",
+                "become idle. Verified personal context saves automatically; "
+                "operational setting proposals still need confirmation.</p></div>",
                 apply_default_css=False,
             )
             with gr.Row(elem_id="summary-job-actions"):

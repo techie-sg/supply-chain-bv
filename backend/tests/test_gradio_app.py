@@ -259,11 +259,12 @@ def test_rate_limit_restores_draft_and_explains_the_failure(monkeypatch) -> None
 
     monkeypatch.setattr(chat_ui, "ask_question", fail)
     previous = [{"role": "assistant", "content": "Earlier reply"}]
+    pending = previous + [{"role": "user", "content": "Try this"}]
     stream = chat_ui.respond_to_pending(
         "Try this",
-        previous + [{"role": "user", "content": "Try this"}],
+        pending,
     )
-    assert next(stream)[:2] == (previous, "Try this")
+    assert next(stream)[:2] == (pending, "Try this")
     with pytest.raises(gr.Error, match="rate-limiting") as error:
         next(stream)
     assert calls == ["Try this"]  # Never retries the provider or replays tools.
@@ -306,7 +307,7 @@ def test_failed_generation_restores_draft_without_duplicate_user_message(
     previous = [{"role": "assistant", "content": "Earlier reply"}]
     pending = previous + [{"role": "user", "content": "Try this"}]
     stream = chat_ui.respond_to_pending("Try this", pending)
-    assert next(stream)[:2] == (previous, "Try this")
+    assert next(stream)[:2] == (pending, "Try this")
     with pytest.raises(gr.Error, match="assistant is unavailable"):
         next(stream)
 
@@ -1431,3 +1432,27 @@ def test_tool_cache_badges_and_unchanged_legacy_traces() -> None:
     assert 'cache-miss">cache miss · 38 ms' in miss
     assert "badge" not in chat_ui._trace_html({"tools": [call], "preferences": []})
     assert chat_ui._trace_html({"tools": [], "preferences": []}) == ""
+
+
+def test_summary_failure_clears_busy_state_and_allows_retry(ui_app):
+    recoveries = [
+        fn for fn in ui_app.fns.values() if fn.fn is summary_ui.recover_summary
+    ]
+    [recovery] = recoveries
+    assert recovery.trigger_only_on_failure
+    assert ui_app.fns[recovery.trigger_after].fn is summary_ui.summarize_now
+    assert recovery.outputs[0].elem_id == "summarize-now"
+    assert recovery.js == summary_ui.FINISH_SUMMARY_JS
+    assert summary_ui.recover_summary() == gr.update(interactive=True)
+
+
+def test_demo_explains_automatic_personalization(ui_app):
+    headings = [
+        str(block.value)
+        for block in ui_app.blocks.values()
+        if isinstance(block, gr.HTML)
+    ]
+    text = next(text for text in headings if "Summary &amp; personalization" in text)
+    assert "Verified personal context saves automatically" in text
+    assert "operational setting proposals still need confirmation" in text
+    assert "Suggested preferences still need approval" not in text

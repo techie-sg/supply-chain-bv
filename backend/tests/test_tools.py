@@ -280,3 +280,51 @@ def test_metrics_errors_are_not_cached(monkeypatch):
     for _ in range(2):
         tools.get_delivery_metrics("S-1", "2026-10-02", 18, 20)
     assert read.call_count == 2
+
+
+def test_scenario_reset_retires_cached_metrics_and_inflight_writes(
+    monkeypatch,
+    historical,
+):
+    from service import scenarios
+    from service.cache import cache_key, metrics_cache, retrieval_cache
+
+    args = ("S-1", "2026-10-02", 18, 20)
+    stale = tools.get_delivery_metrics(*args)
+    assert stale["period_summary"]["total_orders"] == 30
+    old_cache = metrics_cache()
+    retrieval_cache().set("policy", "keep policy cache")
+
+    def replace(rows, engine):
+        historical.rows[:] = [metric(18, orders=96)]
+
+    monkeypatch.setattr(scenarios, "replace_scenario", replace)
+    monkeypatch.setattr(
+        scenarios,
+        "current_scenario",
+        lambda engine=None: {"scenario_key": "normal", "counts": {}},
+    )
+    scenarios.load_scenario("normal")
+    assert metrics_cache() is not old_cache
+    # A query already running before the reset must not repopulate the live cache.
+    old_cache.set(cache_key(*args), stale)
+    refreshed = tools.get_delivery_metrics(*args)
+    assert refreshed["period_summary"]["total_orders"] == 96
+    assert retrieval_cache().get("policy") == "keep policy cache"
+
+
+def test_failed_scenario_reset_keeps_the_valid_metrics_cache(monkeypatch, historical):
+    from service import scenarios
+    from service.cache import metrics_cache
+
+    cached = tools.get_delivery_metrics("S-1", "2026-10-02", 18, 20)
+    before = metrics_cache()
+
+    def fail(rows, engine):
+        raise RuntimeError("rollback")
+
+    monkeypatch.setattr(scenarios, "replace_scenario", fail)
+    with pytest.raises(RuntimeError, match="rollback"):
+        scenarios.load_scenario("normal")
+    assert metrics_cache() is before
+    assert tools.get_delivery_metrics("S-1", "2026-10-02", 18, 20) == cached
