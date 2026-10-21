@@ -19,6 +19,11 @@ run this review. Failed or unfinished reviews are retried by the summary job.
 Most batches return no update. The model saves context only when a manager
 message states a durable personal detail or instruction. It excludes temporary
 store conditions, questions, other people's details, quoted text, and secrets.
+Operational settings such as alert thresholds, cooldowns, schedules, incentive
+caps, and batching switches use the settings confirmation flow, not dreaming.
+Learned context is filtered before saving and before it enters an answer so
+these assignments cannot override the settings catalogue. Personal details and
+communication instructions in a mixed message are retained.
 Existing context is preserved unless the manager explicitly corrects it or asks
 to forget it. Assistant messages and summaries are not extraction evidence.
 

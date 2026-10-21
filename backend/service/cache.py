@@ -114,6 +114,16 @@ def metrics_cache() -> TTLCache:
     return _metrics
 
 
+def invalidate_metrics_cache() -> None:
+    """Retire the cache after a snapshot reset, including in-flight readers.
+
+    A reader that started before the reset can finish filling its old cache;
+    subsequent lookups use a new instance and cannot serve those stale rows.
+    """
+    global _metrics
+    _metrics = None
+
+
 def reset_caches() -> None:
     """Drop both singletons (tests, or after changing cache settings)."""
     global _retrieval, _metrics

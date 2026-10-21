@@ -21,6 +21,7 @@ from service.preferences import (
     PreferenceError,
     limits,
     manager_preferences,
+    validate,
 )
 from ui import personalization as personalization_ui
 from ui import suggestions as suggestions_ui
@@ -150,11 +151,7 @@ def form_values(settings: list[EffectiveSetting], status: str = "") -> list[Any]
             options = setting.options
             values = {
                 "enabled": gr.update(value=setting.enabled, label=definition.name),
-                "threshold": gr.update(
-                    value=setting.value,
-                    minimum=definition.min_value,
-                    maximum=definition.max_value,
-                ),
+                "threshold": gr.update(value=setting.value),
                 "cooldown": (options.cooldown_min if options else None)
                 or definition.default_cooldown_min,
                 "days": [day.value for day in options.days]
@@ -167,8 +164,6 @@ def form_values(settings: list[EffectiveSetting], status: str = "") -> list[Any]
         elif code == PreferenceCode.INCENTIVE_CAP:
             updates[(code, "value")] = gr.update(
                 value=setting.value if setting.enabled else None,
-                minimum=definition.min_value,
-                maximum=definition.max_value,
             )
         elif code == PreferenceCode.BRIEFING:
             updates[(code, "value")] = (
@@ -256,12 +251,45 @@ def save_settings(manager_id: str, *values: Any) -> list[Any]:
     """Save what changed for one manager; report each saved or rejected item."""
     service = manager_preferences(manager_id)
     try:
+        current = service.effective()
         definitions = {
-            setting.definition.code: setting.definition
-            for setting in service.effective()
+            setting.definition.code: setting.definition for setting in current
         }
-        messages = service.save(entries(values, definitions))
-        return form_values(service.effective(), _status(messages))
+        valid, errors = [], {}
+        for entry in entries(values, definitions):
+            code = entry["code"]
+            try:
+                validate(
+                    definitions[code],
+                    entry["enabled"],
+                    entry["value"],
+                    entry.get("options"),
+                )
+            except PreferenceError as exc:
+                errors[code] = str(exc)
+            else:
+                valid.append(entry)
+        messages = service.save(valid)
+        messages += [f"Not saved: {error}" for error in errors.values()]
+        saved = service.effective()
+        updates = form_values(saved, _status(messages))
+        by_code = {setting.definition.code: setting for setting in saved}
+        submitted: dict[tuple[str, str], Any] = dict(
+            zip(FORM_INPUTS, values, strict=True),
+        )
+        for index, (code, name) in enumerate(FORM_OUTPUTS):
+            if code not in errors:
+                continue
+            if name == "info":
+                updates[index] = (
+                    _info(by_code[code])
+                    + '<p class="setting-validation" role="alert">'
+                    + escape(errors[code])
+                    + "</p>"
+                )
+            elif (code, name) in FORM_INPUTS:
+                updates[index] = gr.update(value=submitted[(code, name)])
+        return updates
     except (SQLAlchemyError, RuntimeError) as exc:
         logger.exception("Could not save settings")
         raise gr.Error(UNAVAILABLE) from exc
@@ -495,8 +523,6 @@ def build(manager: gr.State, summary: gr.HTML | None = None) -> SettingsForm:
                             cooldown = gr.Number(
                                 label="Repeat at most every (minutes)",
                                 precision=0,
-                                minimum=5,
-                                maximum=240,
                                 min_width=140,
                             )
                         with gr.Row(elem_classes="alert-window"):

@@ -30,6 +30,7 @@ from domain.personalization import (
     PersonalizationCandidate,
     Profile,
     describe,
+    personal_context,
     validate_value,
 )
 from queries.personalization import (
@@ -91,11 +92,13 @@ class PersonalizationService:
 
     def prompt_block(self) -> str | None:
         profile = self.profile()
-        lines = [
-            describe(code, validate_value(code, entry.get("value")))
-            for code, entry in profile.items()
-            if entry.get("value")
-        ]
+        lines = []
+        for code, entry in profile.items():
+            value = entry.get("value")
+            if code == NOTES and entry.get("source") == "dreaming" and value:
+                value = personal_context(value)
+            if value:
+                lines.append(describe(code, validate_value(code, value)))
         if not lines:
             return None
         return escape("\n".join(lines), quote=False)
@@ -222,8 +225,8 @@ class PersonalizationService:
         for candidate in candidates:
             if candidate.code != NOTES:
                 continue
-            value = validate_value(NOTES, candidate.value)
-            if value == profile.get(NOTES, {}).get("value"):
+            value = validate_value(NOTES, personal_context(candidate.value))
+            if not value or value == profile.get(NOTES, {}).get("value"):
                 continue
             if not all(
                 entry.conversation_id == str(conversation.id)
@@ -237,7 +240,7 @@ class PersonalizationService:
                     "store_id": self.store_id,
                     "manager_id": self.manager_id,
                     "kind": SuggestionKind.PERSONALIZATION,
-                    "payload": {"code": NOTES, "value": candidate.value},
+                    "payload": {"code": NOTES, "value": value},
                     "reason": candidate.reason,
                     "evidence": [entry.model_dump() for entry in candidate.evidence],
                     "expected_profile": profile,

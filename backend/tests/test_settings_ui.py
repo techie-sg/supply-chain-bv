@@ -63,7 +63,7 @@ def test_form_shows_defaults_with_limits(preference_store) -> None:
     assert len(values) == ALERTS * 7 + 9
     enabled, threshold, cooldown, days, start, end, info = values[:7]
     assert enabled == gr.update(value=True, label="Rider shortage")
-    assert threshold == gr.update(value=2, minimum=0.5, maximum=2)
+    assert threshold == gr.update(value=2)
     assert (cooldown, days, start, end) == (15, [], "", "")
     assert "Allowed: 0.5 to 2 orders per available rider" in info
     assert "Default." in info
@@ -123,7 +123,7 @@ def test_reset_returns_an_item_to_its_default(preference_store) -> None:
     settings.save_settings("karthik", *values)
     result = settings.reset_setting(PreferenceCode.RIDER_SHORTAGE_ALERT)
     assert "Reset to the default. Rider shortage" in result[-1]
-    assert result[1] == gr.update(value=2, minimum=0.5, maximum=2)
+    assert result[1] == gr.update(value=2)
     locked = settings.reset_setting(PreferenceCode.COLD_CHAIN_ISOLATION)
     assert "Not reset: Cold-chain isolation is store policy" in locked[-1]
 
@@ -300,3 +300,33 @@ def test_each_manager_saves_and_sees_only_their_own_settings(preference_store) -
     assert {row.manager_id for row in preference_store.rows} == {"ananya"}
     settings.reset_setting(PreferenceCode.RIDER_SHORTAGE_ALERT, "karthik")
     assert preference_store.statuses(PreferenceCode.RIDER_SHORTAGE_ALERT) == ["active"]
+
+
+def test_invalid_cap_stays_editable_and_only_its_setting_gets_an_error(
+    preference_store,
+):
+    built = form()
+    # Gradio must let invalid numbers reach our per-setting validation.
+    assert built.incentive_amount.preprocess(600) == 600
+    assert built.alerts[settings.ALERT_CODES[0]].cooldown.preprocess(2) == 2
+    values = list(defaults(preference_store))
+    values[-2] = 600
+    values[1] = 1.5  # an independent valid change should still save
+    result = settings.save_settings("karthik", *values)
+    outputs = dict(zip(settings.FORM_OUTPUTS, result, strict=True))
+    assert outputs[(PreferenceCode.INCENTIVE_CAP, "value")] == gr.update(value=600)
+    assert 'role="alert"' in outputs[(PreferenceCode.INCENTIVE_CAP, "info")]
+    assert "₹0 to ₹500" in outputs[(PreferenceCode.INCENTIVE_CAP, "info")]
+    assert all(
+        "setting-validation" not in str(value)
+        for (code, _), value in outputs.items()
+        if code != PreferenceCode.INCENTIVE_CAP
+    )
+    assert {row.code for row in preference_store.rows} == {"rider_shortage_alert"}
+    values[-2] = 300
+    corrected = settings.save_settings("karthik", *values)
+    assert "setting-validation" not in "".join(str(v) for v in corrected)
+    assert {row.code for row in preference_store.rows} == {
+        "rider_shortage_alert",
+        "incentive_cap",
+    }

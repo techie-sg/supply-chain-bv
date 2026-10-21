@@ -1021,3 +1021,45 @@ def test_a_described_setting_change_without_a_card_is_never_shown(
         refused.text
         == "Not changed: Rider shortage must be 0.5 to 2. Nothing was saved."
     )
+
+
+def test_retry_reuses_the_stored_unanswered_question(store):
+    attempts = []
+
+    def answer(question, *, history):
+        attempts.append((question, history))
+        if len(attempts) < 3:
+            raise RuntimeError("provider unavailable")
+        return "Recovered answer"
+
+    chat = service(answer)
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="unavailable"):
+            chat.ask("Can I batch these?")
+    assert len(chat.history()) == 1
+    assert chat.ask("Can I batch these?").text == "Recovered answer"
+    assert [m["who"] for m in chat.history()] == ["manager", "assistant"]
+    assert all(history == [] for _, history in attempts)
+    # Repeating after a completed answer is a genuinely new turn.
+    chat.ask("Can I batch these?")
+    assert len(chat.history()) == 4
+    assert len(attempts[-1][1]) == 2
+
+
+def test_a_different_followup_keeps_the_previous_unanswered_question(store):
+    chat = service(
+        lambda question, **kwargs: (_ for _ in ()).throw(RuntimeError("down")),
+    )
+    with pytest.raises(RuntimeError):
+        chat.ask("First question")
+    seen = []
+    chat.answer = lambda question, **kwargs: (
+        seen.append(kwargs["history"]) or AnswerResult("Reply")
+    )
+    chat.ask("A different question")
+    assert [m["what"] for m in chat.history()] == [
+        "First question",
+        "A different question",
+        "Reply",
+    ]
+    assert seen == [[{"role": "user", "content": "First question"}]]

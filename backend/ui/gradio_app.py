@@ -222,7 +222,7 @@ def build_app() -> gr.Blocks:
             inputs=manager,
             outputs=personalization_outputs,
         )
-        summarize_button.click(
+        summary_request = summarize_button.click(
             summary_ui.summarize_now,
             inputs=[manager, active_chat],
             outputs=summary_outputs,
@@ -236,13 +236,17 @@ def build_app() -> gr.Blocks:
                 button.disabled = true;
                 return args;
             }""",
-        ).then(
+        )
+        summary_request.then(
             fn=None,
-            js="""() => {
-                const button = document.querySelector('#summarize-now');
-                button.removeAttribute('aria-busy');
-                button.disabled = false;
-            }""",
+            js=summary_ui.FINISH_SUMMARY_JS,
+            queue=False,
+            show_progress="hidden",
+        )
+        summary_request.failure(
+            summary_ui.recover_summary,
+            outputs=summarize_button,
+            js=summary_ui.FINISH_SUMMARY_JS,
             queue=False,
             show_progress="hidden",
         )

@@ -43,11 +43,11 @@ def test_openrouter_factory_honors_explicit_fallback_settings() -> None:
     assert isinstance(llm, OpenRouterService) and llm.fallback_models == ()
 
 
-def test_default_routing_uses_ultra_then_the_free_gemma_fallback() -> None:
+def test_default_routing_uses_ultra_then_the_free_lightning_fallback() -> None:
     llm = factory.create_llm_service(Settings(_env_file=None))  # type: ignore[call-arg]
     assert isinstance(llm, OpenRouterService)
     assert llm.model == "nvidia/nemotron-3-ultra-550b-a55b:free"
-    assert llm.fallback_models == ("google/gemma-4-26b-a4b-it:free",)
+    assert llm.fallback_models == ("nvidia/nemotron-3.5-lightning:free",)
 
 
 def test_fixed_size_settings_select_the_alternative_strategy() -> None:

@@ -17,6 +17,7 @@ from database.models import HourlyMetric, Order, Rider, Zone
 from domain.scenario import ScenarioData
 from queries.scenarios import read_scenario_rows, replace_scenario
 from resources import SCENARIO_DIR
+from service.cache import invalidate_metrics_cache
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -116,6 +117,7 @@ def load_scenario(key: str, engine: Engine | None = None) -> dict[str, Any]:
     started = perf_counter()
     rows, _ = build_scenario(key, datetime.now(TIMEZONE))
     replace_scenario(rows, engine)
+    invalidate_metrics_cache()
     context = current_scenario(engine)
     if context is None:
         raise RuntimeError("No saved scenario after loading")

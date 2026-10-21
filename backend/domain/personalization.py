@@ -1,11 +1,13 @@
 """Durable preferences for how a manager receives advice."""
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from constants import PERSONALIZATION_MAX_INSTRUCTIONS
+from domain.memory import PreferenceCode
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,57 @@ FIELDS = {
 }
 NOTES = "additional_instructions"
 Profile = dict[str, dict[str, Any]]
+
+SETTING_REFERENCE = re.compile(
+    r"\b(?:"
+    + "|".join(
+        re.escape(code.value).replace("_", r"[\s_-]+")
+        for code in PreferenceCode
+        if code != PreferenceCode.BRIEFING
+    )
+    + r"|(?:order|rider|frozen|sla)\b[^.!?;\n]{0,60}\b(?:alert|threshold)"
+    + r"|alert[\s_-]+(?:threshold|cooldown|schedule)"
+    + r"|briefing[\s_-]+(?:views|settings))\b",
+    re.IGNORECASE,
+)
+SETTING_VALUE = re.compile(
+    r"^\s*(?:[:=<>≥≤]\s*\S|"
+    r"(?:(?:is|to|at|of|above|below|over|under|set|keep|use|should|must|be)\s+)*"
+    r"(?:[₹$]?\s*\d|\b(?:on|off|enabled|disabled|true|false)\b))",
+    re.IGNORECASE,
+)
+
+
+def personal_context(text: str) -> str:
+    """Exclude catalogue setting assignments from learned personal context.
+
+    Keep free-form personal details and communication preferences. Only clauses
+    naming an operational setting and assigning a value are removed.
+    """
+
+    def operational(clause: str) -> bool:
+        return any(
+            SETTING_VALUE.search(clause[reference.end() :])
+            for reference in SETTING_REFERENCE.finditer(clause)
+        )
+
+    if not operational(text):
+        return text.strip()
+    kept = []
+    changed = False
+    for sentence in re.split(r"(?<=[.!?;])\s+|\n+", text):
+        if not operational(sentence):
+            kept.append(sentence)
+            continue
+        # A manager can supply a personal detail and a setting in one sentence.
+        changed = True
+        clauses = re.split(r"\s+(?:and|also)\s+|,\s*", sentence, flags=re.IGNORECASE)
+        kept.extend(clause for clause in clauses if not operational(clause))
+    return (
+        "\n".join(part.strip() for part in kept if part.strip())
+        if changed
+        else text.strip()
+    )
 
 
 def validate_value(code: str, value: str | None) -> str | None:

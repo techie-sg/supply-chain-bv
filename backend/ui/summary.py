@@ -34,6 +34,20 @@ SUMMARY_POPOVER_JS = browser_script("summary_popover.js")
 
 CLOSE_SUMMARY_JS = browser_script("close_summary.js")
 
+FINISH_SUMMARY_JS = """() => {
+    const button = document.querySelector('#summarize-now');
+    if (button) {
+        button.removeAttribute('aria-busy');
+        button.disabled = false;
+    }
+    return [];
+}"""
+
+
+def recover_summary() -> dict:
+    """A failed update must leave the summary button available for retry."""
+    return gr.update(interactive=True)
+
 
 def summary_card(
     manager_id: str = DEMO_MANAGER_ID,
