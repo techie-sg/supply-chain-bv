@@ -50,7 +50,7 @@ def test_openrouter_key_aliases_are_loaded_as_secrets(monkeypatch, name) -> None
     )
     assert "fake-openrouter-key" not in repr(settings)
     assert settings.llm_provider == "openrouter"
-    assert settings.llm_model == "nvidia/nemotron-3-super-120b-a12b:free"
+    assert settings.llm_model == "nvidia/nemotron-3-ultra-550b-a55b:free"
 
 
 def test_database_url_alias_and_secret_are_loaded_from_environment(monkeypatch) -> None:

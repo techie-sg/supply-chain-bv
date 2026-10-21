@@ -28,7 +28,7 @@ handling guardrails and has completed the reported bug fix, as of the
 | Database and retrieval | PostgreSQL, SQLAlchemy and pgvector cosine search |
 | Migrations | Alembic through `python cli.py migrate`, locally or as the Railway pre-deploy step |
 | Embeddings | Jina API, `jina-embeddings-v5-text-nano` |
-| Answer generation | OpenRouter, `nvidia/nemotron-3-super-120b-a12b:free` |
+| Answer generation | OpenRouter, `nvidia/nemotron-3-ultra-550b-a55b:free` |
 | Chunking | Markdown sections by default; optional fixed-size character windows |
 | Scenarios | YAML starting snapshots: normal, backlog and rain; current data stored in PostgreSQL |
 | Dependencies | uv, with versions locked in `backend/uv.lock` |

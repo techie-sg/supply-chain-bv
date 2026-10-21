@@ -1,6 +1,6 @@
 # Caching (Week 3, tasks 22, 23, 25)
 
-Two in-memory caches, both per process. Live dispatch status, order details and LLM answers are **never** cached. Personalization and preferences enter the prompt after retrieval, so they never affect a cache key.
+Two in-memory caches, both per process. Live dispatch status, order details and LLM answers are **never** cached. Personalization and preferences are not included in cache keys. They are available to the model, which chooses the policy search query.
 
 ## What is cached
 
@@ -12,7 +12,7 @@ Two in-memory caches, both per process. Live dispatch status, order details and 
 Both are capped by `*_CACHE_MAX_ENTRIES` (default 256); the oldest entry is evicted first.
 
 ### Retrieval key details
-- The query text is `retrieval_query(question, history)`. Follow-ups already include the last exchange, so the key is history-aware (and follow-ups hit less often). Do not key on the bare question.
+- The query text is the self-contained `query` supplied by the model to `search_playbook`. The model resolves follow-ups from history and can search using facts fetched by dispatch tools. No embedding or vector search happens until the tool is called. `retrieval_query(question, history)` remains the fixed-query baseline for offline retrieval evaluations.
 - Normalization: strip, casefold, collapse whitespace, so "Why slow in rain?" and " why SLOW in  rain? " share an entry.
 - Model, adapter flag and `top_k` are in the key so a different embedding setup never reuses vectors.
 - Keys are hashes, so raw question text never appears in a key (relevant once Redis is used).
@@ -25,7 +25,8 @@ Both are capped by `*_CACHE_MAX_ENTRIES` (default 256); the oldest entry is evic
 ## Trace and badges
 - `AnswerTrace.retrieval = {cache: hit|miss|off, chunks: [chunk_id], ms}` is shown in the agent-trace panel, e.g. `Retrieval: cache hit · 3 chunks · 0.4 ms` or `cache miss (vector DB) · 3 chunks · 31 ms`.
 - `ToolCallTrace.cache_hit` and `latency_ms` (metrics tool only) render a green `cache hit · 2 ms` / grey `cache miss · 38 ms` badge on the tool line. Live-status entries are unchanged.
-- `RAGService` publishes the retrieval trace through a context variable that `service/conversations._answer` reads once after `answer_question` returns, so the `answer_question` signature did not change.
+- `search_playbook` appears in the tool trace alongside dispatch and setting calls. Failed searches record an error and let the model continue with other tools.
+- `RAGService` publishes the retrieval trace through a context variable that `service/conversations._answer` reads once after `answer_question` returns. Several searches in one answer combine unique chunk IDs and elapsed time; any cache miss makes the combined cache status a miss. Answers that do not search have no retrieval trace.
 - Logs: `RAG answer completed` has `retrieval_cache=hit|miss|off`; `Tool call` has `cache_hit` and `duration_ms`.
 - Older stored messages without these keys display exactly as before.
 

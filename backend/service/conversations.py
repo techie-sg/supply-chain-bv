@@ -320,12 +320,10 @@ def _answer(
         summary=summary,
         handover=handover,
         personalization=manager_personalization(preferences.manager_id).prompt_block(),
-        tools=traced_tools(
-            [*tools, *dispatch_tools(preferences.store_id)],
-            calls,
-            results,
-        ),
+        tools=[*tools, *dispatch_tools(preferences.store_id)],
         alerts=alerts,
+        tool_trace=calls,
+        tool_results=results,
     )
     retrieval = pop_retrieval_trace()
     settings, described = _guardrail_settings(preferences)

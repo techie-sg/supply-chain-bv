@@ -1,10 +1,24 @@
-"""Input contracts for the read-only dispatch tools."""
+"""Input contracts for policy search and dispatch tools."""
 
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class PlaybookSearchInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query: str = Field(
+        min_length=1,
+        max_length=4000,
+        description=(
+            "A self-contained question about dispatch policy. Resolve follow-up "
+            "references from the conversation and include relevant findings from "
+            "dispatch tools. Search again for a different policy when needed."
+        ),
+    )
 
 
 class LiveStatusInput(BaseModel):

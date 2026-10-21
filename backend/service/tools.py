@@ -39,7 +39,9 @@ _metrics_cache_hit: ContextVar[bool | None] = ContextVar(
 
 LIVE_DESCRIPTION = (
     "Get the live order queue, rider statuses, and zone ride times for one "
-    "dark store. Use this for questions about the current backlog, waiting "
+    "dark store. Use only when the answer needs actual order or rider facts, "
+    "not for general policy questions such as whether riders may jump red lights. "
+    "Use this for questions about the current backlog, waiting "
     "orders, available or returning riders, batching candidates, ETAs, or a "
     "rider's hours on shift and time since last break. Figures describe the "
     "snapshot time in as_of; always quote that time with live numbers and "
@@ -49,7 +51,8 @@ METRICS_DESCRIPTION = (
     "Get historical hourly delivery metrics for one dark store, date, and "
     "hour range: order counts, SLA percentage, pick-pack, rider-wait and ride "
     "minutes, riders online, and rain flag, with an order-weighted summary. "
-    "Use this for past performance or period comparisons, once per period. "
+    "Use this for actual past performance or period comparisons, once per period; "
+    "not for policy rules or general delivery targets. "
     "Hours are start-inclusive and end-exclusive: 8 to 10pm is start_hour=20, "
     "end_hour=22. Quote the computed summary and mention hours_missing. For "
     "the current queue use get_live_dispatch_status."
