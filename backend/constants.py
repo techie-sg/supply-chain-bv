@@ -12,6 +12,7 @@ JINA_MODEL = "jina-embeddings-v5-text-nano"
 GROQ_MODEL = "openai/gpt-oss-120b"
 OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+OPENROUTER_FALLBACK_MODELS = ("nvidia/nemotron-3.5-super-vl:free",)
 LLM_MAX_TOOL_ROUNDS = 3
 DEFAULT_CHUNK_SIZE = 1600
 DEFAULT_CHUNK_OVERLAP = 200

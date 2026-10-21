@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     embedding_task_adapters: bool = False
     llm_provider: str = "openrouter"
     llm_model: str = OPENROUTER_MODEL
+    # None uses the default fallback for Nemotron 3 Super; [] disables it.
+    openrouter_fallback_models: list[str] | None = None
     chunking_strategy: str = "markdown_sections"
     chunk_size: int = Field(default=DEFAULT_CHUNK_SIZE, gt=0)
     chunk_overlap: int = Field(default=DEFAULT_CHUNK_OVERLAP, ge=0)

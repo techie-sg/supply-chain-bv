@@ -30,6 +30,7 @@ def create_llm_service(settings: Settings | None = None) -> LLMService:
         return OpenRouterService(
             model=settings.llm_model,
             api_key=settings.openrouter_api_key,
+            fallback_models=settings.openrouter_fallback_models,
         )
     if settings.llm_provider == "groq":
         return GroqService(model=settings.llm_model, api_key=settings.groq_api_key)

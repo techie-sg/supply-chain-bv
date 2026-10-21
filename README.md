@@ -66,6 +66,8 @@ The corpus is in [`backend/resources/corpus/`](backend/resources/corpus/README.m
 
 Defaults are `jina-embeddings-v5-text-nano` for embeddings and OpenRouter's [`nvidia/nemotron-3-super-120b-a12b:free`](https://openrouter.ai/nvidia/nemotron-3-super-120b-a12b:free) for answers, titles, summaries and reviews. `OPEN_ROUTER_KEY` and `OPENROUTER_API_KEY` are also accepted. Provider and chunking options are listed in [`backend/.env.example`](backend/.env.example). Reingest after changing the embedding model or chunking strategy.
 
+The default model uses `nvidia/nemotron-3.5-super-vl:free` as an outage fallback through OpenRouter. The selected model is logged and stays fixed throughout a tool-call sequence. Set `OPENROUTER_FALLBACK_MODELS=[]` to require the primary model, or supply a JSON list of fallback model IDs. A free primary accepts only free fallbacks. Other primary models have no automatic fallback unless configured explicitly.
+
 Set `LLM_PROVIDER=openrouter` and `LLM_MODEL=nvidia/nemotron-3-super-120b-a12b:free` if existing environment variables override the defaults. Groq remains selectable with `LLM_PROVIDER=groq`, `LLM_MODEL=openai/gpt-oss-120b` and `GROQ_API_KEY`. OpenRouter free endpoints have [request limits](https://openrouter.ai/docs/api/reference/limits); changing models does not remove account-wide limits.
 
 Assistant instructions live in [dispatch_manager_system.md](backend/resources/prompts/dispatch_manager_system.md), which the RAG service loads directly for each answer.

@@ -5,14 +5,19 @@ import pytest
 import requests
 from pydantic import SecretStr
 
-from constants import LLM_MAX_TOOL_ROUNDS, OPENROUTER_API_URL, OPENROUTER_MODEL
+from constants import (
+    LLM_MAX_TOOL_ROUNDS,
+    OPENROUTER_API_URL,
+    OPENROUTER_FALLBACK_MODELS,
+    OPENROUTER_MODEL,
+)
 from domain.tools import Tool
 from service import openrouter_service as openrouter
 from service.openrouter_service import OpenRouterService
 
 
-def reply(content="answer", calls=None, **extra):
-    return {
+def reply(content="answer", calls=None, model=None, **extra):
+    body = {
         "choices": [
             {
                 "message": {
@@ -26,6 +31,9 @@ def reply(content="answer", calls=None, **extra):
         ],
         "usage": {"prompt_tokens": 20, "completion_tokens": 10},
     }
+    if model is not None:
+        body["model"] = model
+    return body
 
 
 class Transport:
@@ -103,7 +111,8 @@ def test_plain_generation_keeps_history_and_uses_the_free_model(transport):
     assert request["headers"]["Authorization"] == "Bearer fake-key"
     assert request["timeout"] == (10, 120)
     payload = request["json"]
-    assert payload["model"] == OPENROUTER_MODEL
+    assert payload["models"] == [OPENROUTER_MODEL, *OPENROUTER_FALLBACK_MODELS]
+    assert "model" not in payload
     assert payload["reasoning"] == {"enabled": False}
     assert payload["temperature"] == 0
     assert "tools" not in payload and "tool_choice" not in payload
@@ -272,3 +281,47 @@ def test_empty_tool_list_uses_plain_generation(transport):
     fake = transport(reply())
     assert service().generate_with_tools("s", "u", []) == "answer"
     assert "tools" not in fake.sent[0][1]["json"]
+
+
+def test_fallback_can_be_disabled_without_replacing_the_primary(transport):
+    fake = transport(reply())
+    model = OpenRouterService(api_key=SecretStr("fake-key"), fallback_models=[])
+    assert model.generate("s", "u") == "answer"
+    assert fake.sent[0][1]["json"]["model"] == OPENROUTER_MODEL
+    assert "models" not in fake.sent[0][1]["json"]
+
+
+def test_custom_models_do_not_inherit_the_default_fallback(transport):
+    fake = transport(reply())
+    model = OpenRouterService(model="custom/model:free", api_key=SecretStr("fake-key"))
+    assert model.generate("s", "u") == "answer"
+    assert fake.sent[0][1]["json"]["model"] == "custom/model:free"
+    assert "models" not in fake.sent[0][1]["json"]
+
+
+def test_free_primary_never_silently_falls_back_to_a_paid_model():
+    with pytest.raises(ValueError, match="must also be free"):
+        OpenRouterService(fallback_models=["nvidia/paid-model"])
+
+
+@pytest.mark.parametrize("canonical_response", [False, True])
+def test_tool_followup_keeps_the_selected_fallback_and_its_free_variant(
+    transport,
+    canonical_response,
+):
+    fallback = OPENROUTER_FALLBACK_MODELS[0]
+    reported = fallback.removesuffix(":free") if canonical_response else fallback
+    fake = transport(
+        reply(None, [tool_call()], model=reported),
+        reply("Confirm the proposed change.", model=reported),
+    )
+    called = []
+    assert (
+        service().generate_with_tools("policy", "Change cap", [echo_tool(called)])
+        == "Confirm the proposed change."
+    )
+    assert called == [{"value": 300}]
+    first, second = [request["json"] for _, request in fake.sent]
+    assert first["models"][0] == OPENROUTER_MODEL
+    assert second["model"] == fallback and "models" not in second
+    assert second["messages"][-1]["role"] == "tool"

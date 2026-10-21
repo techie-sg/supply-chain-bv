@@ -29,6 +29,7 @@ def pytest_configure() -> None:
         "OPENROUTER_KEY",
         "OPEN_ROUTER_KEY",
         "OPENROUTER_API_KEY",
+        "OPENROUTER_FALLBACK_MODELS",
         "LLM_PROVIDER",
         "LLM_MODEL",
     ):
