@@ -157,7 +157,7 @@ The queue holds 12 orders: 6 packed and waiting for a rider, 4 being picked, and
 
 ## Appendix D: Key Policy Thresholds (from the Dispatch Playbook)
 
-Includes the team's [recorded demo policy decisions](../backend/service/rag_data/corpus/README.md).
+Includes the team's [recorded demo policy decisions](../backend/resources/corpus/README.md).
 
 | Rule | Threshold |
 |---|---|

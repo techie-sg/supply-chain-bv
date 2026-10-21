@@ -1,44 +1,47 @@
 # DispatchDesk team
 
-Current workstream ownership confirmed by Sunny on October 5, 2026:
+## Ownership
 
-| Workstream | Owners | Scope |
+| Group | Team members | Responsibilities |
 | --- | --- | --- |
-| 1. Retrieval evaluations | Ravi and Vishnu | Compare embedding models, chunk sizes and embedding/chunking approaches against a shared evaluation set. |
-| 2. Two dispatch tools | Ravi and Vishnu | Build the two agreed operational tools and define their input/output contracts for integration. |
-| 3. Memory | Sunny, Sharad and Ranjan | Design persistent preferences and episodes, relevant recall, updates/deletion, isolation and concise alerts; preserve existing procedural guidance. |
-| 4. Dreaming | Sunny, Sharad and Ranjan | Define and test a bounded reflection/consolidation process over recorded experience, with source evidence and reviewed changes. |
+| RAG, evaluations and observability | Vishnu Mohan, Ravisekhar R | Own the policy corpus, chunking, embeddings, ingestion and retrieval; the two read-only dispatch tools; retrieval and answer evaluations; instrumentation and caching; the 6-pager. |
+| Setup, integration and reliability | Sunny Gupta, Priya Ranjan, Sharad Nailwal | Own repository setup, dependencies, environment configuration, database models and migrations, scenario loading, Gradio integration, Railway deployment and CI; conversation history, settings, personalization, summaries, handover and dreaming; reliability fixes, guardrails, the README and PR/FAQ. |
 
-This ownership supersedes the earlier assignment of tools work to the setup
-group. Memory design is a new learning area for Sunny and requires dedicated
-study as well as implementation. Detailed subtask allocation within each group
-remains to be agreed. The four workstreams are not implemented milestones.
+Both groups coordinate tool contracts, integration and reviews. Sharad is
+handling guardrails and has completed the reported bug fix, as of the
+18 October 2026 update.
 
-## Existing group responsibilities
+## Current priorities
 
-| Group | Team members | Tasks |
+| Workstream | Owners | Focus |
 | --- | --- | --- |
-| 1 : RAG and 6-pager | Vishnu Mohan, Ravisekhar R | Prepare the policy corpus; implement chunking, Jina embeddings, document ingestion, pgvector retrieval, and LLM answer generation; validate retrieval and grounded responses; write and maintain the 6-pager. |
-| 2 : Setup and integration | Sunny Gupta, Priya Ranjan, Sharad Nailwal | Set up the repository, dependencies, and environment configuration; implement database models, migrations, and scenario loading; integrate services with the Gradio UI; configure Railway deployment and CI; write the README and PR/FAQ. Own memory and dreaming under the current allocation above; coordinate integration of the other group's tools. Action approval, guardrails, caching, observability, end-to-end evaluation and demo scope require separate agreement. |
+| Evaluations | Vishnu Mohan, Ravisekhar R | Compare embedding models and chunking strategies against a shared dataset; review retrieval quality and grounded answers. |
+| Observability and caching | Vishnu Mohan, Ravisekhar R | Instrument retrieval and provider calls, measure latency and cache behavior, and integrate results with the application. |
+| Reliability and integration | Sunny Gupta, Priya Ranjan, Sharad Nailwal | Resolve failures across chat, tools, settings, memory and handover; verify the complete demo flow. |
+| Guardrails | Sharad Nailwal, with Sunny Gupta and Priya Ranjan | Validate tool inputs, enforce setting approvals and manager isolation, and handle untrusted input. |
 
-Each group shares its listed tasks and coordinates integration and review with the other group.
-
-## Current stack
+## Technology stack
 
 | Component | Implementation |
 | --- | --- |
 | Application | Python 3.13 and Gradio |
-| Database and retrieval | PostgreSQL, SQLAlchemy, and pgvector cosine search |
-| Migrations | Alembic; run manually from a local machine |
+| Database and retrieval | PostgreSQL, SQLAlchemy and pgvector cosine search |
+| Migrations | Alembic through `python cli.py migrate`, locally or as the Railway pre-deploy step |
 | Embeddings | Jina API, `jina-embeddings-v5-text-nano` |
 | Answer generation | OpenRouter, `nvidia/nemotron-3-super-120b-a12b:free` |
 | Chunking | Markdown sections by default; optional fixed-size character windows |
-| Scenario definitions | YAML starting snapshots: normal, backlog, rain |
-| Dependencies | uv; locked versions in `backend/uv.lock` |
+| Scenarios | YAML starting snapshots: normal, backlog and rain; current data stored in PostgreSQL |
+| Dependencies | uv, with versions locked in `backend/uv.lock` |
 | Deployment | Railway with Railpack; Gradio serves the application directly |
 
-## Current scope
+## Product scope
 
-The assistant retrieves playbook passages and answers policy questions with conversation history stored in PostgreSQL. Demo tools load synthetic scenarios into PostgreSQL and inspect the latest saved rows. Operational rows are not part of the chat pipeline.
+DispatchDesk combines playbook retrieval with saved conversation history and
+read-only tools for operational snapshots and hourly metrics. Manager settings,
+personalization, summaries, alerts, handover and daily review support the chat
+workflow. Settings proposals require manager confirmation. Operational tools
+read data and do not execute dispatch actions.
 
-Operational tools, persistent store preferences, simulated action approval, a separate guardrail layer, caching, and observability dashboards remain planned work. The [requirements](initial/requirements.md) define the intended behavior; the [source task plan](initial/tasks.md) records the project milestones. Setup instructions are in the [README](../README.md).
+See the [README](../README.md) for setup and implemented behavior,
+[requirements](initial/requirements.md) for the product requirements, and
+[initial task plan](initial/tasks.md) for the original project milestones.
