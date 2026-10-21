@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -37,6 +37,13 @@ class MetricsInput(BaseModel):
             "Must be greater than start_hour. 8 to 10pm is start_hour=20, end_hour=22."
         ),
     )
+
+
+class ToolResult(TypedDict):
+    """What one tool call returned to the model, kept for the guardrail checks."""
+
+    tool: str
+    result: dict[str, Any]
 
 
 @dataclass(frozen=True)

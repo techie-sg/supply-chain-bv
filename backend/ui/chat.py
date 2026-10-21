@@ -106,10 +106,29 @@ def _retrieval_line(retrieval: Mapping[str, Any]) -> str:
     return f"{source} · {chunks} chunk{'s' if chunks != 1 else ''} · {retrieval.get('ms', 0):g} ms"
 
 
+GUARDRAIL_BADGES = {
+    "flagged": ("guardrail-reframed", "Guardrail: unverified figures"),
+    "reframed": ("guardrail-reframed", "Guardrail: reframed"),
+    "blocked": ("guardrail-blocked", "Guardrail: refused unsafe request"),
+    "unchecked": ("guardrail-unchecked", "Guardrail: not checked"),
+}
+
+
+def _guardrail_badge(guardrail: Mapping[str, Any] | None) -> str:
+    """A badge when the guardrails changed or refused the answer; none for a pass."""
+    if not guardrail or guardrail.get("status") not in GUARDRAIL_BADGES:
+        return ""
+    css, label = GUARDRAIL_BADGES[guardrail["status"]]
+    return f' <span class="badge {css}">{label}</span>'
+
+
 def _trace_html(trace: Mapping[str, Any] | None) -> str:
     """A collapsed panel: tool calls, and the manager's own settings in effect."""
     if not trace or not (
-        trace.get("tools") or trace.get("preferences") or trace.get("retrieval")
+        trace.get("tools")
+        or trace.get("preferences")
+        or trace.get("retrieval")
+        or trace.get("guardrail")
     ):
         return ""
     tools = trace.get("tools") or []
@@ -127,9 +146,16 @@ def _trace_html(trace: Mapping[str, Any] | None) -> str:
         )
     if preferences:
         body += f"<p>Your settings applied</p><ul>{''.join(preferences)}</ul>"
+    guardrail = trace.get("guardrail")
+    if guardrail:
+        findings = [
+            f"<li>{escape(item['rule'])}: {escape(item['detail'])}</li>"
+            for item in guardrail.get("findings") or []
+        ]
+        body += f"<p>Guardrails</p><ul>{''.join(findings) or '<li>All checks passed</li>'}</ul>"
     return (
-        f'<details class="agent-trace"><summary>Agent trace · {count}</summary>'
-        f"{body}</details>"
+        f'<details class="agent-trace"><summary>Agent trace · {count}'
+        f"{_guardrail_badge(guardrail)}</summary>{body}</details>"
     )
 
 

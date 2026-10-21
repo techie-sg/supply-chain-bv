@@ -25,10 +25,22 @@ class RetrievalTrace(TypedDict):
     ms: float
 
 
+class GuardrailFinding(TypedDict):
+    rule: str
+    detail: str
+
+
+class GuardrailTrace(TypedDict):
+    status: Literal["pass", "flagged", "reframed", "blocked", "unchecked"]
+    rail: NotRequired[str]
+    findings: list[GuardrailFinding]
+
+
 class AnswerTrace(TypedDict):
     tools: list[ToolCallTrace]
     preferences: list[str]
     retrieval: NotRequired[RetrievalTrace]
+    guardrail: NotRequired[GuardrailTrace]
 
 
 class StoredMessage(TypedDict):

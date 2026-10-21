@@ -223,10 +223,11 @@ def test_tool_failures_are_returned_without_internal_database_details(monkeypatc
 
 
 def test_live_results_reach_the_model_and_the_trace(dispatch):
-    trace = []
-    wrapped = tools.traced_tools(tools.dispatch_tools("S-1"), trace)
+    trace, results = [], []
+    wrapped = tools.traced_tools(tools.dispatch_tools("S-1"), trace, results)
     output = json.loads(wrapped[0].run({"store_id": "S-1"}))
     assert output["queue"]["open_orders"] == 1
+    assert results == [{"tool": "get_live_dispatch_status", "result": output}]
     assert trace == [
         {
             "tool": "get_live_dispatch_status",

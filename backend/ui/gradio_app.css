@@ -471,6 +471,9 @@ p.settings-status { padding-left: 0; color: var(--desk-muted); }
 #conversation .agent-trace .badge { padding: 1px 6px; border-radius: 8px; font-size: 11px; }
 #conversation .agent-trace .cache-hit { background: #d9f2e1; color: #17653a; }
 #conversation .agent-trace .cache-miss { background: #ececec; color: #555; }
+#conversation .agent-trace .guardrail-reframed { background: #fdf0d5; color: #8a5a00; }
+#conversation .agent-trace .guardrail-blocked { background: #fbe0de; color: #a12a1f; }
+#conversation .agent-trace .guardrail-unchecked { background: #ececec; color: #555; }
 
 @media (max-width: 768px) {
   .column:has(> #chat-sidebar:not(.open)) :is(#manager-workspace, #settings-workspace, #handover-workspace, #demo-workspace) { padding-top: 44px; }

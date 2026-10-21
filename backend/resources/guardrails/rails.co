@@ -1,0 +1,56 @@
+# A blocking rail stops the chain; service/guardrails.py replaces this text
+# with the refusal its action prepared.
+define bot refuse
+  "I can't help with that."
+
+define flow check unsafe request
+  $blocked = execute unsafe_request
+  if $blocked
+    bot refuse
+    stop
+
+define flow check rider safety
+  $blocked = execute drafted_pressure
+  if $blocked
+    bot refuse
+    stop
+
+define flow check rider extension
+  $blocked = execute rider_hours_refusal
+  if $blocked
+    bot refuse
+    stop
+
+# Flag only, and before any rail adds notes, so it reads the model's own text.
+define flow check figures
+  execute unverified_figures
+
+define flow check rider hours
+  $fixed = execute rider_hours_fix
+  if $fixed
+    $bot_message = $fixed
+
+define flow check batching
+  $fixed = execute batching_fix
+  if $fixed
+    $bot_message = $fixed
+
+define flow check execution claims
+  $fixed = execute execution_claims_fix
+  if $fixed
+    $bot_message = $fixed
+
+define flow check preferences
+  $fixed = execute preference_conflict_fix
+  if $fixed
+    $bot_message = $fixed
+
+define flow check eta promises
+  $fixed = execute eta_promise_fix
+  if $fixed
+    $bot_message = $fixed
+
+define flow check stale data
+  $fixed = execute stale_data_fix
+  if $fixed
+    $bot_message = $fixed

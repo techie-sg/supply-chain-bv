@@ -18,11 +18,13 @@ from domain.chat import (
     AnswerResult,
     AnswerTrace,
     ChatMessage,
+    GuardrailTrace,
     RetrievalTrace,
     StoredMessage,
     ToolCallTrace,
 )
-from domain.tools import Tool
+from domain.memory import PreferenceCode
+from domain.tools import Tool, ToolResult
 from queries.conversations import (
     append_message,
     latest_conversation,
@@ -40,6 +42,7 @@ from resources import PROMPTS
 from service.alerts import alerts_block
 from service.briefing import briefing, is_greeting
 from service.factory import create_llm_service
+from service.guardrails import check_question, check_reply
 from service.handover import (
     ShiftView,
     chat_handover,
@@ -268,8 +271,12 @@ def _trace(
     settings: PreferenceService,
     tools: Sequence[ToolCallTrace] = (),
     retrieval: RetrievalTrace | None = None,
+    guardrail: GuardrailTrace | None = None,
 ) -> AnswerTrace:
-    """What the answer was built from: tool calls and the manager's own settings."""
+    """What the answer was built from: tool calls and the manager's own settings.
+
+    Also what the guardrails did to it, when they ran.
+    """
     trace: AnswerTrace = {
         "tools": list(tools),
         "preferences": [
@@ -278,6 +285,8 @@ def _trace(
     }
     if retrieval:
         trace["retrieval"] = retrieval
+    if guardrail:
+        trace["guardrail"] = guardrail
     return trace
 
 
@@ -292,22 +301,65 @@ def _answer(
 ) -> AnswerResult:
     """Answer through RAG and the configured provider, recording local tool calls.
 
-    A chat opened by a hand over answers with its own note in view.
+    A chat opened by a hand over answers with its own note in view. The
+    guardrails check the question first and the reply before it is shown.
     """
     preferences = preferences or manager_preferences()
+    refused = check_question(question)
+    if refused is not None:
+        return AnswerResult(refused.text, _trace(preferences, guardrail=refused.trace))
     calls: list[ToolCallTrace] = []
+    results: list[ToolResult] = []
     pop_retrieval_trace()  # drop any left over from an earlier answer
+    handover = chat_handover_block(handover_note_id, preferences.store_id)
+    alerts = _alerts(preferences.manager_id)
     reply = answer_question(
         question,
         history=history,
         preferences=preferences,
         summary=summary,
-        handover=chat_handover_block(handover_note_id, preferences.store_id),
+        handover=handover,
         personalization=manager_personalization(preferences.manager_id).prompt_block(),
-        tools=traced_tools([*tools, *dispatch_tools(preferences.store_id)], calls),
-        alerts=_alerts(preferences.manager_id),
+        tools=traced_tools(
+            [*tools, *dispatch_tools(preferences.store_id)],
+            calls,
+            results,
+        ),
+        alerts=alerts,
     )
-    return AnswerResult(reply, _trace(preferences, calls, pop_retrieval_trace()))
+    retrieval = pop_retrieval_trace()
+    settings, described = _guardrail_settings(preferences)
+    # Figures the model saw outside the tools, so G1 does not flag them.
+    references = "\n".join(
+        [
+            *(text for text in (alerts, handover, summary) if text),
+            *(message["content"] for message in history),
+            *described,
+        ],
+    )
+    guarded = check_reply(question, reply, results, settings, references)
+    return AnswerResult(
+        guarded.text,
+        _trace(preferences, calls, retrieval, guarded.trace),
+    )
+
+
+def _guardrail_settings(
+    preferences: PreferenceService,
+) -> tuple[dict[str, Any], list[str]]:
+    """The stored values the guardrails test (G6), and every setting described."""
+    effective = {item.definition.code: item for item in preferences.effective()}
+
+    def value(code: PreferenceCode) -> Any:
+        item = effective.get(code)
+        return item.value if item is not None and item.enabled else None
+
+    settings = {
+        "surge_only_batching": bool(value(PreferenceCode.SURGE_ONLY_BATCHING)),
+        "rider_shortage_threshold": value(PreferenceCode.RIDER_SHORTAGE_ALERT),
+        "incentive_cap": value(PreferenceCode.INCENTIVE_CAP),
+    }
+    return settings, [describe(item) for item in effective.values()]
 
 
 def _alerts(manager_id: str) -> str | None:

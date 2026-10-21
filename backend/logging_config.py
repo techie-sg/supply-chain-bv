@@ -52,7 +52,8 @@ def configure_logging() -> None:
                 existing.close()
                 candidate.propagate = True
     logging.captureWarnings(True)
-    for name in ("httpx", "httpcore", "urllib3"):
+    # NeMo Guardrails logs every rail event, with the message text, at info.
+    for name in ("httpx", "httpcore", "urllib3", "nemoguardrails"):
         logging.getLogger(name).setLevel(logging.WARNING)
 
 

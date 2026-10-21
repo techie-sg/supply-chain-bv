@@ -1,0 +1,18 @@
+# DispatchDesk guardrails (docs/guardrails.md). Every rail runs a Python
+# action from service/guardrails.py; none calls a language model, so no
+# models are configured.
+rails:
+  input:
+    flows:
+      - check unsafe request
+  output:
+    flows:
+      - check rider safety
+      - check rider extension
+      - check figures
+      - check rider hours
+      - check batching
+      - check preferences
+      - check execution claims
+      - check eta promises
+      - check stale data
