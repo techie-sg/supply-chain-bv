@@ -10,7 +10,12 @@ import structlog
 from pydantic import SecretStr
 
 from config import get_settings, require
-from constants import LLM_MAX_TOOL_ROUNDS, OPENROUTER_API_URL, OPENROUTER_MODEL
+from constants import (
+    LLM_MAX_TOOL_ROUNDS,
+    OPENROUTER_API_URL,
+    OPENROUTER_FALLBACK_MODELS,
+    OPENROUTER_MODEL,
+)
 from domain.chat import ChatMessage
 from domain.tools import Tool
 from service.llm_service import LLMService
@@ -23,9 +28,23 @@ class OpenRouterService(LLMService):
         self,
         model: str = OPENROUTER_MODEL,
         api_key: SecretStr | None = None,
+        fallback_models: Sequence[str] | None = None,
     ) -> None:
         self.model = model
         self._api_key = api_key
+        if fallback_models is None:
+            fallback_models = (
+                OPENROUTER_FALLBACK_MODELS if model == OPENROUTER_MODEL else ()
+            )
+        self.fallback_models = tuple(
+            candidate
+            for candidate in dict.fromkeys(fallback_models)
+            if candidate != model
+        )
+        if model.endswith(":free") and any(
+            not candidate.endswith(":free") for candidate in self.fallback_models
+        ):
+            raise ValueError("Fallbacks for a free model must also be free models.")
 
     @staticmethod
     def _messages(
@@ -43,18 +62,28 @@ class OpenRouterService(LLMService):
         self,
         messages: list[dict[str, Any]],
         tools: Sequence[Tool] = (),
-    ) -> dict[str, Any]:
+        *,
+        model: str | None = None,
+    ) -> tuple[dict[str, Any], str]:
         api_key = require(
             self._api_key or get_settings().openrouter_api_key,
             "OPENROUTER_KEY",
         )
         payload: dict[str, Any] = {
-            "model": self.model,
             "messages": messages,
             "temperature": 0,
             "max_tokens": 8192,
             "reasoning": {"enabled": False},
         }
+        # OpenRouter performs failover before any local tool is executed. Once
+        # a tool round selects a model, subsequent rounds keep that same model.
+        candidates = (
+            [model] if model is not None else [self.model, *self.fallback_models]
+        )
+        if len(candidates) > 1:
+            payload["models"] = candidates
+        else:
+            payload["model"] = candidates[0]
         if tools:
             payload.update(
                 tools=[tool.schema() for tool in tools],
@@ -90,14 +119,29 @@ class OpenRouterService(LLMService):
         message = choice.get("message")
         if not isinstance(message, dict) or message.get("role") != "assistant":
             raise RuntimeError("OpenRouter returned an invalid assistant message.")
+        served = body.get("model")
+        selected = next(
+            (
+                candidate
+                for candidate in candidates
+                if candidate == served or candidate.removesuffix(":free") == served
+            ),
+            candidates[0],
+        )
+        if selected != self.model:
+            logger.info(
+                "OpenRouter fallback selected",
+                requested_model=self.model,
+                model=selected,
+            )
         logger.info(
             "OpenRouter generation completed",
-            model=self.model,
+            model=selected,
             messages=len(messages),
             tokens=body.get("usage"),
             duration_ms=round((perf_counter() - started) * 1000, 2),
         )
-        return message
+        return message, selected
 
     @staticmethod
     def _answer(message: dict[str, Any]) -> str:
@@ -119,7 +163,7 @@ class OpenRouterService(LLMService):
         history: Sequence[ChatMessage] | None = None,
     ) -> str:
         return self._answer(
-            self._complete(self._messages(system_prompt, user_message, history)),
+            self._complete(self._messages(system_prompt, user_message, history))[0],
         )
 
     def generate_with_tools(
@@ -133,8 +177,9 @@ class OpenRouterService(LLMService):
             return self.generate(system_prompt, user_message, history)
         messages = self._messages(system_prompt, user_message, history)
         by_name = {tool.name: tool for tool in tools}
+        selected: str | None = None
         for _ in range(LLM_MAX_TOOL_ROUNDS):
-            message = self._complete(messages, tools)
+            message, selected = self._complete(messages, tools, model=selected)
             calls = message.get("tool_calls")
             if not calls:
                 return self._answer(message)
@@ -175,4 +220,4 @@ class OpenRouterService(LLMService):
                 "content": "Answer the original question using the tool results above. No more tools are available for this answer.",
             },
         )
-        return self._answer(self._complete(messages))
+        return self._answer(self._complete(messages, model=selected)[0])

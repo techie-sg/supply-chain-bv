@@ -71,6 +71,13 @@ def test_database_url_alias_and_secret_are_loaded_from_environment(monkeypatch) 
     assert "preferred@localhost" not in repr(settings)
 
 
+def test_openrouter_fallbacks_load_from_a_json_environment_value(monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_FALLBACK_MODELS", '["example/backup:free"]')
+    assert Settings().openrouter_fallback_models == ["example/backup:free"]
+    monkeypatch.setenv("OPENROUTER_FALLBACK_MODELS", "[]")
+    assert Settings().openrouter_fallback_models == []
+
+
 def test_local_env_file_is_loaded_but_process_environment_wins(
     tmp_path,
     monkeypatch,

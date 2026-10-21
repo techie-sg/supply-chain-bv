@@ -37,6 +37,12 @@ def test_groq_remains_an_explicit_provider_option() -> None:
     assert isinstance(llm, GroqService) and llm.model == GROQ_MODEL
 
 
+def test_openrouter_factory_honors_explicit_fallback_settings() -> None:
+    settings = Settings(_env_file=None, openrouter_fallback_models=[])  # type: ignore[call-arg]
+    llm = factory.create_llm_service(settings)
+    assert isinstance(llm, OpenRouterService) and llm.fallback_models == ()
+
+
 def test_fixed_size_settings_select_the_alternative_strategy() -> None:
     settings = Settings(  # type: ignore[call-arg]
         _env_file=None,
