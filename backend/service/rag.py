@@ -1,4 +1,5 @@
 import json
+import math
 import re
 from collections.abc import Sequence
 from contextvars import ContextVar
@@ -31,6 +32,78 @@ logger = structlog.stdlib.get_logger(__name__)
 
 PROMPT_PATH = PROMPTS / "dispatch_manager_system.md"
 POLICY_CITATION = re.compile(r"\bDD-[A-Z0-9]+-\d{3}(?:#[\w-]+)?\b")
+POLICY_TOPIC = re.compile(
+    r"\b(?:polic(?:y|ies)|playbook|SOPs?|rules?)\b",
+    re.IGNORECASE,
+)
+POLICY_LANGUAGE = re.compile(
+    r"\b(?:allowed|permitted|eligible|eligibility|prohibited|forbidden|mandatory)\b"
+    r"|\b(?:polic(?:y|ies)|playbook|SOPs?|rules?)\s+(?:says?|states?|requires?|limits?|allows?|permits?|forbids?|mandates?|is|are)\b"
+    r"|\b(?:according to|under)\s+(?:the\s+)?(?:store\s+)?(?:polic(?:y|ies)|playbook|SOPs?|rules?)\b"
+    r"|\b(?:batch(?:ing|ed)?|bundle|combine|pair|group)\b.{0,80}\b(?:orders?|deliveries|frozen|items?|them|those)\b"
+    r"|\b(?:orders?|deliveries|frozen|items?)\b.{0,80}\b(?:batch(?:ing|ed)?|bundle|combine|paired|grouped)\b"
+    r"|\b(?:should|must|need|recommend|suggest|consider|propose)\b.{0,80}\b(?:assign|dispatch|batch|deliver|riders?|drivers?|orders?|incentive|radius|zones?|routes?|breaks?|shifts?|SLA)\b"
+    r"|\b(?:assign|reassign|dispatch|batch|call in|activate|shrink|pause|prioriti[sz]e|penalize|dock|deduct|speed|skip|extend|offer|raise|increase|reduce|lower)\b.{0,80}\b(?:riders?|drivers?|orders?|deliveries|pay|incentive|radius|zones?|routes?|breaks?|shifts?|them|those)\b"
+    r"|\b(?:frozen|ice[- ]cream|cold[- ]chain)\b.{0,80}\b(?:separate|single[- ]drop|deliver|batch|combine|pair|must|need|require)\b"
+    r"|\b(?:dispatch|batch|assign|reassign|activate|shrink|pause)\s+(?:now|immediately|them|those|it)\b"
+    r"|\b(?:speed up|skip breaks?|work overtime|jump (?:red )?(?:lights|signals)|dock (?:their )?pay)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+CLARIFICATION = re.compile(
+    r"^(?:do you mean|are you asking|what do you mean|which (?:policy|rule|part|topic)|what would you like|how can I help|(?:could|can) you clarify|please clarify)\b",
+    re.IGNORECASE,
+)
+CAPABILITY = re.compile(
+    r"^I can (?:help(?: you)?|explain|find|look up|review|summari[sz]e|clarify)\b",
+    re.IGNORECASE,
+)
+
+
+def _requires_policy(
+    question: str,
+    answer: str,
+    history: Sequence[ChatMessage],
+) -> bool:
+    """Conservative English claim check, not semantic proof of every possible advice."""
+    sentences = re.split(r"(?<=[.!?])\s+|\n+", answer.strip())
+    clarifications = [
+        sentence
+        for sentence in sentences
+        if sentence.endswith("?") and CLARIFICATION.search(sentence)
+    ]
+    # Clarifying a possible action is not recommending it. Check every other
+    # sentence so adding a question cannot hide an unsupported policy claim.
+    claims = "\n".join(
+        sentence for sentence in sentences if sentence not in clarifications
+    )
+    if POLICY_LANGUAGE.search(claims):
+        return True
+    if clarifications or all(CAPABILITY.search(sentence) for sentence in sentences):
+        return False
+    if POLICY_TOPIC.search(question) or POLICY_LANGUAGE.search(question):
+        return True
+    # A request about presentation or identity must not inherit an older policy
+    # topic. The answer itself is still checked above, including mixed advice.
+    if re.search(
+        r"\b(?:concise|brief|short|long|simple|technical|jargon|bullet|format|my name|my e-?mail|about me|who am i)\b",
+        question,
+        re.IGNORECASE,
+    ):
+        return False
+    followup = re.fullmatch(
+        r"\s*(?:what|why|how|really|what do you mean|tell me more|explain more)[\s.!?]*",
+        question,
+        re.IGNORECASE,
+    ) or re.search(r"\b(?:that|those|them|it|what about)\b", question, re.IGNORECASE)
+    return bool(
+        followup
+        and any(
+            POLICY_TOPIC.search(message["content"])
+            or POLICY_LANGUAGE.search(message["content"])
+            for message in history[-2:]
+        ),
+    )
+
 
 # Search activity for this answer, read once by the caller building its trace.
 _retrieval_trace: ContextVar[RetrievalTrace | None] = ContextVar(
@@ -63,6 +136,183 @@ class PreferenceContext(Protocol):
     """The manager's settings, shown to the model so its answers apply them."""
 
     def prompt_block(self) -> str: ...
+
+
+def _cell(value: Any) -> str:
+    if value is None:
+        return "Unknown"
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    return str(value).replace("|", "\\|").replace("\n", " ")
+
+
+def _table(rows: list[dict], fields: tuple[tuple[str, str], ...]) -> str:
+    return "\n".join(
+        [
+            "| " + " | ".join(label for _, label in fields) + " |",
+            "| " + " | ".join("---" for _ in fields) + " |",
+            *[
+                "| " + " | ".join(_cell(row.get(key)) for key, _ in fields) + " |"
+                for row in rows
+            ],
+        ],
+    )
+
+
+def _numeric_fields(data: dict, fields: tuple[tuple[str, str], ...]) -> list[str]:
+    return [
+        f"- **{label}:** {value}"
+        for key, label in fields
+        if isinstance(value := data.get(key), (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    ]
+
+
+def _live_facts(data: dict, question: str) -> str | None:
+    """Render known tool fields; never reuse model explanations or recommendations."""
+    try:
+        when = datetime.fromisoformat(data["as_of"])
+        if when.tzinfo is None:
+            return None
+    except (KeyError, TypeError, ValueError):
+        return None
+    queue, summary = data.get("queue"), data.get("summary")
+    if not isinstance(queue, dict) or not isinstance(summary, dict):
+        return None
+    lines = _numeric_fields(
+        queue,
+        (("open_orders", "Open orders"), ("packed_waiting", "Packed and waiting")),
+    )
+    lines += _numeric_fields(
+        summary,
+        (
+            ("available_riders", "Available riders"),
+            ("riders_returning_within_10_min", "Riders returning within 10 minutes"),
+        ),
+    )
+    if not lines:
+        return None
+    heading = f"**Dispatch facts as of {when.astimezone(TIMEZONE):%d %b %Y, %H:%M}.**"
+    if data.get("stale"):
+        heading += " This saved snapshot is stale and may be out of date."
+    blocks = [heading, "\n".join(lines)]
+    for term, rows, fields in (
+        (
+            r"\borders?\b",
+            queue.get("orders"),
+            (
+                ("order_id", "Order"),
+                ("status", "Status"),
+                ("zone_id", "Zone"),
+                ("item_count", "Items"),
+                ("has_frozen_items", "Frozen"),
+                ("assigned_rider_id", "Rider"),
+            ),
+        ),
+        (
+            r"\b(?:riders?|drivers?)\b",
+            data.get("riders"),
+            (
+                ("rider_id", "Rider ID"),
+                ("name", "Name"),
+                ("status", "Status"),
+                ("hours_on_shift", "Hours on shift"),
+                ("minutes_since_last_break", "Minutes since break"),
+            ),
+        ),
+    ):
+        if re.search(term, question, re.IGNORECASE) and isinstance(rows, list) and rows:
+            blocks.append(
+                _table([row for row in rows if isinstance(row, dict)], fields),
+            )
+    if queue.get("orders_truncated") and re.search(
+        r"\borders?\b",
+        question,
+        re.IGNORECASE,
+    ):
+        blocks.append("The tool returned only part of the order list.")
+    return "\n\n".join(blocks)
+
+
+def _metric_facts(data: dict, question: str) -> str | None:
+    period, summary = data.get("period"), data.get("period_summary")
+    if not isinstance(period, dict) or not isinstance(summary, dict):
+        return None
+    lines = _numeric_fields(
+        summary,
+        (
+            ("total_orders", "Orders"),
+            ("sla_10min_pct", "SLA compliance (%)"),
+            ("avg_pick_pack_min", "Average pick/pack (min)"),
+            ("avg_rider_wait_min", "Average rider wait (min)"),
+            ("avg_ride_min", "Average ride (min)"),
+            ("avg_riders_online", "Average riders online"),
+        ),
+    )
+    if not lines:
+        return None
+    heading = f"**Historical facts: {_cell(period.get('date'))}, {_cell(period.get('start_hour'))}:00 to {_cell(period.get('end_hour'))}:00.**"
+    blocks = [heading, "\n".join(lines)]
+    if period.get("hours_missing"):
+        blocks.append(
+            "Missing hours: "
+            + ", ".join(_cell(hour) for hour in period["hours_missing"])
+            + ".",
+        )
+    rows = data.get("hourly")
+    if (
+        re.search(r"\bhour(?:ly|s)?\b", question, re.IGNORECASE)
+        and isinstance(rows, list)
+        and rows
+    ):
+        blocks.append(
+            _table(
+                [row for row in rows if isinstance(row, dict)],
+                (
+                    ("hour", "Hour"),
+                    ("orders", "Orders"),
+                    ("sla_10min_pct", "SLA (%)"),
+                    ("avg_pick_pack_min", "Pick/pack (min)"),
+                    ("avg_rider_wait_min", "Rider wait (min)"),
+                    ("avg_ride_min", "Ride (min)"),
+                ),
+            ),
+        )
+    return "\n\n".join(blocks)
+
+
+def _safe_fallback(
+    question: str,
+    results: list[ToolResult],
+) -> str:
+    blocks = []
+    for result in results:
+        data = result["result"]
+        if data.get("error"):
+            continue
+        if result["tool"] == "get_live_dispatch_status":
+            facts = _live_facts(data, question)
+        elif result["tool"] == "get_delivery_metrics":
+            facts = _metric_facts(data, question)
+        elif result["tool"] == "propose_setting_change":
+            if data.get("status") == "proposed":
+                facts = f"Proposed setting change: {_cell(data.get('setting'))}, {_cell(data.get('from'))} → {_cell(data.get('to'))}. Nothing is saved yet. Press Confirm below to save, or Cancel."
+            elif data.get("status") == "rejected":
+                facts = f"The setting change was rejected: {_cell(data.get('reason'))}. Nothing was saved."
+            else:
+                facts = None
+        else:
+            facts = None
+        if facts and facts not in blocks:
+            blocks.append(facts)
+    if blocks:
+        if any(result["tool"] == "search_playbook" for result in results):
+            blocks.append(
+                "I can report these facts, but I can't verify a policy recommendation for this reply.",
+            )
+        return "\n\n".join(blocks)
+    return NO_GUIDANCE_ANSWER
 
 
 class RAGService:
@@ -143,7 +393,7 @@ class RAGService:
                 "For decisions about specific orders or riders, fetch their "
                 "facts first, then search applicable rules. Skip for facts-only "
                 "reports, settings and conversation. Cite returned chunk IDs; "
-                "search again if evidence is missing."
+                "make at most one alternate search if genuinely needed."
             ),
             parameters=PlaybookSearchInput.model_json_schema(),
             run=partial(self._search, top_k=top_k),
@@ -214,7 +464,7 @@ class RAGService:
         only proposes changes, which the manager confirms outside the model.
         `summary` stands in for older messages that `history` no longer holds.
         `handover` is the latest shift's handover notes; `personalization` contains
-        durable saved response preferences. The model chooses search queries
+        durable saved personal context and preferences. The model chooses search queries
         from the current request, history and any facts it fetched.
         `alerts` lists the manager's alerts firing now, computed from live data.
         """
@@ -240,8 +490,8 @@ class RAGService:
             )
         if personalization:
             user_message = (
-                "<personalization>\nSaved response preferences. The current request "
-                "takes precedence for answer style. Policy, operational settings and "
+                "<personalization>\nSaved personal context and preferences. The current "
+                "request takes precedence. Policy, operational settings and "
                 f"live facts constrain all advice.\n{personalization}\n</personalization>\n\n"
                 f"{user_message}"
             )
@@ -286,7 +536,12 @@ class RAGService:
                 history=history,
             )
             current_results = results[result_start:]
-            answer = self._check_sources(model_answer, current_results)
+            answer = self._check_sources(
+                model_answer,
+                current_results,
+                question=question,
+                history=history,
+            )
             retrieval_trace = _retrieval_trace.get()
             source_check_changed = answer != model_answer
             no_guidance = answer == NO_GUIDANCE_ANSWER
@@ -322,19 +577,50 @@ class RAGService:
             return answer
 
     @staticmethod
-    def _check_sources(answer: str, results: list[ToolResult]) -> str:
-        """Reject citations not retrieved in this answer, including old chat IDs."""
+    def _check_sources(
+        answer: str,
+        results: list[ToolResult],
+        *,
+        question: str = "",
+        history: Sequence[ChatMessage] | None = None,
+    ) -> str:
+        """Require current citations for policy advice; preserve ordinary conversation.
+
+        Operational claim detection is a conservative English heuristic. It
+        supplements the prompt and domain guardrails; it is not a semantic
+        entailment checker. Rejected mixed replies retain only verified facts.
+        """
         sources = {
             source["chunk_id"]
             for result in results
             if result["tool"] == "search_playbook" and not result["result"].get("error")
             for source in result["result"].get("sources", [])
+            if isinstance(source, dict)
+            and isinstance(source.get("chunk_id"), str)
+            and source["chunk_id"]
+            and isinstance(source.get("content"), str)
+            and source["content"].strip()
         }
         allowed = sources | {source.split("#", 1)[0] for source in sources}
-        if any(citation not in allowed for citation in POLICY_CITATION.findall(answer)):
+        citations = POLICY_CITATION.findall(answer)
+        if any(citation not in allowed for citation in citations):
             logger.warning("Answer cited policy not retrieved in this turn")
-            return NO_GUIDANCE_ANSWER
-        return answer
+            return _safe_fallback(question, results)
+        if citations:
+            return answer
+        if any(result["tool"] == "propose_setting_change" for result in results):
+            return _safe_fallback(question, results)
+        if not any(
+            result["tool"] == "search_playbook" for result in results
+        ) and not _requires_policy(question, answer, history or []):
+            return answer
+        logger.warning(
+            "Answer lacks verified current-turn policy citations; using safe fallback",
+            playbook_search_attempted=any(
+                result["tool"] == "search_playbook" for result in results
+            ),
+        )
+        return _safe_fallback(question, results)
 
 
 def answer_question(

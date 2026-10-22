@@ -45,3 +45,6 @@ PERSONALIZATION_BATCH_BYTES = 24000
 # UTF-8 bytes conservatively bound text tokens, leaving ample room below 132k.
 PERSONALIZATION_MAX_INPUT_BYTES = 48000
 PERSONALIZATION_BATCHES_PER_CHAT = 5
+
+# Bound handover prompts by UTF-8 bytes, leaving room below the 132k token target.
+HANDOVER_MAX_INPUT_BYTES = 100_000

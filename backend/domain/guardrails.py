@@ -6,7 +6,9 @@ Guardrails actions. Rule IDs (G1 to G8) are those in docs/guardrails.md.
 
 import re
 from dataclasses import dataclass
-from typing import Any
+from datetime import datetime
+from math import isfinite
+from typing import Any, TypeGuard
 
 from domain.tools import ToolResult
 
@@ -75,6 +77,25 @@ POLICY_QUESTION = re.compile(
     r"(?!\s+you\b)[^?]*\?\s*$",
     re.IGNORECASE,
 )
+POLICY_INFORMATION = re.compile(
+    r"^\s*(?:please\s+)?(?:explain|describe|summari[sz]e|outline|tell\s+me)\s+"
+    r"(?:(?:our|the|store|rider|current|company)\s+)*(?:polic(?:y|ies)|rules?|SOPs?)\b",
+    re.IGNORECASE,
+)
+SAFETY_EXPLANATION = re.compile(
+    r"^\s*(?:please\s+)?explain\s+why\b[^.!?\n]*"
+    r"\b(?:should|must)\s+(?:not|never)\b",
+    re.IGNORECASE,
+)
+FOLLOW_ON_REQUEST = re.compile(
+    r"(?:[,;:.!\n]|\b(?:and|then|also|next|but|before|after|while)\b)\s*"
+    r"(?:(?:please|then)\s+)?(?:(?:can|could|would|will)\s+you\s+)?"
+    r"(?:draft\w*|compos\w*|writ(?:e|ing)|send\w*|tell\w*|ask\w*|"
+    r"instruct\w*|make|have|order|encourag\w*|pressure|help)\b"
+    r"|\b(?:include|including|with)\s+(?:(?:a|an|the)\s+)?"
+    r"(?:draft|message|instructions)\b",
+    re.IGNORECASE,
+)
 NEGATION = re.compile(
     r"\b(?:not|never|no|cannot|unable|avoid|exclude[sd]?|ineligible|instead)\b"
     r"|n't\b",
@@ -95,6 +116,13 @@ ASSIGN = re.compile(
     r"|\bstay\w*\b.{0,15}\b(?:on|late|till|until|longer)\b",
     re.IGNORECASE,
 )
+ASSIGNMENT_CLAUSE_SEPARATOR = re.compile(
+    r";|\bbut\b|(?:,|\band\b)\s*(?="
+    r"(?:(?:I|we|you)\s+)?"
+    r"(?:(?:do\s+not|don't|never|cannot|can|could|should|would|will|must)\s+)*"
+    r"(?:assign|reassign|dispatch|send|use|allocate|schedule|extend|keep|stay)\b)",
+    re.IGNORECASE,
+)
 KEEP_REQUEST = re.compile(
     r"\b(?:keep|extend|hold|stay|work|continue)\w*\b.{0,40}"
     r"\b(?:on|late|longer|till|until|past|beyond|extra|overtime|close)\b"
@@ -107,6 +135,54 @@ CONDITIONAL = re.compile(
     re.IGNORECASE,
 )
 ORDER_ID = re.compile(r"\bORD-\d+-\d+\b")
+RIDER_ID = re.compile(r"\bRDR-[A-Z0-9-]+\b", re.IGNORECASE)
+RIDER_TARGET = re.compile(
+    r"\b(?:(?:re)?assign(?:ed|ing|s)?|allocat(?:e|es|ed|ing)|"
+    r"schedul(?:e|es|ed|ing)|extend(?:ed|ing|s)?)\s+"
+    r"(?:(?:the\s+)?(?:rider|driver)\s+)?"
+    r"(?:\*\*|`)?(?P<target>[\w'-]+)",
+    re.IGNORECASE,
+)
+NAMED_SEND_TARGET = re.compile(
+    r"\b(?i:send|sent|sending|sends|use|used|using|uses|dispatch(?:ed|ing|es)?)\s+"
+    r"(?:\*\*|`)?(?P<target>(?i:him|her|them)\b|[A-Z][\w'-]*)",
+)
+GENERIC_ASSIGNMENT_TARGETS = {
+    "a",
+    "an",
+    "the",
+    "any",
+    "all",
+    "each",
+    "every",
+    "only",
+    "available",
+    "eligible",
+    "rider",
+    "riders",
+    "driver",
+    "drivers",
+    "order",
+    "orders",
+    "deliveries",
+    "priority",
+    "responsibility",
+    "tasks",
+    "capacity",
+    "breaks",
+    "pickups",
+    "policy",
+    "playbook",
+    "live",
+    "verified",
+    "current",
+    "single-drop",
+    "operations",
+    "updates",
+    "messages",
+    "emails",
+    "notes",
+}
 CLAIM = re.compile(
     r"\b(?:I|I've|I have|we|we've|we have)\s+(?:just\s+|already\s+|now\s+)?"
     r"(assigned|reassigned|dispatched|batched|sent|messaged|contacted|called"
@@ -172,10 +248,18 @@ def _refusal(reasons: list[str], policy: str) -> str:
 
 def unsafe_request(question: str) -> Refusal | None:
     """G3: a request to pressure or penalize riders, or to skip their breaks."""
-    if POLICY_QUESTION.match(question) or not re.search(
-        RIDERS,
-        question,
-        re.IGNORECASE,
+    informational = bool(
+        (POLICY_INFORMATION.match(question) or SAFETY_EXPLANATION.match(question))
+        and not FOLLOW_ON_REQUEST.search(question),
+    )
+    if (
+        POLICY_QUESTION.match(question)
+        or informational
+        or not re.search(
+            RIDERS,
+            question,
+            re.IGNORECASE,
+        )
     ):
         return None
     kinds = [
@@ -211,28 +295,97 @@ def drafted_pressure(reply: str) -> Refusal | None:
 
 def _rider_limits(rider: dict[str, Any]) -> list[str]:
     reasons = []
-    if rider["hours_on_shift"] >= MAX_SHIFT_HOURS:
+    hours = rider.get("hours_on_shift")
+    since_break = rider.get("minutes_since_last_break")
+    if not _verified_number(hours):
+        reasons.append("hours on shift could not be verified")
+    elif hours >= MAX_SHIFT_HOURS:
         reasons.append(
-            f"{rider['hours_on_shift']:g} h on shift; the maximum is "
+            f"{hours:g} h on shift; the maximum is "
             f"{MAX_SHIFT_HOURS} h including breaks",
         )
-    if rider["minutes_since_last_break"] >= BREAK_DUE_MIN:
+    if not _verified_number(since_break):
+        reasons.append("time since the last break could not be verified")
+    elif since_break >= BREAK_DUE_MIN:
         reasons.append(
-            f"{rider['minutes_since_last_break']} min since the last break; "
-            "a 15-minute break is due",
+            f"{since_break:g} min since the last break; a 15-minute break is due",
         )
+    if not isinstance(rider.get("status"), str) or not rider["status"].strip():
+        reasons.append("rider status could not be verified")
+    if not isinstance(rider.get("rider_id"), str) or not rider["rider_id"].strip():
+        reasons.append("rider identity could not be verified")
     return reasons
 
 
+def _verified_number(value: Any) -> TypeGuard[int | float]:
+    return (
+        isinstance(value, int | float)
+        and not isinstance(value, bool)
+        and value >= 0
+        and (not isinstance(value, float) or isfinite(value))
+    )
+
+
+def _rider_snapshot_problem(live: dict[str, Any] | None) -> str | None:
+    if live is None:
+        return "live rider-status data could not be reached"
+    if live.get("stale") is not False:
+        return (
+            "the rider-status snapshot is stale"
+            if live.get("stale") is True
+            else "the rider-status snapshot freshness could not be verified"
+        )
+    try:
+        as_of = datetime.fromisoformat(live["as_of"])
+        if as_of.utcoffset() is None:
+            return "the rider-status snapshot time could not be verified"
+    except (KeyError, TypeError, ValueError):
+        return "the rider-status snapshot time could not be verified"
+    if not isinstance(live.get("riders"), list) or any(
+        not isinstance(rider, dict) for rider in live["riders"]
+    ):
+        return "the rider-status records could not be verified"
+    return None
+
+
 def _mentions(text: str, rider: dict[str, Any]) -> bool:
-    names = {rider["rider_id"], rider["name"], rider["name"].split()[0]}
+    names = {
+        value
+        for key in ("rider_id", "name")
+        if isinstance(value := rider.get(key), str) and value.strip()
+    }
+    if isinstance(name := rider.get("name"), str) and name.split():
+        names.add(name.split()[0])
     return any(
         re.search(rf"\b{re.escape(name)}\b", text, re.IGNORECASE) for name in names
     )
 
 
 def _endorses(text: str) -> bool:
-    return bool(ASSIGN.search(text)) and not NEGATION.search(text)
+    action = ASSIGN.search(text)
+    # "Assign Suresh, don't delay" still endorses the assignment. Only a
+    # negation before its action can decline that action.
+    return action is not None and not NEGATION.search(text[: action.start()])
+
+
+def _assignment_clauses(text: str) -> list[str]:
+    """Keep a declined rider separate from a later positive recommendation."""
+    return [
+        part.strip()
+        for sentence in _sentences(text)
+        for part in ASSIGNMENT_CLAUSE_SEPARATOR.split(sentence.group())
+        if part.strip()
+    ]
+
+
+def _concrete_rider_target(text: str) -> bool:
+    """Recognize a proposed person even when the tool returned no rider rows."""
+    target = RIDER_TARGET.search(text) or NAMED_SEND_TARGET.search(text)
+    return bool(
+        target
+        and target["target"].casefold() not in GENERIC_ASSIGNMENT_TARGETS
+        and not ORDER_ID.fullmatch(target["target"]),
+    )
 
 
 def rider_hours_refusal(
@@ -243,29 +396,39 @@ def rider_hours_refusal(
     """G4: the reply agrees to keep or extend a rider the question named."""
     if not KEEP_REQUEST.search(question):
         return None
-    if live is None:
-        if any(_endorses(item.group()) for item in _sentences(reply)):
+    clauses = _assignment_clauses(reply)
+    if problem := _rider_snapshot_problem(live):
+        if any(_endorses(part) for part in clauses):
             return Refusal(
                 "I can't recommend keeping a rider on: their hours could not be "
-                "verified from live rider-status data, and an unverified rider is "
+                f"verified because {problem}, and an unverified rider is "
                 "not assigned or extended (DD-RIDER-001, Maximum shift and "
                 f"mandatory break).\n\n{ALTERNATIVES}",
                 Finding("G4", "Extension endorsed without live rider data"),
             )
         return None
-    for rider in live["riders"]:
+    for rider in (live or {}).get("riders", []):
         if not _mentions(question, rider):
             continue
-        if not any(
-            _mentions(item.group(), rider) and _endorses(item.group())
-            for item in _sentences(reply)
-        ):
+        if not any(_mentions(part, rider) and _endorses(part) for part in clauses):
             continue
+        if not _verified_number(rider.get("hours_on_shift")) or not _verified_number(
+            rider.get("minutes_since_last_break"),
+        ):
+            return Refusal(
+                "I can't recommend keeping this rider on: their hours and break "
+                f"status could not be verified (DD-RIDER-001).\n\n{ALTERNATIVES}",
+                Finding(
+                    "G4",
+                    "Extension endorsed without verified rider hours or break status",
+                ),
+            )
         hours = rider["hours_on_shift"]
+        name = rider.get("name") or rider.get("rider_id") or "this rider"
         left = max(MAX_SHIFT_HOURS - hours, 0)
         text = (
-            f"I can't recommend keeping {rider['name']} on. Verified as of "
-            f"{live['as_of'][11:16]}: {hours:g} h on shift and "
+            f"I can't recommend keeping {name} on. Verified as of "
+            f"{(live or {})['as_of'][11:16]}: {hours:g} h on shift and "
             f"{rider['minutes_since_last_break']} min since the last break. The "
             f"maximum shift is {MAX_SHIFT_HOURS} hours including breaks, with no "
             "exceptions, and a rider must not be scheduled into a peak that would "
@@ -273,34 +436,94 @@ def rider_hours_refusal(
         )
         if left:
             text += (
-                f" {rider['name']} has at most {left:g} h left, and there is no "
+                f" {name} has at most {left:g} h left, and there is no "
                 "end time I can check against that."
             )
         return Refusal(
             f"{text}\n\n{ALTERNATIVES}",
-            Finding("G4", f"Extension of {rider['name']} ({hours:g} h) endorsed"),
+            Finding("G4", f"Extension of {name} ({hours:g} h) endorsed"),
         )
     return None
 
 
 def rider_hours_fix(reply: str, live: dict[str, Any] | None) -> Fixed | None:
-    """G4: remove a recommendation to use a rider who is at a limit."""
-    if live is None:
-        return None
+    """G4: require fresh verified rider facts before a specific assignment."""
     text, findings = reply, []
-    for rider in live["riders"]:
-        reasons = _rider_limits(rider)
-        if not reasons:
+    rows = (live or {}).get("riders", [])
+    riders = (
+        [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    )
+    for part in _assignment_clauses(reply):
+        if not _endorses(part):
             continue
-        for sentence in _sentences(text):
-            part = sentence.group()
-            if _mentions(part, rider) and _endorses(part):
-                note = (
-                    f"(Removed: {rider['name']} can't be assigned: "
-                    f"{'; '.join(reasons)} (DD-RIDER-001).)"
+        named = [rider for rider in riders if _mentions(part, rider)]
+        exact = [
+            rider
+            for rider in named
+            if any(
+                isinstance(value := rider.get(key), str)
+                and value.strip()
+                and re.search(rf"\b{re.escape(value)}\b", part, re.IGNORECASE)
+                for key in ("rider_id", "name")
+            )
+        ]
+        if exact:
+            named = exact
+        specific = bool(
+            named
+            or RIDER_ID.search(part)
+            or _concrete_rider_target(part)
+            or (ORDER_ID.search(part) and not CLAIM.search(part)),
+        )
+        if not specific:
+            continue
+        # A rider/customer message is not an assignment. Keep ordinary drafts
+        # unchanged; operational claims still pass through the execution rail.
+        communication = re.search(
+            r"\bsend\w*\b.*?\b(message|update|email|note)\b",
+            part,
+            re.IGNORECASE,
+        )
+        order = ORDER_ID.search(part)
+        if (
+            communication
+            and (order is None or communication.end() < order.start())
+            and not re.search(
+                r"\b(?:assign|reassign|dispatch|allocate|schedule|extend)\w*\b",
+                part,
+                re.IGNORECASE,
+            )
+        ):
+            continue
+        problem = _rider_snapshot_problem(live)
+        ids = {identifier.upper() for identifier in RIDER_ID.findall(part)}
+        known_ids = {str(rider.get("rider_id", "")).upper() for rider in named}
+        if problem is None and (not named or ids - known_ids):
+            problem = (
+                "the proposed rider could not be identified in live rider-status data"
+            )
+        if problem is None and len(named) > 1 and not exact:
+            problem = "the rider name is ambiguous in live rider-status data"
+        if problem:
+            text = text.replace(
+                part,
+                f"(Removed: this rider assignment cannot be recommended because {problem}. Verify fresh rider hours and break status first (DD-RIDER-001).)",
+                1,
+            )
+            findings.append(
+                Finding("G4", f"Assignment without verified rider facts: {problem}"),
+            )
+            continue
+        for rider in named:
+            if reasons := _rider_limits(rider):
+                name = rider.get("name") or rider.get("rider_id") or "This rider"
+                text = text.replace(
+                    part,
+                    f"(Removed: {name} can't be assigned: {'; '.join(reasons)} (DD-RIDER-001).)",
+                    1,
                 )
-                text = text.replace(part, note, 1)
-                findings.append(Finding("G4", f"{rider['name']}: {'; '.join(reasons)}"))
+                findings.append(Finding("G4", f"{name}: {'; '.join(reasons)}"))
+                break
     return Fixed(text, findings) if findings else None
 
 
@@ -427,6 +650,10 @@ def _numbers(value: Any, key: str = "") -> set[float]:
     if isinstance(value, list):
         return {n for item in value for n in _numbers(item, key)}
     if isinstance(value, bool) or not isinstance(value, int | float):
+        return set()
+    if isinstance(value, float) and not isfinite(value):
+        # Invalid tool figures must not abort the rails before rider facts can
+        # be rejected by G4.
         return set()
     found = {float(value), float(round(value)), round(value, 1)}
     if key.endswith("_sec"):
