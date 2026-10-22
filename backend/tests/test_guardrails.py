@@ -34,6 +34,7 @@ LIVE = [
         "tool": "get_live_dispatch_status",
         "result": {
             "as_of": AS_OF,
+            "stale": False,
             "riders": [
                 rider("RDR-103", "Suresh P", 3.1, 40),
                 rider("RDR-105", "Farhan A", 8.5, 230, "returning"),
