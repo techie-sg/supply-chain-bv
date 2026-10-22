@@ -90,6 +90,7 @@ class SettingsForm:
     briefing: gr.CheckboxGroup
     briefing_info: gr.Markdown
     status: gr.Markdown
+    owner: gr.Textbox | None = None
     nav: gr.Radio | None = None
     suggestions: suggestions_ui.SuggestionComponents | None = None
     personalization: personalization_ui.PersonalizationComponents | None = None
@@ -118,6 +119,10 @@ class SettingsForm:
 
     def outputs(self) -> list[Any]:
         return [self._component(code, name) for code, name in FORM_OUTPUTS]
+
+    def bound_outputs(self) -> list[Any]:
+        assert self.owner is not None
+        return [*self.outputs(), self.owner]
 
 
 def _placeholder(code: str) -> str:
@@ -237,14 +242,42 @@ def _status(messages: list[str]) -> str:
     return f'<ul class="settings-status">{items}</ul>'
 
 
-def load_settings(manager_id: str = DEMO_MANAGER_ID) -> list[Any]:
+def _load_settings(manager_id: str) -> tuple[list[Any], bool]:
     try:
-        return form_values(manager_preferences(manager_id).effective())
+        return form_values(manager_preferences(manager_id).effective()), True
     except (SQLAlchemyError, RuntimeError):
         logger.warning("Could not load settings", exc_info=True)
-        return [gr.skip()] * (len(FORM_OUTPUTS) - 1) + [
-            f'<p class="settings-status">{UNAVAILABLE}</p>',
-        ]
+        return (
+            [gr.skip()] * (len(FORM_OUTPUTS) - 1)
+            + [f'<p class="settings-status">{UNAVAILABLE}</p>'],
+            False,
+        )
+
+
+def load_settings(manager_id: str = DEMO_MANAGER_ID) -> list[Any]:
+    return _load_settings(manager_id)[0]
+
+
+def load_form(manager_id: str) -> list[Any]:
+    values, loaded = _load_settings(manager_id)
+    return [*values, manager_id if loaded else ""]
+
+
+def _require_form_owner(manager_id: str, owner: str | None) -> None:
+    if not owner or owner != manager_id:
+        raise gr.Error(
+            "Wait for this manager's settings to load before saving or resetting.",
+        )
+
+
+def save_form(manager_id: str, owner: str | None, *values: Any) -> list[Any]:
+    _require_form_owner(manager_id, owner)
+    return [*save_settings(manager_id, *values), manager_id]
+
+
+def reset_form(code: str, manager_id: str, owner: str | None) -> list[Any]:
+    _require_form_owner(manager_id, owner)
+    return [*reset_setting(code, manager_id), manager_id]
 
 
 def save_settings(manager_id: str, *values: Any) -> list[Any]:
@@ -484,6 +517,9 @@ def build(manager: gr.State, summary: gr.HTML | None = None) -> SettingsForm:
     after each change.
     """
     resets: list[tuple[gr.Button, str]] = []
+    # Submit the displayed form's owner with its values. A gr.State owner would
+    # be resolved when queued work executes, after a manager switch may reload it.
+    owner = gr.Textbox(value="", visible=False)
     gr.HTML(
         '<div class="settings-heading"><h2>Settings</h2><p>The assistant applies '
         "these; only you change them, here.</p></div>",
@@ -630,6 +666,7 @@ def build(manager: gr.State, summary: gr.HTML | None = None) -> SettingsForm:
         briefing,
         briefing_info,
         status,
+        owner=owner,
         nav=nav,
         suggestions=suggestion_parts,
         personalization=personalization,
@@ -637,9 +674,9 @@ def build(manager: gr.State, summary: gr.HTML | None = None) -> SettingsForm:
     )
     events = [
         save.click(
-            save_settings,
-            inputs=[manager, *form.inputs()],
-            outputs=form.outputs(),
+            save_form,
+            inputs=[manager, owner, *form.inputs()],
+            outputs=form.bound_outputs(),
             concurrency_id="settings",
             concurrency_limit=1,
         ),
@@ -647,12 +684,13 @@ def build(manager: gr.State, summary: gr.HTML | None = None) -> SettingsForm:
     for button, reset_code in resets:
         events.append(
             button.click(
-                lambda manager_id, reset_code=reset_code: reset_setting(
+                lambda manager_id, form_owner, reset_code=reset_code: reset_form(
                     reset_code,
                     manager_id,
+                    form_owner,
                 ),
-                inputs=manager,
-                outputs=form.outputs(),
+                inputs=[manager, owner],
+                outputs=form.bound_outputs(),
                 concurrency_id="settings",
                 concurrency_limit=1,
             ),

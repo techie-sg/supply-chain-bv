@@ -73,3 +73,14 @@ def test_settings_show_personalization_controls_and_no_memory_digest(ui_app):
         and "personalization-instructions" in ids
     )
     assert "memory-digest" not in ids
+
+
+def test_personalization_submits_the_snapshot_with_the_edited_text(ui_app):
+    [save] = [
+        callback
+        for callback in ui_app.fns.values()
+        if callback.fn is personalization.save
+    ]
+    snapshot = save.inputs[1]
+    assert isinstance(snapshot, gr.JSON) and not snapshot.visible
+    assert snapshot in save.outputs

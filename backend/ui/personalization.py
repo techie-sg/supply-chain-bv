@@ -20,7 +20,7 @@ logger = structlog.stdlib.get_logger(__name__)
 @dataclass
 class PersonalizationComponents:
     controls: list[Any]
-    snapshot: gr.State
+    snapshot: gr.JSON
     sources: gr.Markdown
     status: gr.Markdown
 
@@ -130,7 +130,9 @@ def build(manager: gr.State) -> PersonalizationComponents:
                 elem_id="personalization-instructions",
             ),
         )
-    snapshot = gr.State(None)
+    # Keep the snapshot in the submitted browser payload with the edited text.
+    # Server State can change while an earlier Save waits in the queue.
+    snapshot = gr.JSON(value=None, visible=False)
     sources = gr.Markdown(elem_id="personalization-sources")
     gr.Markdown(
         "**When this changes:** save here, or let dreaming learn clear or repeated preferences from your chats after summarization. Dreaming saves verified preferences automatically, without approval. Chat does not save them immediately. Ordinary questions do not change your preferences; review keeps existing details unless you correct or ask to forget them.",

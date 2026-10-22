@@ -1331,9 +1331,9 @@ def test_every_manager_scoped_callback_receives_the_selected_manager(ui_app) -> 
         chat_ui.confirm_pending,
         chat_ui.cancel_pending,
         scenarios_ui.load_selected_scenario,
-        settings.load_settings,
+        settings.load_form,
         settings.load_summary,
-        settings.save_settings,
+        settings.save_form,
     }
     seen = set()
     for callback in ui_app.fns.values():
@@ -1346,7 +1346,9 @@ def test_every_manager_scoped_callback_receives_the_selected_manager(ui_app) -> 
         for callback in ui_app.fns.values()
         if callback.fn is not None
         and callback.fn.__name__ == "<lambda>"
-        and callback.inputs == [manager]
+        and len(callback.inputs) == 2
+        and callback.inputs[0] is manager
+        and isinstance(callback.inputs[1], gr.Textbox)
         and callback.outputs
         and len(callback.outputs) > 10
     ]
@@ -1373,7 +1375,7 @@ def test_switching_manager_clears_the_card_and_reloads_their_workspace(ui_app) -
             sidebar_ui.restore_conversation,
             sidebar_ui.restore_latest_conversation,
             sidebar_ui.conversation_choices,
-            settings.load_settings,
+            settings.load_form,
             settings.load_summary,
         )
         and callback.trigger_after is not None
@@ -1382,7 +1384,7 @@ def test_switching_manager_clears_the_card_and_reloads_their_workspace(ui_app) -
     # settings.
     assert loaders.count(sidebar_ui.restore_conversation) == 1
     assert loaders.count(sidebar_ui.restore_latest_conversation) == 2
-    assert loaders.count(settings.load_settings) >= 3
+    assert loaders.count(settings.load_form) >= 3
     # The pending-change card is cleared right after the switch.
     [clear] = [
         callback

@@ -46,9 +46,7 @@ def test_settings_tab_is_part_of_the_workspace(ui_app) -> None:
         if isinstance(item, gr.Tab) and item.id is not None
     ]
     assert {"assistant", "settings", "demo"} <= set(tabs)
-    assert any(
-        callback.fn is settings.load_settings for callback in ui_app.fns.values()
-    )
+    assert any(callback.fn is settings.load_form for callback in ui_app.fns.values())
 
 
 def test_form_fields_line_up_with_the_values() -> None:
@@ -300,6 +298,63 @@ def test_each_manager_saves_and_sees_only_their_own_settings(preference_store) -
     assert {row.manager_id for row in preference_store.rows} == {"ananya"}
     settings.reset_setting(PreferenceCode.RIDER_SHORTAGE_ALERT, "karthik")
     assert preference_store.statuses(PreferenceCode.RIDER_SHORTAGE_ALERT) == ["active"]
+
+
+def test_delayed_save_cannot_apply_previous_managers_form(preference_store) -> None:
+    loaded = settings.load_form("ananya")
+    values = list(defaults(preference_store))
+    values[1] = 1.5
+    # The manager changes before this submitted form leaves the settings queue.
+    with pytest.raises(gr.Error, match="this manager's settings"):
+        settings.save_form("karthik", loaded[-1], *values)
+    assert preference_store.rows == []
+
+
+def test_bound_form_can_save_after_the_current_manager_loads(preference_store) -> None:
+    loaded = settings.load_form("ananya")
+    values = list(defaults(preference_store))
+    values[1] = 1.5
+    saved = settings.save_form("ananya", loaded[-1], *values)
+    assert saved[-1] == "ananya"
+    assert {row.manager_id for row in preference_store.rows} == {"ananya"}
+    assert settings.load_settings("karthik")[1]["value"] == 2
+
+
+def test_failed_load_invalidates_form_owner_and_blocks_writes(monkeypatch) -> None:
+    def unavailable(manager_id):
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(settings, "manager_preferences", unavailable)
+    loaded = settings.load_form("karthik")
+    assert loaded[-1] == "" and "unavailable" in loaded[-2]
+    with pytest.raises(gr.Error, match="this manager's settings"):
+        settings.save_form("karthik", loaded[-1])
+    with pytest.raises(gr.Error, match="this manager's settings"):
+        settings.reset_form(PreferenceCode.INCENTIVE_CAP, "karthik", loaded[-1])
+
+
+def test_reset_rejects_another_managers_displayed_form(preference_store) -> None:
+    with pytest.raises(gr.Error, match="this manager's settings"):
+        settings.reset_form(PreferenceCode.INCENTIVE_CAP, "karthik", "ananya")
+    assert preference_store.rows == []
+
+
+def test_form_owner_is_submitted_with_values_and_loaded_atomically(ui_app) -> None:
+    [save] = [
+        callback
+        for callback in ui_app.fns.values()
+        if callback.fn is settings.save_form
+    ]
+    owner = save.inputs[1]
+    assert isinstance(owner, gr.Textbox) and not owner.visible
+    assert save.outputs[-1] is owner
+    loaders = [
+        callback
+        for callback in ui_app.fns.values()
+        if callback.fn is settings.load_form
+    ]
+    assert len(loaders) >= 3
+    assert all(callback.outputs[-1] is owner for callback in loaders)
 
 
 def test_invalid_cap_stays_editable_and_only_its_setting_gets_an_error(

@@ -152,9 +152,9 @@ def build_app() -> gr.Blocks:
             concurrency_id="settings",
             concurrency_limit=1,
         ).then(
-            settings.load_settings,
+            settings.load_form,
             inputs=manager,
-            outputs=settings_form.outputs(),
+            outputs=settings_form.bound_outputs(),
         ).then(settings.load_summary, inputs=manager, outputs=settings_summary).then(
             personalization_ui.load,
             inputs=manager,
@@ -281,9 +281,9 @@ def build_app() -> gr.Blocks:
                     outputs=summary_outputs,
                 )
                 .then(
-                    settings.load_settings,
+                    settings.load_form,
                     inputs=manager,
-                    outputs=settings_form.outputs(),
+                    outputs=settings_form.bound_outputs(),
                     concurrency_id="settings",
                     concurrency_limit=1,
                 )
@@ -637,9 +637,9 @@ def build_app() -> gr.Blocks:
             concurrency_id="workspace",
             concurrency_limit=1,
         ).then(
-            settings.load_settings,
+            settings.load_form,
             inputs=manager,
-            outputs=settings_form.outputs(),
+            outputs=settings_form.bound_outputs(),
             concurrency_id="settings",
             concurrency_limit=1,
         ).then(settings.load_summary, inputs=manager, outputs=settings_summary)
