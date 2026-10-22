@@ -6,12 +6,15 @@ of the same answer; no rail calls a language model.
 """
 
 import os
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from functools import cache
+from functools import cache, wraps
+from time import perf_counter
 from typing import Any
 
 import structlog
+from opentelemetry.context import Context, attach, detach, get_current
 
 from domain.chat import GuardrailTrace
 from domain.guardrails import (
@@ -32,6 +35,7 @@ from domain.guardrails import (
 )
 from domain.tools import ToolResult
 from resources import GUARDRAILS_DIR
+from service.tracing import observation
 
 # NeMo Guardrails reports usage to NVIDIA unless this is set before it loads.
 os.environ.setdefault("NEMO_GUARDRAILS_NO_USAGE_STATS", "1")
@@ -51,6 +55,8 @@ class _Review:
 
     findings: list[Finding] = field(default_factory=list)
     refusal: Refusal | None = None
+    trace_context: Context | None = None
+    errors: list[str] = field(default_factory=list)
 
 
 _review: ContextVar[_Review | None] = ContextVar("guardrail_review", default=None)
@@ -143,32 +149,167 @@ async def _execution_claims_fix(context: dict[str, Any] | None = None) -> str | 
     return _fixed(execution_claims_fix(reply))
 
 
+def _traced_action(
+    name: str,
+    rule: str,
+    action: Callable[..., Awaitable[Any]],
+) -> Callable[..., Awaitable[Any]]:
+    """Observe actual rule execution, including passes and swallowed rail errors."""
+
+    @wraps(action)
+    async def run(context: dict[str, Any] | None = None) -> Any:
+        review = _review.get()
+        before = len(review.findings) if review else 0
+        previous_refusal = review.refusal if review else None
+        # NeMo can move async actions between execution contexts. Attach the
+        # public OTel context captured while the overall check span was active.
+        token = (
+            attach(review.trace_context) if review and review.trace_context else None
+        )
+        started = perf_counter()
+        try:
+            question, reply, results = _inputs(context)
+            with observation(
+                f"guardrail.{name}",
+                kind="guardrail",
+                input={
+                    "question": question,
+                    "reply": reply,
+                    "tool_results": results,
+                    "settings": (context or {}).get("settings", {}),
+                    "references": (context or {}).get("references", ""),
+                },
+                metadata={"rule": rule, "action": name},
+            ) as span:
+                try:
+                    result = await action(context=context)
+                except Exception as exc:
+                    error = type(exc).__name__
+                    if review:
+                        review.errors.append(error)
+                    span.update(
+                        level="ERROR",
+                        status_message=error,
+                        output={"outcome": "unchecked", "error_type": error},
+                        metadata={
+                            "outcome": "unchecked",
+                            "duration_ms": round((perf_counter() - started) * 1000, 2),
+                        },
+                    )
+                    raise
+                findings = list(review.findings[before:]) if review else []
+                refusal = review.refusal if review else None
+                if refusal is not None and refusal is not previous_refusal:
+                    findings.append(refusal.finding)
+                    outcome = "blocked"
+                elif findings:
+                    outcome = "reframed" if result is not None else "flagged"
+                else:
+                    outcome = "pass"
+                span.update(
+                    output={
+                        "outcome": outcome,
+                        "result": result,
+                        "findings": [
+                            {"rule": item.rule, "detail": item.detail}
+                            for item in findings
+                        ],
+                    },
+                    metadata={
+                        "outcome": outcome,
+                        "triggered": bool(findings),
+                        "duration_ms": round((perf_counter() - started) * 1000, 2),
+                    },
+                )
+                return result
+        finally:
+            if token is not None:
+                detach(token)
+
+    return run
+
+
 @cache
 def _rails() -> LLMRails:
     rails = LLMRails(RailsConfig.from_path(str(GUARDRAILS_DIR)))
-    for name, action in (
-        ("unsafe_request", _unsafe_request),
-        ("drafted_pressure", _drafted_pressure),
-        ("rider_hours_refusal", _rider_hours_refusal),
-        ("rider_hours_fix", _rider_hours_fix),
-        ("batching_fix", _batching_fix),
-        ("execution_claims_fix", _execution_claims_fix),
-        ("unverified_figures", _unverified_figures),
-        ("preference_conflict_fix", _preference_conflict_fix),
-        ("eta_promise_fix", _eta_promise_fix),
-        ("stale_data_fix", _stale_data_fix),
+    for name, rule, action in (
+        ("unsafe_request", "G3", _unsafe_request),
+        ("drafted_pressure", "G3", _drafted_pressure),
+        ("rider_hours_refusal", "G4", _rider_hours_refusal),
+        ("rider_hours_fix", "G4", _rider_hours_fix),
+        ("batching_fix", "G7", _batching_fix),
+        ("execution_claims_fix", "G5", _execution_claims_fix),
+        ("unverified_figures", "G1", _unverified_figures),
+        ("preference_conflict_fix", "G6", _preference_conflict_fix),
+        ("eta_promise_fix", "G2", _eta_promise_fix),
+        ("stale_data_fix", "G8", _stale_data_fix),
     ):
-        rails.register_action(action, name=name)
+        rails.register_action(_traced_action(name, rule, action), name=name)
     return rails
 
 
 def _check(messages: list[dict[str, Any]], rail: RailType) -> tuple[Any, _Review]:
-    review = _Review()
-    token = _review.set(review)
-    try:
-        return _rails().check(messages, rail_types=[rail]), review
-    finally:
-        _review.reset(token)
+    started = perf_counter()
+    with observation(
+        f"guardrails.{rail.value}",
+        kind="guardrail",
+        input=messages,
+        metadata={"stage": rail.value},
+    ) as span:
+        review = _Review(trace_context=get_current())
+        token = _review.set(review)
+        try:
+            try:
+                result = _rails().check(messages, rail_types=[rail])
+            except Exception as exc:
+                error = type(exc).__name__
+                span.update(
+                    level="ERROR",
+                    status_message=error,
+                    output={"outcome": "unchecked", "error_type": error},
+                    metadata={
+                        "outcome": "unchecked",
+                        "duration_ms": round((perf_counter() - started) * 1000, 2),
+                    },
+                )
+                raise
+            findings = list(review.findings)
+            if result.status == RailStatus.BLOCKED and review.refusal is not None:
+                outcome = "blocked"
+                text = review.refusal.text
+                findings = [review.refusal.finding]
+            else:
+                text = result.content
+                outcome = (
+                    "reframed"
+                    if result.status == RailStatus.MODIFIED and findings
+                    else "flagged"
+                    if findings
+                    else "pass"
+                )
+            span.update(
+                output={
+                    "outcome": "unchecked" if review.errors else outcome,
+                    "text": text,
+                    "findings": [
+                        {"rule": item.rule, "detail": item.detail} for item in findings
+                    ],
+                    "errors": review.errors,
+                },
+                metadata={
+                    "outcome": "unchecked" if review.errors else outcome,
+                    "triggered": bool(findings),
+                    "duration_ms": round((perf_counter() - started) * 1000, 2),
+                },
+                **(
+                    {"level": "ERROR", "status_message": ", ".join(review.errors)}
+                    if review.errors
+                    else {}
+                ),
+            )
+            return result, review
+        finally:
+            _review.reset(token)
 
 
 def _outcome(

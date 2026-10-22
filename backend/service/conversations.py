@@ -1,5 +1,6 @@
 """Keep chat history in PostgreSQL so it survives refreshes and restarts."""
 
+import hashlib
 import json
 import re
 from collections.abc import Callable, Sequence
@@ -60,6 +61,7 @@ from service.preferences import (
 from service.rag import answer_question, pop_retrieval_trace
 from service.setting_changes import SettingChange, SettingChanges, tidy_reply
 from service.tools import dispatch_tools, traced_tools
+from service.tracing import Observation, observation, trace_attributes
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -69,6 +71,13 @@ Titler = Callable[[str, str], str]
 
 TITLE_PROMPT_PATH = PROMPTS / "conversation_title.md"
 TITLE_MAX_LENGTH = 60
+
+
+def _fingerprint(value: Any) -> str:
+    """Identify the exact supplied context without putting its text in metadata."""
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, default=str, ensure_ascii=False).encode(),
+    ).hexdigest()
 
 
 def new_message(
@@ -199,15 +208,28 @@ class ConversationService:
 
     def ask(self, question: str) -> AnswerResult:
         """Store the question first, so a failed answer never loses it."""
-        context = read_answer_context(
-            self.store_id,
-            self.manager_id,
-            SUMMARY_RECENT_MESSAGES,
-            self.conversation_id,
-            self.engine,
-        )
+        with observation(
+            "conversation.answer",
+            kind="chain",
+            input={"question": question},
+            metadata={"store_id": self.store_id},
+            user_id=self.manager_id,
+            session_id=str(self.conversation_id) if self.conversation_id else None,
+        ) as span:
+            return self._ask(question, span)
+
+    def _ask(self, question: str, span: Observation) -> AnswerResult:
+        with observation("db.conversation.read_context"):
+            context = read_answer_context(
+                self.store_id,
+                self.manager_id,
+                SUMMARY_RECENT_MESSAGES,
+                self.conversation_id,
+                self.engine,
+            )
         if context is None:
-            conversation = self.start_new()
+            with observation("db.conversation.create"):
+                conversation = self.start_new()
             context = {"id": conversation.id, "messages": [], "summary": None}
         # The summary stands in for older messages; recent ones stay word for word.
         messages = context["messages"]
@@ -225,16 +247,64 @@ class ConversationService:
             extra["summary"] = context["summary"]
         if context.get("handover_note_id"):
             extra["handover_note_id"] = context["handover_note_id"]
-        if not retry:
-            append_message(context["id"], new_message("manager", question), self.engine)
-        result = self.answer(question, history=history, **extra)
-        reply, trace = result.text, result.trace
-        append_message(
-            context["id"],
-            new_message("assistant", reply, trace),
-            self.engine,
+        span.update(
+            metadata={
+                "conversation_id": str(context["id"]),
+                "history_messages": len(history),
+                "retry": retry,
+            },
         )
-        return result
+        with trace_attributes(
+            user_id=self.manager_id,
+            session_id=str(context["id"]),
+        ):
+            provenance = {
+                "conversation_id": str(context["id"]),
+                "history_messages": len(history),
+                "history_fingerprint": _fingerprint(history),
+                "messages_count": context.get("messages_count", len(messages)),
+                "summary_covers_to": context.get("summary_covers_to"),
+                "summarized_at": (
+                    context["summarized_at"].isoformat()
+                    if context.get("summarized_at") is not None
+                    else None
+                ),
+                "summary_fingerprint": _fingerprint(context["summary"]),
+            }
+            with observation("context.history", metadata=provenance) as loaded:
+                loaded.update(
+                    output={"history": history, "summary": context["summary"]},
+                )
+            if not retry:
+                with observation("db.conversation.save_question"):
+                    append_message(
+                        context["id"],
+                        new_message("manager", question),
+                        self.engine,
+                    )
+            result = self.answer(question, history=history, **extra)
+            reply, trace = result.text, result.trace
+            with observation("db.conversation.save_answer"):
+                append_message(
+                    context["id"],
+                    new_message("assistant", reply, trace),
+                    self.engine,
+                )
+            span.update(
+                output={
+                    "answer": reply,
+                    "guardrail": trace.get("guardrail") if trace else None,
+                },
+                metadata={
+                    "answer_saved": True,
+                    "guardrail_status": (
+                        trace["guardrail"]["status"]
+                        if trace and "guardrail" in trace
+                        else None
+                    ),
+                },
+            )
+            return result
 
     def note(self, text: str) -> StoredMessage | None:
         """Add an assistant note to the open chat, such as a confirmed setting.
@@ -254,26 +324,59 @@ class ConversationService:
         Runs after the answer is shown. Any failure leaves the title unset, and
         the sidebar keeps showing the first question instead.
         """
-        exchange = read_title_exchange(
-            self.store_id,
-            self.manager_id,
-            self.conversation_id,
-            self.engine,
-        )
-        if self.titler is None or exchange is None or exchange["title"]:
-            return None
-        question, answer = exchange["question"], exchange["answer"]
-        if question is None or answer is None:
-            return None
-        try:
-            title = clean_title(self.titler(question, answer))
-        except (requests.RequestException, RuntimeError, ValueError):
-            logger.warning("Could not title conversation", exc_info=True)
-            return None
-        if title is None or not set_title(exchange["id"], title, self.engine):
-            return None
-        logger.info("Conversation titled", conversation_id=str(exchange["id"]))
-        return title
+        with observation(
+            "conversation.title",
+            kind="chain",
+            user_id=self.manager_id,
+            session_id=str(self.conversation_id) if self.conversation_id else None,
+            metadata={"store_id": self.store_id},
+        ) as span:
+            with observation("db.conversation.read_title"):
+                exchange = read_title_exchange(
+                    self.store_id,
+                    self.manager_id,
+                    self.conversation_id,
+                    self.engine,
+                )
+            if self.titler is None or exchange is None or exchange["title"]:
+                span.update(metadata={"status": "no-change"})
+                return None
+            question, answer = exchange["question"], exchange["answer"]
+            if question is None or answer is None:
+                span.update(
+                    metadata={"status": "no-change", "reason": "missing-exchange"},
+                )
+                return None
+            span.update(metadata={"conversation_id": str(exchange["id"])})
+            with trace_attributes(
+                user_id=self.manager_id,
+                session_id=str(exchange["id"]),
+            ):
+                try:
+                    title = clean_title(self.titler(question, answer))
+                except (requests.RequestException, RuntimeError, ValueError):
+                    logger.warning("Could not title conversation", exc_info=True)
+                    span.update(
+                        metadata={"status": "failed"},
+                        level="WARNING",
+                        status_message="title-unavailable",
+                    )
+                    return None
+                if title is None:
+                    span.update(
+                        metadata={"status": "no-change", "reason": "empty-title"},
+                    )
+                    return None
+                with observation("db.conversation.save_title"):
+                    saved = set_title(exchange["id"], title, self.engine)
+                span.update(
+                    metadata={"status": "saved" if saved else "no-change"},
+                    output={"title": title} if saved else None,
+                )
+                if not saved:
+                    return None
+                logger.info("Conversation titled", conversation_id=str(exchange["id"]))
+                return title
 
 
 def _trace(
@@ -320,15 +423,44 @@ def _answer(
     calls: list[ToolCallTrace] = []
     results: list[ToolResult] = []
     pop_retrieval_trace()  # drop any left over from an earlier answer
-    handover = chat_handover_block(handover_note_id, preferences.store_id)
-    alerts = _alerts(preferences.manager_id)
+    with observation("context.load", kind="chain") as context_span:
+        with observation("context.handover"):
+            handover = chat_handover_block(handover_note_id, preferences.store_id)
+        with observation("context.alerts"):
+            alerts = _alerts(preferences.manager_id)
+        with observation("context.personalization"):
+            personalization = manager_personalization(
+                preferences.manager_id,
+            ).prompt_block()
+        context_span.update(
+            metadata={
+                "store_id": preferences.store_id,
+                "manager_id": preferences.manager_id,
+                "loaded_at": datetime.now(TIMEZONE).isoformat(),
+                "handover_note_id": str(handover_note_id) if handover_note_id else None,
+                "handover_selector": "linked-note"
+                if handover_note_id
+                else "latest-store-note",
+                "handover_fingerprint": _fingerprint(handover),
+                "alerts_fingerprint": _fingerprint(alerts),
+                "personalization_fingerprint": _fingerprint(personalization),
+                "personalization_source": "manager_personalization",
+                "history_fingerprint": _fingerprint(history),
+                "summary_fingerprint": _fingerprint(summary),
+            },
+            output={
+                "handover": handover,
+                "alerts": alerts,
+                "personalization": personalization,
+            },
+        )
     reply = answer_question(
         question,
         history=history,
         preferences=preferences,
         summary=summary,
         handover=handover,
-        personalization=manager_personalization(preferences.manager_id).prompt_block(),
+        personalization=personalization,
         tools=[*tools, *dispatch_tools(preferences.store_id)],
         alerts=alerts,
         tool_trace=calls,
@@ -414,7 +546,8 @@ def ask_question(
     (none is saved until the manager confirms it) and the trace to show under it.
     """
     try:
-        ensure_shift(manager_id)
+        with observation("db.shift.ensure"):
+            ensure_shift(manager_id)
     except (SQLAlchemyError, RuntimeError, LookupError):
         # A missing shift never blocks an answer.
         logger.warning("Could not start a shift", exc_info=True)

@@ -40,6 +40,7 @@ from service.preferences import PreferenceService
 from service.review_context import chat_evidence, chat_label
 from service.suggestions import SettingsSuggestionService, json_array, plural
 from service.summaries import SummaryService, summary_service
+from service.tracing import observation
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -170,6 +171,39 @@ class DreamingService:
     # The run ---------------------------------------------------------------
 
     def run(self, now: datetime | None = None) -> ReviewReport:
+        with observation("dreaming.review", kind="chain") as span:
+            summary_failures_before = getattr(self.summaries, "failures", 0)
+            failed_refreshes: list[str] = []
+            report = self._run(now, failed_refreshes)
+            summary_failures = (
+                getattr(self.summaries, "failures", 0) - summary_failures_before
+            )
+            failed = bool(report.failures or failed_refreshes or summary_failures)
+            progress = {
+                "status": "partial-failure" if failed else "completed",
+                "chats": report.chats,
+                "answer_issues": report.answer_issues,
+                "handover_drafts": report.handover_drafts,
+                "settings": report.settings,
+                "failed_stages": [*report.failures, *failed_refreshes],
+                "summary_or_personalization_failures": summary_failures,
+            }
+            span.update(
+                output=progress,
+                metadata=progress,
+                **(
+                    {"level": "WARNING", "status_message": "review-partially-failed"}
+                    if failed
+                    else {}
+                ),
+            )
+            return report
+
+    def _run(
+        self,
+        now: datetime | None,
+        failed_refreshes: list[str],
+    ) -> ReviewReport:
         now = now or datetime.now(TIMEZONE)
         report = ReviewReport()
         chats = conversations_to_review(self.engine)
@@ -178,6 +212,7 @@ class DreamingService:
             try:
                 self.summaries.fold(conversation, keep_recent=0)
             except PROVIDER_ERRORS:
+                failed_refreshes.append("summary-refresh")
                 logger.warning(
                     "Could not refresh summary before review",
                     conversation_id=str(conversation.id),

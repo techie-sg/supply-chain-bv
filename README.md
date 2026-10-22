@@ -74,6 +74,33 @@ Assistant instructions live in [dispatch_manager_system.md](backend/resources/pr
 
 The [RAG notebook](backend/notebooks/simple_rag.ipynb) demonstrates chunking, embedding, storage, retrieval, and a conversation with a follow-up. Select `backend/.venv/bin/python` as its kernel. The storage cell writes document data; provider cells make API calls.
 
+## Tracing
+
+Langfuse tracing is optional. Set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_BASE_URL` from the same Langfuse project in the process environment or `backend/.env`, then restart the application and cron services. Use the base URL shown by your project, including its region. Missing keys disable tracing; `LANGFUSE_TRACING_ENABLED=false` disables it explicitly. The same integration supports Langfuse Cloud and a self-hosted instance.
+
+Chat turns are grouped by conversation and manager, with a request ID linking browser receipt, queued work and rendering acknowledgement. New conversations receive their conversation ID once it exists. Coverage includes:
+
+| Path | Captured details |
+| --- | --- |
+| Chat and context | Question, history, summary coverage, personalization, handover, active settings, context fingerprints and database read/write timings |
+| Models and embeddings | Each request, selected model/provider, retries, fallbacks, finish reason, token breakdown, provider-reported cost and rate-limit headers when supplied |
+| Tools and retrieval | Arguments, results, rejected calls, errors, retrieved sources, cache hit/miss and source-filter decisions alongside the original model answer |
+| Guardrails | Each executed input/output rule, outcome, findings, errors and duration |
+| Background workflows | Summary and personalization batches, coverage markers, dreaming decisions, handovers and job outcomes |
+| Operational actions | Setting proposals/confirmations/saves, scenario reloads, ingestion persistence and alert breach/cooldown decisions |
+
+Content capture retains full prompts, answers, retrieved passages and tool results without application truncation. Set `LANGFUSE_CAPTURE_CONTENT=false` to omit observation inputs/outputs while retaining timing, usage, identifiers, fingerprints and outcomes. Credentials and embedding vectors are excluded. Token and cost fields distinguish reported values from missing information; missing cost is not recorded as zero. Langfuse may separately estimate costs using its model catalogue.
+
+Browser timing separates queue wait, server processing and rendering acknowledgement. An acknowledgement requires the browser to remain connected. Read-only alert polling does not create a root trace for every refresh. Feedback collection and evaluation scores are separate from runtime tracing.
+
+Exports run asynchronously and cron processes drain them on exit. Tracing failures are logged without interrupting application actions or repeating them. Export acceptance does not prove storage: run the synthetic storage check from `backend/` to verify authentication, parent/child linkage, session identity, complete metadata and a full 100 KB payload. It makes no model or database requests:
+
+```bash
+uv run python cli.py tracing-check
+```
+
+Large metadata maps use a `details` wrapper to avoid OpenTelemetry attribute limits. Langfuse may expose these as flattened `details.*` keys. When reading nested metadata through its API, request `expand_metadata=details` to retrieve the full value.
+
 ## Dispatch tools
 
 Two read-only tools use the configured LLM provider's tool-calling loop and run in the application process. Their contract is in [docs/tools.md](docs/tools.md):

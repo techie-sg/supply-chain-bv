@@ -23,6 +23,7 @@ from queries.preferences import (
     remove_preference,
     save_preference,
 )
+from service.tracing import observation
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -251,8 +252,30 @@ class PreferenceService:
         options: dict[str, Any] | None = None,
     ) -> str | None:
         """Validate and store a value exactly as given; None if nothing changed."""
-        saved = self._set(self.current(code), enabled, value, options)
-        return f"Saved. {describe(saved)}." if saved else None
+        with observation(
+            "settings.set",
+            input={
+                "code": code,
+                "enabled": enabled,
+                "value": value,
+                "options": options,
+            },
+            user_id=self.manager_id,
+            metadata={"store_id": self.store_id, "code": code},
+        ) as span:
+            current = self.current(code)
+            saved = self._set(current, enabled, value, options)
+            message = f"Saved. {describe(saved)}." if saved else None
+            span.update(
+                metadata={"outcome": "saved" if saved else "unchanged"},
+                output={
+                    "outcome": "saved" if saved else "unchanged",
+                    "before": describe(current),
+                    "after": describe(saved or current),
+                    "message": message,
+                },
+            )
+            return message
 
     def _set(
         self,
@@ -294,12 +317,38 @@ class PreferenceService:
 
     def save(self, entries: list[dict[str, Any]]) -> list[str]:
         """Save several items; each is checked on its own and reported."""
+        with observation(
+            "settings.save",
+            input={"entries": entries},
+            user_id=self.manager_id,
+            metadata={"store_id": self.store_id},
+        ) as span:
+            messages, results = self._save(entries)
+            span.update(
+                output={"messages": messages, "results": results},
+                metadata={
+                    "outcomes": {
+                        result["code"]: result["outcome"] for result in results
+                    },
+                    "entries": len(entries),
+                    "rejected": sum(
+                        result["outcome"] == "rejected" for result in results
+                    ),
+                },
+            )
+            return messages
+
+    def _save(
+        self,
+        entries: list[dict[str, Any]],
+    ) -> tuple[list[str], list[dict[str, Any]]]:
         if not entries:
-            return []
+            return [], []
         # Read once for this save, not once per field. This snapshot is local to
         # the call: later reads still fetch fresh settings from the database.
         current = {item.definition.code: item for item in self.effective()}
         messages = []
+        results = []
         for entry in entries:
             try:
                 setting = current.get(entry["code"])
@@ -316,29 +365,59 @@ class PreferenceService:
             except PreferenceError as exc:
                 logger.info("Preference rejected", code=entry["code"])
                 messages.append(f"Not saved: {exc}")
+                results.append(
+                    {"code": entry["code"], "outcome": "rejected", "reason": str(exc)},
+                )
             else:
                 if saved:
                     current[entry["code"]] = saved
                     messages.append(f"Saved. {describe(saved)}.")
-        return messages
+                results.append(
+                    {
+                        "code": entry["code"],
+                        "outcome": "saved" if saved else "unchanged",
+                    },
+                )
+        return messages, results
 
     def reset(self, code: str) -> str:
         """Return an item to its default by marking the manager's value removed."""
-        definition = self.current(code).definition
-        if definition.locked:
-            raise PreferenceError(
-                f"{definition.name} is store policy and can't be changed.",
+        with observation(
+            "settings.reset",
+            input={"code": code},
+            user_id=self.manager_id,
+            metadata={"store_id": self.store_id, "code": code},
+        ) as span:
+            current = self.current(code)
+            definition = current.definition
+            if definition.locked:
+                raise PreferenceError(
+                    f"{definition.name} is store policy and can't be changed.",
+                )
+            default = default_setting(definition)
+            removed = remove_preference(
+                self.store_id,
+                self.manager_id,
+                definition.code,
+                self.engine,
             )
-        default = default_setting(definition)
-        if not remove_preference(
-            self.store_id,
-            self.manager_id,
-            definition.code,
-            self.engine,
-        ):
-            return f"{definition.name} is already at its default."
-        logger.info("Preference reset", code=definition.code)
-        return f"Reset to the default. {describe(default)}."
+            if removed:
+                logger.info("Preference reset", code=definition.code)
+            message = (
+                f"Reset to the default. {describe(default)}."
+                if removed
+                else f"{definition.name} is already at its default."
+            )
+            span.update(
+                metadata={"outcome": "reset" if removed else "unchanged"},
+                output={
+                    "outcome": "reset" if removed else "unchanged",
+                    "before": describe(current),
+                    "after": describe(default),
+                    "message": message,
+                },
+            )
+            return message
 
     def prompt_block(self) -> str:
         """The manager's settings for the model, with the limits of each item."""

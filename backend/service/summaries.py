@@ -40,6 +40,7 @@ from queries.personalization import pending_reviews
 from resources import PROMPTS
 from service.factory import create_llm_service
 from service.personalization import PersonalizationService
+from service.tracing import observation, trace_attributes
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -101,6 +102,49 @@ class SummaryService:
 
     def fold(self, conversation: Conversation, keep_recent: int) -> bool:
         """Fold raw messages, except the latest `keep_recent`, into the summary."""
+        with observation(
+            "conversation.summary",
+            kind="chain",
+            input={
+                "total_messages": len(conversation.messages),
+                "previous_covers_to": conversation.summary_covers_to,
+                "keep_recent": keep_recent,
+            },
+            metadata={
+                "store_id": conversation.store_id,
+                "conversation_id": str(conversation.id),
+                "total_messages": len(conversation.messages),
+                "previous_covers_to": conversation.summary_covers_to,
+                "keep_recent": keep_recent,
+            },
+            user_id=conversation.manager_id,
+            session_id=str(conversation.id),
+        ) as span:
+            failures_before = self.failures
+            saved = self._fold(conversation, keep_recent)
+            failures = self.failures - failures_before
+            progress = {
+                "status": "partial-failure"
+                if failures
+                else "saved"
+                if saved
+                else "no-change",
+                "summary_saved": saved,
+                "covers_to": conversation.summary_covers_to,
+                "failures": failures,
+            }
+            span.update(
+                output=progress,
+                metadata=progress,
+                **(
+                    {"level": "WARNING", "status_message": "summary-or-review-failed"}
+                    if failures
+                    else {}
+                ),
+            )
+            return saved
+
+    def _fold(self, conversation: Conversation, keep_recent: int) -> bool:
         start = raw_start(conversation)
         end = len(conversation.messages) - 1 - keep_recent
         if end < start:
@@ -170,19 +214,12 @@ class SummaryService:
         conversation_id: str | None = None,
     ) -> bool:
         """Fold older messages of the open chat if it exceeds a limit."""
-        conversation = (
-            resume_conversation(
-                UUID(conversation_id),
-                store_id,
-                manager_id,
-                self.engine,
-            )
-            if conversation_id
-            else latest_conversation(store_id, manager_id, self.engine)
+        return self._fold_selected(
+            store_id,
+            manager_id,
+            conversation_id,
+            automatic=True,
         )
-        if conversation is None or not needs_folding(conversation):
-            return False
-        return self.fold(conversation, keep_recent=SUMMARY_RECENT_MESSAGES)
 
     def summarize_now(
         self,
@@ -191,19 +228,69 @@ class SummaryService:
         conversation_id: str | None = None,
     ) -> bool:
         """Fold every message of the open chat, recent ones included, on request."""
-        conversation = (
-            resume_conversation(
-                UUID(conversation_id),
-                store_id,
-                manager_id,
-                self.engine,
-            )
-            if conversation_id
-            else latest_conversation(store_id, manager_id, self.engine)
+        return self._fold_selected(
+            store_id,
+            manager_id,
+            conversation_id,
+            automatic=False,
         )
-        if conversation is None:
-            return False
-        return self.fold(conversation, keep_recent=0)
+
+    def _fold_selected(
+        self,
+        store_id: str,
+        manager_id: str,
+        conversation_id: str | None,
+        *,
+        automatic: bool,
+    ) -> bool:
+        with observation(
+            "summary.after_answer" if automatic else "summary.now",
+            kind="chain",
+            input={
+                "store_id": store_id,
+                "manager_id": manager_id,
+                "conversation_id": conversation_id,
+            },
+            user_id=manager_id,
+            session_id=conversation_id,
+            metadata={"store_id": store_id, "automatic": automatic},
+        ) as span:
+            conversation = (
+                resume_conversation(
+                    UUID(conversation_id),
+                    store_id,
+                    manager_id,
+                    self.engine,
+                )
+                if conversation_id
+                else latest_conversation(store_id, manager_id, self.engine)
+            )
+            if conversation is None:
+                progress = {"summary_saved": False, "reason": "no_conversation"}
+                span.update(output=progress, metadata=progress)
+                return False
+            with trace_attributes(user_id=manager_id, session_id=str(conversation.id)):
+                span.update(metadata={"conversation_id": str(conversation.id)})
+                if automatic and not needs_folding(conversation):
+                    progress = {
+                        "summary_saved": False,
+                        "reason": "below_folding_threshold",
+                        "total_messages": len(conversation.messages),
+                    }
+                    span.update(output=progress, metadata=progress)
+                    return False
+                failures_before = self.failures
+                saved = self.fold(
+                    conversation,
+                    keep_recent=SUMMARY_RECENT_MESSAGES if automatic else 0,
+                )
+                progress = {
+                    "summary_saved": saved,
+                    "covers_to": conversation.summary_covers_to,
+                    "failures": self.failures - failures_before,
+                }
+                span.update(output=progress, metadata=progress)
+                return saved
 
     def summarize_idle(
         self,
@@ -214,37 +301,83 @@ class SummaryService:
         """Run one summary/personalization batch; force bypasses the idle wait."""
         now = now or datetime.now(TIMEZONE)
         idle_before = now if force else now - timedelta(minutes=SUMMARY_IDLE_MINUTES)
-        self.failures = 0
-        done = 0
-        attempted = set()
-        for conversation in idle_unsummarized(
-            idle_before,
-            SUMMARY_JOB_BATCH,
-            self.engine,
-        ):
-            attempted.add(conversation.id)
+        with observation(
+            "summary.batch",
+            kind="chain",
+            input={
+                "force": force,
+                "idle_before": idle_before.isoformat(),
+                "limit": SUMMARY_JOB_BATCH,
+                "review_personalization": self.review_personalization,
+            },
+        ) as span:
+            self.failures = 0
+            done = 0
+            attempted = set()
+            personalization_attempted = 0
+            completed = False
             try:
-                done += self.fold(conversation, keep_recent=0)
-            except (
-                requests.RequestException,
-                RuntimeError,
-                ValueError,
-                SQLAlchemyError,
-            ):
-                self.failures += 1
-                logger.warning(
-                    "Could not summarize idle conversation",
-                    conversation_id=str(conversation.id),
-                    exc_info=True,
+                for conversation in idle_unsummarized(
+                    idle_before,
+                    SUMMARY_JOB_BATCH,
+                    self.engine,
+                ):
+                    attempted.add(conversation.id)
+                    try:
+                        done += self.fold(conversation, keep_recent=0)
+                    except (
+                        requests.RequestException,
+                        RuntimeError,
+                        ValueError,
+                        SQLAlchemyError,
+                    ):
+                        self.failures += 1
+                        logger.warning(
+                            "Could not summarize idle conversation",
+                            conversation_id=str(conversation.id),
+                            exc_info=True,
+                        )
+                if self.review_personalization:
+                    for conversation in pending_reviews(
+                        SUMMARY_JOB_BATCH,
+                        exclude=tuple(attempted),
+                        engine=self.engine,
+                    ):
+                        personalization_attempted += 1
+                        self._review_personalization(conversation)
+                completed = True
+                return done
+            finally:
+                progress = {
+                    "attempted": len(attempted),
+                    "completed": done,
+                    "failures": self.failures,
+                    "pending_personalization_attempted": personalization_attempted,
+                    "status": "failed"
+                    if not completed
+                    else "partial-failure"
+                    if self.failures
+                    else "complete"
+                    if attempted or personalization_attempted
+                    else "no-work",
+                }
+                span.update(
+                    output={
+                        **progress,
+                        "conversation_ids": [
+                            str(identifier) for identifier in attempted
+                        ],
+                    },
+                    metadata=progress,
+                    **(
+                        {
+                            "level": "WARNING",
+                            "status_message": "summary-or-review-failed",
+                        }
+                        if completed and self.failures
+                        else {}
+                    ),
                 )
-        if self.review_personalization:
-            for conversation in pending_reviews(
-                SUMMARY_JOB_BATCH,
-                exclude=tuple(attempted),
-                engine=self.engine,
-            ):
-                self._review_personalization(conversation)
-        return done
 
 
 def _summarize(system_prompt: str, user_message: str) -> str:

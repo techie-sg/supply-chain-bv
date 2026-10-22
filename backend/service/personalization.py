@@ -4,6 +4,7 @@ Chat only reads this context. Summary cron reviews bounded raw message batches;
 ordinary operational messages normally produce no change.
 """
 
+import hashlib
 import json
 from collections.abc import Callable
 from datetime import datetime
@@ -39,6 +40,7 @@ from queries.personalization import (
     save_profile,
 )
 from resources import PROMPTS
+from service.tracing import observation
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -71,24 +73,51 @@ class PersonalizationService:
         values: dict[str, str | None],
         expected: Profile | None = None,
     ) -> bool:
-        validated = {
-            code: validate_value(code, value) for code, value in values.items()
-        }
-        current = expected if expected is not None else self.profile()
-        changes = {
-            code: item(value, "settings")
-            for code, value in validated.items()
-            if current.get(code, {}).get("value") != value
-        }
-        if not changes:
-            return False
-        return save_profile(
-            self.store_id,
-            self.manager_id,
-            changes,
-            current,
-            self.engine,
-        )
+        with observation(
+            "personalization.save",
+            kind="chain",
+            user_id=self.manager_id,
+            metadata={"store_id": self.store_id, "source": "settings"},
+        ) as span:
+            try:
+                validated = {
+                    code: validate_value(code, value) for code, value in values.items()
+                }
+            except ValueError:
+                span.update(metadata={"status": "rejected"})
+                raise
+            span.update(
+                input={"values": validated},
+                metadata={
+                    "fields": list(validated),
+                    "values_fingerprint": hashlib.sha256(
+                        json.dumps(validated, sort_keys=True).encode(),
+                    ).hexdigest(),
+                },
+            )
+            current = expected if expected is not None else self.profile()
+            changes = {
+                code: item(value, "settings")
+                for code, value in validated.items()
+                if current.get(code, {}).get("value") != value
+            }
+            try:
+                saved = bool(changes) and save_profile(
+                    self.store_id,
+                    self.manager_id,
+                    changes,
+                    current,
+                    self.engine,
+                )
+            except ValueError:
+                span.update(metadata={"status": "conflict"})
+                raise
+            progress = {
+                "status": "saved" if saved else "no-change",
+                "fields_saved": len(changes) if saved else 0,
+            }
+            span.update(output=progress, metadata=progress)
+            return saved
 
     def prompt_block(self) -> str | None:
         profile = self.profile()
@@ -109,6 +138,36 @@ class PersonalizationService:
         generate: Callable[[str, str], str],
     ) -> int:
         """Save supported personal context from bounded batches after this chat's marker."""
+        with observation(
+            "conversation.personalization",
+            kind="chain",
+            input={
+                "previous_covers_to": conversation.personalization_covers_to,
+                "summary_covers_to": conversation.summary_covers_to,
+            },
+            metadata={
+                "store_id": self.store_id,
+                "conversation_id": str(conversation.id),
+                "previous_covers_to": conversation.personalization_covers_to,
+                "summary_covers_to": conversation.summary_covers_to,
+            },
+            user_id=self.manager_id,
+            session_id=str(conversation.id),
+        ) as span:
+            saved = self._review(conversation, generate)
+            progress = {
+                "status": "saved" if saved else "no-change",
+                "preferences_saved": saved,
+                "covers_to": conversation.personalization_covers_to,
+            }
+            span.update(output=progress, metadata=progress)
+            return saved
+
+    def _review(
+        self,
+        conversation: Conversation,
+        generate: Callable[[str, str], str],
+    ) -> int:
         if (conversation.store_id, conversation.manager_id) != (
             self.store_id,
             self.manager_id,
@@ -123,21 +182,33 @@ class PersonalizationService:
             if start > conversation.summary_covers_to:
                 break
             end = self._batch_end(conversation, start)
-            updates = self._updates(
-                conversation,
-                start,
-                end,
-                generate,
-            )
-            count = finish_review(
-                conversation.id,
-                self.store_id,
-                self.manager_id,
-                expected,
-                end,
-                updates,
-                self.engine,
-            )
+            with observation(
+                "personalization.batch",
+                input={"message_start": start, "message_end": end},
+                metadata={"message_start": start, "message_end": end},
+                user_id=self.manager_id,
+                session_id=str(conversation.id),
+            ) as span:
+                updates = self._updates(conversation, start, end, generate)
+                count = finish_review(
+                    conversation.id,
+                    self.store_id,
+                    self.manager_id,
+                    expected,
+                    end,
+                    updates,
+                    self.engine,
+                )
+                progress = {
+                    "status": "superseded"
+                    if count is None
+                    else "saved"
+                    if count
+                    else "no-change",
+                    "preferences_saved": count,
+                    "covers_to": end if count is not None else expected,
+                }
+                span.update(output=progress, metadata=progress)
             if count is None:
                 break  # another worker completed or moved this batch
             conversation.personalization_covers_to = end

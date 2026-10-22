@@ -19,6 +19,8 @@ from constants import (
 from domain.chat import ChatMessage
 from domain.tools import Tool
 from service.llm_service import LLMService
+from service.provider_tracing import http_metadata, usage_fields
+from service.tracing import observation
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -90,58 +92,112 @@ class OpenRouterService(LLMService):
                 tool_choice="auto",
                 provider={"require_parameters": True},
             )
-        started = perf_counter()
-        response = requests.post(
-            OPENROUTER_API_URL,
-            headers={"Authorization": f"Bearer {api_key}"},
-            json=payload,
-            timeout=(10, 120),
-        )
-        if not response.ok:
-            # Provider messages may echo input; log only the HTTP status.
-            raise requests.HTTPError(
-                f"OpenRouter generation failed ({response.status_code})",
-                response=response,
+        with observation(
+            "openrouter.completion",
+            kind="generation",
+            input={"messages": messages, "tools": payload.get("tools", [])},
+            model=candidates[0],
+            metadata={
+                "provider": "openrouter",
+                "candidate_models": candidates,
+                "requested_model": self.model,
+                "locked_model": model,
+                "cost_source": "unknown",
+                "usage_source": "unknown",
+            },
+        ) as span:
+            span.update(
+                model_parameters={
+                    "temperature": 0,
+                    "max_tokens": 8192,
+                    "reasoning_enabled": False,
+                },
             )
-        body = response.json()
-        if not isinstance(body, dict) or body.get("error"):
-            raise RuntimeError("OpenRouter returned an error response.")
-        choices = body.get("choices")
-        if not isinstance(choices, list) or not choices:
-            raise RuntimeError("OpenRouter returned no completion.")
-        choice = choices[0]
-        if not isinstance(choice, dict) or choice.get("finish_reason") in (
-            "error",
-            "length",
-            "content_filter",
-        ):
-            raise RuntimeError("OpenRouter did not return a complete answer.")
-        message = choice.get("message")
-        if not isinstance(message, dict) or message.get("role") != "assistant":
-            raise RuntimeError("OpenRouter returned an invalid assistant message.")
-        served = body.get("model")
-        selected = next(
-            (
-                candidate
-                for candidate in candidates
-                if candidate == served or candidate.removesuffix(":free") == served
-            ),
-            candidates[0],
-        )
-        if selected != self.model:
+            started = perf_counter()
+            response = requests.post(
+                OPENROUTER_API_URL,
+                headers={"Authorization": f"Bearer {api_key}"},
+                json=payload,
+                timeout=(10, 120),
+            )
+            span.update(metadata=http_metadata(response))
+            if not response.ok:
+                span.update(
+                    level="ERROR",
+                    status_message=f"HTTP_{response.status_code}",
+                )
+                # Provider messages may echo input; log only the HTTP status.
+                raise requests.HTTPError(
+                    f"OpenRouter generation failed ({response.status_code})",
+                    response=response,
+                )
+            body = response.json()
+            if not isinstance(body, dict) or body.get("error"):
+                raise RuntimeError("OpenRouter returned an error response.")
+            span.update(**usage_fields(body.get("usage"), provider="openrouter"))
+            span.update(
+                metadata={
+                    "upstream_provider": body.get("provider")
+                    if isinstance(body.get("provider"), str)
+                    else None,
+                    "response_id": body.get("id"),
+                },
+            )
+            choices = body.get("choices")
+            if not isinstance(choices, list) or not choices:
+                raise RuntimeError("OpenRouter returned no completion.")
+            choice = choices[0]
+            if isinstance(choice, dict):
+                span.update(
+                    output=choice.get("message"),
+                    model=body.get("model") or candidates[0],
+                    metadata={
+                        "response_id": body.get("id"),
+                        "finish_reason": choice.get("finish_reason"),
+                    },
+                )
+            if not isinstance(choice, dict) or choice.get("finish_reason") in (
+                "error",
+                "length",
+                "content_filter",
+            ):
+                raise RuntimeError("OpenRouter did not return a complete answer.")
+            message = choice.get("message")
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                raise RuntimeError("OpenRouter returned an invalid assistant message.")
+            if not message.get("tool_calls") and not (
+                isinstance(message.get("content"), str) and message["content"].strip()
+            ):
+                span.update(level="WARNING", status_message="EMPTY_ANSWER")
+            served = body.get("model")
+            selected = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if candidate == served or candidate.removesuffix(":free") == served
+                ),
+                candidates[0],
+            )
+            span.update(
+                metadata={
+                    "selected_model": selected,
+                    "fallback_selected": selected != self.model,
+                },
+            )
+            if selected != self.model:
+                logger.info(
+                    "OpenRouter fallback selected",
+                    requested_model=self.model,
+                    model=selected,
+                )
             logger.info(
-                "OpenRouter fallback selected",
-                requested_model=self.model,
+                "OpenRouter generation completed",
                 model=selected,
+                messages=len(messages),
+                tokens=body.get("usage"),
+                duration_ms=round((perf_counter() - started) * 1000, 2),
             )
-        logger.info(
-            "OpenRouter generation completed",
-            model=selected,
-            messages=len(messages),
-            tokens=body.get("usage"),
-            duration_ms=round((perf_counter() - started) * 1000, 2),
-        )
-        return message, selected
+            return message, selected
 
     @staticmethod
     def _answer(message: dict[str, Any]) -> str:
@@ -186,6 +242,12 @@ class OpenRouterService(LLMService):
             if not isinstance(calls, list) or not all(
                 isinstance(call, dict) for call in calls
             ):
+                with observation("tool.invalid_call", kind="tool", input=calls) as span:
+                    span.update(
+                        output={"error": "INVALID_TOOL_CALLS"},
+                        level="WARNING",
+                        status_message="INVALID_TOOL_CALLS",
+                    )
                 raise RuntimeError("OpenRouter returned invalid tool calls.")
             # Keep the provider's message intact, including reasoning_details.
             messages.append(message)
@@ -193,6 +255,16 @@ class OpenRouterService(LLMService):
                 call_id = call.get("id") if isinstance(call, dict) else None
                 function = call.get("function") if isinstance(call, dict) else None
                 if not call_id or not isinstance(function, dict):
+                    with observation(
+                        "tool.invalid_call",
+                        kind="tool",
+                        input=call,
+                    ) as span:
+                        span.update(
+                            output={"error": "INVALID_TOOL_CALL"},
+                            level="WARNING",
+                            status_message="INVALID_TOOL_CALL",
+                        )
                     raise RuntimeError("OpenRouter returned an invalid tool call.")
                 name = function.get("name")
                 tool = by_name.get(name) if isinstance(name, str) else None
@@ -202,12 +274,33 @@ class OpenRouterService(LLMService):
                         raise TypeError("Tool arguments must be an object")
                 except (TypeError, ValueError):
                     result = "Invalid tool arguments. Supply a JSON object."
+                    with observation(
+                        "tool.invalid_arguments",
+                        kind="tool",
+                        input=function,
+                        metadata={"tool_call_id": call_id, "known_tool": bool(tool)},
+                    ) as span:
+                        span.update(
+                            output=result,
+                            level="WARNING",
+                            status_message="INVALID_INPUT",
+                        )
                 else:
-                    result = (
-                        tool.run(arguments)
-                        if tool
-                        else f"There is no tool named {name}."
-                    )
+                    if tool:
+                        result = tool.run(arguments)
+                    else:
+                        result = f"There is no tool named {name}."
+                        with observation(
+                            "tool.unknown",
+                            kind="tool",
+                            input={"name": name, "arguments": arguments},
+                            metadata={"tool_call_id": call_id},
+                        ) as span:
+                            span.update(
+                                output=result,
+                                level="WARNING",
+                                status_message="UNKNOWN_TOOL",
+                            )
                 logger.info("Tool called", tool=name, known=bool(tool))
                 messages.append(
                     {"role": "tool", "tool_call_id": call_id, "content": result},

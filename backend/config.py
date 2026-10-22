@@ -35,6 +35,13 @@ class Settings(BaseSettings):
         ),
     )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    # Tracing is a no-op until both project keys are configured.
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: SecretStr | None = None
+    langfuse_base_url: str = "https://cloud.langfuse.com"
+    langfuse_environment: str = "development"
+    langfuse_tracing_enabled: bool = True
+    langfuse_capture_content: bool = True
     embedding_provider: str = "jina"
     embedding_model: str = JINA_MODEL
     # Changing this changes stored vectors: re-run ingestion after toggling it.

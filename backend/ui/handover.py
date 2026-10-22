@@ -26,6 +26,7 @@ from service.handover import (
     save_shift_note,
     when,
 )
+from service.tracing import observation
 from ui.sidebar import select_manager
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -171,22 +172,43 @@ def end(manager_id: str, note: str | None, confirmed_empty: bool) -> tuple:
     Sets `handed_to` to the next manager and their new chat, which switches the
     workspace to them. Without a next shift, the shift just ends.
     """
-    if not (note or "").strip() and not confirmed_empty:
-        skipped = [gr.skip()] * 5
-        return (*skipped, EMPTY_NOTE, gr.skip(), True, gr.skip(), gr.skip())
-    try:
-        if next_manager(manager_id) is None:
-            ended = finish_shift(manager_id, note or "")
-            return page(manager_id, f"Shift ended at {when(ended).split(', ')[1]}.")
-        done = hand_over(manager_id, note or "")
-    except LookupError as exc:
-        return page(manager_id, str(exc))
-    except (SQLAlchemyError, RuntimeError):
-        logger.warning("Could not end the shift", exc_info=True)
-        return page(manager_id, UNAVAILABLE)
-    handed_to = {"manager": done.manager_id, "chat": str(done.conversation_id)}
-    message = f"Shift ended at {when(done.ended_at).split(', ')[1]}."
-    return (*page(manager_id, message)[:-1], handed_to)
+    with observation(
+        "handover.submit",
+        kind="chain",
+        user_id=manager_id,
+        metadata={"has_note": bool((note or "").strip())},
+    ) as span:
+        if not (note or "").strip() and not confirmed_empty:
+            span.update(metadata={"status": "confirmation-required"})
+            skipped = [gr.skip()] * 5
+            return (*skipped, EMPTY_NOTE, gr.skip(), True, gr.skip(), gr.skip())
+        try:
+            if next_manager(manager_id) is None:
+                ended = finish_shift(manager_id, note or "")
+                span.update(metadata={"status": "ended"})
+                return page(manager_id, f"Shift ended at {when(ended).split(', ')[1]}.")
+            done = hand_over(manager_id, note or "")
+        except LookupError as exc:
+            span.update(metadata={"status": "rejected"}, level="WARNING")
+            return page(manager_id, str(exc))
+        except (SQLAlchemyError, RuntimeError):
+            logger.warning("Could not end the shift", exc_info=True)
+            span.update(
+                metadata={"status": "failed"},
+                level="ERROR",
+                status_message="handover-unavailable",
+            )
+            return page(manager_id, UNAVAILABLE)
+        handed_to = {"manager": done.manager_id, "chat": str(done.conversation_id)}
+        span.update(
+            metadata={
+                "status": "completed",
+                "conversation_id": str(done.conversation_id),
+                "next_manager_id": done.manager_id,
+            },
+        )
+        message = f"Shift ended at {when(done.ended_at).split(', ')[1]}."
+        return (*page(manager_id, message)[:-1], handed_to)
 
 
 def chat_card(manager_id: str, conversation_id: str | None) -> dict:

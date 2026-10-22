@@ -1,19 +1,21 @@
 """Render stored messages, answer turns and confirm proposed setting changes."""
 
 import json
+import math
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from html import escape
+from time import perf_counter, time
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import gradio as gr
 import requests
 import structlog
 from sqlalchemy.exc import SQLAlchemyError
 
-from constants import DEMO_MANAGER_ID
+from constants import DEMO_MANAGER_ID, DEMO_STORE_ID
 from domain.chat import StoredMessage
 from service.conversations import (
     add_note,
@@ -24,6 +26,7 @@ from service.scenarios import (
     TIMEZONE,
 )
 from service.setting_changes import confirm_proposals
+from service.tracing import observation
 from ui.browser import browser_script
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -50,6 +53,112 @@ COMPOSER_LAYOUT_JS = browser_script("composer_layout.js")
 
 
 FINISH_CHAT_JS = browser_script("finish_chat.js")
+
+
+def _browser_payload(value: str | None) -> dict[str, Any]:
+    if not isinstance(value, str) or len(value) > 4096:
+        return {}
+    try:
+        payload = json.loads(value)
+    except (ValueError, TypeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if math.isfinite(number) and 0 <= number <= 9e15 else None
+
+
+def _duration(end: Any, start: Any) -> float | None:
+    end, start = _number(end), _number(start)
+    if end is None or start is None or not 0 <= end - start <= 3_600_000:
+        return None
+    return round(end - start, 2)
+
+
+def receive_request(
+    payload: str | None,
+    manager_id: str,
+    conversation_id: str | None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    """Timestamp server receipt before joining the existing workspace queue."""
+    client = _browser_payload(payload)
+    try:
+        request_id = UUID(str(client.get("request_id", ""))).hex
+    except ValueError:
+        request_id = uuid4().hex
+    timing: dict[str, Any] = {
+        "request_id": request_id,
+        "manager_id": manager_id,
+        "conversation_id": conversation_id,
+        "client_sent_at_ms": _number(client.get("sent_at_ms")),
+        "client_sent_monotonic_ms": _number(client.get("sent_monotonic_ms")),
+        "server_received_at_ms": time() * 1000,
+        "server_received_monotonic_ms": perf_counter() * 1000,
+    }
+    with observation(
+        "chat.received",
+        kind="chain",
+        input={"question": message} if message else None,
+        user_id=manager_id,
+        session_id=conversation_id,
+        metadata={
+            "request_id": request_id,
+            "store_id": DEMO_STORE_ID,
+            "server_received_at_ms": timing["server_received_at_ms"],
+            "session_unresolved": conversation_id is None,
+        },
+    ) as span:
+        timing["receipt_trace_context"] = span.trace_context()
+    return timing
+
+
+def acknowledge_response(
+    payload: str | None,
+    timing: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Link a browser-rendered acknowledgment to its server-owned request trace."""
+    client = _browser_payload(payload)
+    if (
+        not timing
+        or timing.get("acknowledged")
+        or client.get("request_id") != timing.get("request_id")
+    ):
+        return timing
+    metrics = {
+        "request_id": timing["request_id"],
+        "browser_elapsed_ms": _duration(
+            client.get("rendered_monotonic_ms"),
+            timing.get("client_sent_monotonic_ms"),
+        ),
+        "queue_wait_ms": timing.get("queue_wait_ms"),
+        "server_duration_ms": timing.get("server_duration_ms"),
+        "server_received_at_ms": timing.get("server_received_at_ms"),
+        "server_started_at_ms": timing.get("server_started_at_ms"),
+        "server_finished_at_ms": timing.get("server_finished_at_ms"),
+        "browser_rendered_at_ms": _number(client.get("rendered_at_ms")),
+    }
+    trace_context = timing.get("trace_context")
+    metrics["trace_id"] = trace_context.get("trace_id") if trace_context else None
+    logger.info("Chat response rendered", **metrics)
+    if trace_context:
+        with observation(
+            "chat.browser_rendered",
+            trace_context=trace_context,
+            user_id=timing.get("manager_id"),
+            session_id=timing.get("conversation_id"),
+            metadata=metrics,
+        ) as span:
+            progress = {"status": timing.get("status", "completed")}
+            span.update(output=progress, metadata=progress)
+    return {**timing, "acknowledged": True}
 
 
 def message_time(when: datetime, now: datetime) -> str:
@@ -202,6 +311,7 @@ def chat(
     history: list[dict] | None,
     manager_id: str = DEMO_MANAGER_ID,
     conversation_id: str | None = None,
+    request_timing: dict[str, Any] | None = None,
 ) -> tuple[list[dict], str, Any]:
     """Answer from stored history; keep the draft and display intact on failure.
 
@@ -211,13 +321,61 @@ def chat(
     history = history or []
     if not message.strip():
         return history, "", gr.skip()
-    request_id = uuid4().hex
+    if request_timing is not None and (
+        request_timing.get("manager_id") != manager_id
+        or request_timing.get("conversation_id") != conversation_id
+    ):
+        request_timing.clear()
+        request_timing.update(
+            receive_request(None, manager_id, conversation_id, message),
+        )
+    timing = request_timing if request_timing is not None else {}
+    request_id = timing.get("request_id") or uuid4().hex
+    started = perf_counter() * 1000
+    timing.update(
+        server_started_at_ms=time() * 1000,
+        queue_wait_ms=_duration(started, timing.get("server_received_monotonic_ms")),
+    )
     try:
-        with structlog.contextvars.bound_contextvars(request_id=request_id):
-            answer, proposals, trace = ask_question(
-                message,
-                **chat_scope(manager_id, conversation_id),
-            )
+        with (
+            structlog.contextvars.bound_contextvars(request_id=request_id),
+            observation(
+                "chat.request",
+                kind="chain",
+                user_id=manager_id,
+                session_id=conversation_id,
+                metadata={
+                    "request_id": request_id,
+                    "queue_wait_ms": timing["queue_wait_ms"],
+                    "server_received_at_ms": timing.get("server_received_at_ms"),
+                    "server_started_at_ms": timing["server_started_at_ms"],
+                },
+                **(
+                    {"trace_context": timing["receipt_trace_context"]}
+                    if timing.get("receipt_trace_context")
+                    else {}
+                ),
+            ) as span,
+        ):
+            try:
+                answer, proposals, trace = ask_question(
+                    message,
+                    **chat_scope(manager_id, conversation_id),
+                )
+                timing["status"] = "completed"
+            finally:
+                timing.update(
+                    server_finished_at_ms=time() * 1000,
+                    server_duration_ms=_duration(perf_counter() * 1000, started),
+                    trace_context=span.trace_context(),
+                )
+                timing.setdefault("status", "failed")
+                span.update(
+                    metadata={
+                        "server_duration_ms": timing["server_duration_ms"],
+                        "server_finished_at_ms": timing["server_finished_at_ms"],
+                    },
+                )
     except (
         requests.RequestException,
         SQLAlchemyError,
@@ -259,21 +417,33 @@ def respond_to_pending(
     history: list[dict] | None,
     manager_id: str = DEMO_MANAGER_ID,
     conversation_id: str | None = None,
-) -> Iterator[tuple[list[dict], str, Any]]:
+    request_timing: dict[str, Any] | None = None,
+) -> Iterator[tuple]:
     """Answer the message already displayed by the browser without duplicating it."""
     history = history or []
     if not message.strip():
-        yield history, "", gr.skip()
+        result = (history, "", gr.skip())
+        yield (*result, request_timing) if request_timing is not None else result
         return
     previous = (
         history[:-1] if history and history[-1].get("role") == "user" else history
     )
     try:
-        yield chat(message, previous, manager_id, conversation_id)
+        result = chat(
+            message,
+            previous,
+            manager_id,
+            conversation_id,
+            **(
+                {"request_timing": request_timing} if request_timing is not None else {}
+            ),
+        )
+        yield (*result, request_timing) if request_timing is not None else result
     except gr.Error:
         # The manager's message is already stored. Keep it visible, including
         # when the answer fails, and retain the draft for an explicit retry.
-        yield history, message, gr.skip()
+        result = (history, message, gr.skip())
+        yield (*result, request_timing) if request_timing is not None else result
         raise
 
 
@@ -338,12 +508,27 @@ def confirm_pending(
     """Save the proposed setting changes the manager confirmed."""
     if not pending:
         return history or [], []
-    try:
-        results = confirm_proposals(pending, manager_id=manager_id)
-    except (SQLAlchemyError, RuntimeError) as exc:
-        logger.exception("Could not save confirmed setting changes")
-        raise gr.Error("Could not save the settings. Please try again.") from exc
-    return _with_note(history, "\n\n".join(results), manager_id, conversation_id), []
+    with observation(
+        "settings.confirm",
+        kind="chain",
+        user_id=manager_id,
+        session_id=conversation_id,
+        metadata={"proposal_count": len(pending)},
+    ) as span:
+        try:
+            results = confirm_proposals(pending, manager_id=manager_id)
+        except (SQLAlchemyError, RuntimeError) as exc:
+            logger.exception("Could not save confirmed setting changes")
+            raise gr.Error("Could not save the settings. Please try again.") from exc
+        response = _with_note(
+            history,
+            "\n\n".join(results),
+            manager_id,
+            conversation_id,
+        )
+        progress = {"status": "resolved", "result_count": len(results)}
+        span.update(output=progress, metadata=progress)
+        return response, []
 
 
 def cancel_pending(
@@ -355,16 +540,23 @@ def cancel_pending(
     """Discard the proposed setting changes; nothing is saved."""
     if not pending:
         return history or [], []
-    names = ", ".join(change["name"] for change in pending)
-    return (
-        _with_note(
+    with observation(
+        "settings.cancel",
+        kind="chain",
+        user_id=manager_id,
+        session_id=conversation_id,
+        metadata={"proposal_count": len(pending)},
+    ) as span:
+        names = ", ".join(change["name"] for change in pending)
+        response = _with_note(
             history,
             f"Cancelled. Nothing was changed ({names}).",
             manager_id,
             conversation_id,
-        ),
-        [],
-    )
+        )
+        progress = {"status": "cancelled", "proposal_count": len(pending)}
+        span.update(output=progress, metadata=progress)
+        return response, []
 
 
 @dataclass
