@@ -11,12 +11,14 @@ time, so a breach that lasts pops up again once its cooldown has passed.
 """
 
 from collections.abc import Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta
 from typing import Any
 from uuid import UUID
 
 import structlog
+from opentelemetry.trace import get_current_span
 from sqlalchemy import Engine
 
 from config import get_settings
@@ -27,6 +29,7 @@ from queries.alerts import dismiss_trigger, record_trigger, triggers_since
 from queries.scenarios import read_scenario_rows
 from service.preferences import EffectiveSetting, limits, manager_preferences
 from service.scenarios import TIMEZONE
+from service.tracing import observation
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -391,13 +394,124 @@ def check_alerts(
     those it has not shown yet. Today's counts include closed ones.
     """
     now = now or datetime.now(TIMEZONE)
+    details: dict[str, Any] = {
+        "manager_id": manager_id,
+        "store_id": store_id,
+        "checked_at": now.isoformat(),
+    }
+    # Cron and chat checks are children of their existing trace. Ordinary UI
+    # polls create a new trace only when they actually record an event or fail.
+    traced_parent = get_current_span().get_span_context().is_valid
+    with (
+        observation(
+            "alerts.check_manager",
+            input=details,
+            user_id=manager_id,
+            metadata={"store_id": store_id},
+        )
+        if traced_parent
+        else nullcontext(None)
+    ) as span:
+        try:
+            checked = _check_alerts(manager_id, store_id, now, engine, details)
+        except Exception:
+            if span is None:
+                with observation(
+                    "alerts.check_failed",
+                    input=details,
+                    user_id=manager_id,
+                    metadata={"store_id": store_id},
+                ):
+                    raise
+            span.update(input=details)
+            raise
+        output = {
+            "available": checked.available,
+            "recorded": checked.recorded,
+            "recent_event_ids": [alert["id"] for alert in checked.alerts],
+            "decisions": details.get("decisions", []),
+        }
+        progress = {
+            "available": checked.available,
+            "recorded": checked.recorded,
+            "decision_outcomes": {
+                decision["code"]: decision["outcome"]
+                for decision in details.get("decisions", [])
+            },
+        }
+        if span is not None:
+            span.update(input=details, output=output, metadata=progress)
+        elif checked.recorded:
+            with observation(
+                "alerts.recorded",
+                input=details,
+                user_id=manager_id,
+                metadata={"store_id": store_id},
+            ) as recorded_span:
+                recorded_span.update(output=output, metadata=progress)
+        return checked
+
+
+def _check_alerts(
+    manager_id: str,
+    store_id: str,
+    now: datetime,
+    engine: Engine | None,
+    details: dict[str, Any],
+) -> AlertCheck:
     snapshot = live_snapshot(engine)
     if snapshot is None:
+        details["reason"] = "no_snapshot"
         return AlertCheck(available=False, alerts=[])
     settings = manager_preferences(manager_id).effective()
+    details["snapshot_as_of"] = snapshot.as_of.isoformat()
+    details["settings"] = [
+        {
+            "code": setting.definition.code,
+            "enabled": setting.enabled,
+            "value": setting.value,
+            "options": setting.options.model_dump(mode="json")
+            if setting.options
+            else None,
+        }
+        for setting in settings
+        if setting.definition.category == PreferenceCategory.ALERT
+    ]
     override = get_settings().alert_cooldown_override_min
+    evaluated = evaluate(snapshot, settings, now)
+    decisions = {
+        result.code: {
+            "code": result.code,
+            "value": result.value,
+            "threshold": result.threshold,
+            "operator": result.operator,
+            "breached": result.breached,
+            "cooldown_min": override or result.cooldown_min,
+            "drivers": result.measure.items,
+            "outcome": "pending_record" if result.breached else "within_limit",
+        }
+        for result in evaluated
+    }
+    for setting in settings:
+        if (
+            setting.definition.category != PreferenceCategory.ALERT
+            or setting.definition.code in decisions
+        ):
+            continue
+        if not setting.enabled or setting.value is None:
+            outcome = "disabled"
+        elif not in_window(setting.options, now):
+            outcome = "out_of_window"
+        else:
+            outcome = "no_measure"
+        decisions[setting.definition.code] = {
+            "code": setting.definition.code,
+            "breached": False,
+            "outcome": outcome,
+        }
+    details["decisions"] = list(decisions.values())
     recorded = 0
-    for result in evaluate(snapshot, settings, now):
+    for result in evaluated:
         if not result.breached:
             continue
         event = record_trigger(
@@ -413,7 +527,11 @@ def check_alerts(
             override or result.cooldown_min,
             engine,
         )
+        decisions[result.code]["outcome"] = (
+            "recorded" if event is not None else "cooldown_suppressed"
+        )
         if event is not None:
+            decisions[result.code]["event_id"] = str(event.id)
             recorded += 1
             logger.info(
                 "Alert triggered",
@@ -483,13 +601,31 @@ def check_store(
     from service.managers import store_managers
 
     now = now or datetime.now(TIMEZONE)
-    if live_snapshot(engine) is None:
-        return StoreCheck(available=False, recorded={})
-    recorded = {}
-    for manager in store_managers(store_id, engine):
-        check = check_alerts(manager.manager_id, store_id, now, engine)
-        recorded[manager.manager_id] = check.recorded
-    return StoreCheck(available=True, recorded=recorded)
+    with observation(
+        "alerts.check_store",
+        input={"store_id": store_id, "checked_at": now.isoformat()},
+        metadata={"store_id": store_id},
+    ) as span:
+        if live_snapshot(engine) is None:
+            span.update(
+                output={"available": False, "recorded": {}, "reason": "no_snapshot"},
+                metadata={
+                    "available": False,
+                    "recorded_total": 0,
+                    "reason": "no_snapshot",
+                },
+            )
+            return StoreCheck(available=False, recorded={})
+        recorded = {}
+        for manager in store_managers(store_id, engine):
+            check = check_alerts(manager.manager_id, store_id, now, engine)
+            recorded[manager.manager_id] = check.recorded
+        result = StoreCheck(available=True, recorded=recorded)
+        span.update(
+            output={"available": True, "recorded": recorded, "total": result.total},
+            metadata={"available": True, "recorded_total": result.total},
+        )
+        return result
 
 
 def diagnose(

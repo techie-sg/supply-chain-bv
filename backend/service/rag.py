@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from contextvars import ContextVar
 from datetime import datetime
 from functools import partial
+from hashlib import sha256
 from time import perf_counter
 from typing import Any, Literal, Protocol
 
@@ -23,6 +24,7 @@ from service.embedding_service import EmbeddingService
 from service.factory import create_embedding_service, create_llm_service
 from service.llm_service import LLMService
 from service.tools import traced_tools
+from service.tracing import observation
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -76,39 +78,56 @@ class RAGService:
 
     def _retrieve(self, query: str, top_k: int) -> list[dict[str, Any]]:
         """Chunks for the query, from the cache when the same one was just asked."""
-        started = perf_counter()
-        # Model and adapters decide the vector space, so they are part of the key.
-        key = cache_key(
-            self.embedding_service.model,
-            getattr(self.embedding_service, "task_adapters", None),
-            top_k,
-            " ".join(query.casefold().split()),
-        )
-        state: Literal["hit", "miss", "off"]
-        cached = self.cache.get(key) if self.cache.enabled else None
-        if cached is not None:
-            results, state = list(cached), "hit"
-        else:
-            embedding = self.embedding_service.embed_query(query)
-            results = retrieve(query_embedding=embedding, match_count=top_k)
-            if results and self.cache.enabled:
-                self.cache.set(key, tuple(results))
-            state = "miss" if self.cache.enabled else "off"
-        trace: RetrievalTrace = {
-            "cache": state,
-            "chunks": [result["chunk_id"] for result in results],
-            "ms": round((perf_counter() - started) * 1000, 1),
-        }
-        previous = _retrieval_trace.get()
-        if previous is not None:
-            trace["chunks"] = list(
-                dict.fromkeys([*previous["chunks"], *trace["chunks"]]),
+        with observation(
+            "playbook.retrieve",
+            kind="retriever",
+            input={"query": query, "top_k": top_k},
+            model=self.embedding_service.model,
+            metadata={"cache": "lookup" if self.cache.enabled else "off"},
+        ) as span:
+            started = perf_counter()
+            # Model and adapters decide the vector space, so they are part of the key.
+            key = cache_key(
+                self.embedding_service.model,
+                getattr(self.embedding_service, "task_adapters", None),
+                top_k,
+                " ".join(query.casefold().split()),
             )
-            trace["ms"] = round(previous["ms"] + trace["ms"], 1)
-            if previous["cache"] == "miss":
-                trace["cache"] = "miss"
-        _retrieval_trace.set(trace)
-        return results
+            state: Literal["hit", "miss", "off"]
+            cached = self.cache.get(key) if self.cache.enabled else None
+            if cached is not None:
+                state = "hit"
+                span.update(metadata={"cache": state})
+                results = list(cached)
+            else:
+                state = "miss" if self.cache.enabled else "off"
+                span.update(metadata={"cache": state})
+                embedding = self.embedding_service.embed_query(query)
+                results = retrieve(query_embedding=embedding, match_count=top_k)
+                if results and self.cache.enabled:
+                    self.cache.set(key, tuple(results))
+            span.update(
+                output=results,
+                metadata={
+                    "cache": state,
+                    "chunks": [result["chunk_id"] for result in results],
+                },
+            )
+            trace: RetrievalTrace = {
+                "cache": state,
+                "chunks": [result["chunk_id"] for result in results],
+                "ms": round((perf_counter() - started) * 1000, 1),
+            }
+            previous = _retrieval_trace.get()
+            if previous is not None:
+                trace["chunks"] = list(
+                    dict.fromkeys([*previous["chunks"], *trace["chunks"]]),
+                )
+                trace["ms"] = round(previous["ms"] + trace["ms"], 1)
+                if previous["cache"] == "miss":
+                    trace["cache"] = "miss"
+            _retrieval_trace.set(trace)
+            return results
 
     def search_tool(self, top_k: int = 3) -> Tool:
         """Policy retrieval through the same tool contract as live dispatch."""
@@ -233,29 +252,74 @@ class RAGService:
         if alerts:
             user_message = f"{alerts}\n\n{user_message}"
         if preferences is not None:
-            user_message = f"{preferences.prompt_block()}\n\n{user_message}"
+            with observation("context.settings", kind="span") as context_span:
+                preference_block = preferences.prompt_block()
+                context_span.update(
+                    output=preference_block,
+                    metadata={"sha256": sha256(preference_block.encode()).hexdigest()},
+                )
+            user_message = f"{preference_block}\n\n{user_message}"
         system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
+        source_digest = sha256(system_prompt.encode()).hexdigest()
         today = datetime.now(TIMEZONE).date().isoformat()
         system_prompt += f"\n\nToday's date is {today} (Asia/Kolkata)."
-        answer = self.llm_service.generate_with_tools(
-            system_prompt=system_prompt,
-            user_message=user_message,
-            tools=traced_tools(
-                [search, *tools],
-                tool_trace if tool_trace is not None else [],
-                results,
-            ),
-            history=history,
-        )
-        answer = self._check_sources(answer, results[result_start:])
-        retrieval_trace = _retrieval_trace.get()
-        logger.info(
-            "RAG answer completed",
-            retrieved_chunks=len(retrieval_trace["chunks"]) if retrieval_trace else 0,
-            retrieval_cache=retrieval_trace["cache"] if retrieval_trace else None,
-            duration_ms=round((perf_counter() - started) * 1000, 2),
-        )
-        return answer
+        with observation(
+            "rag.answer",
+            kind="chain",
+            input={"question": question},
+            metadata={
+                "top_k": top_k,
+                "prompt_source": PROMPT_PATH.name,
+                "prompt_source_sha256": source_digest,
+                "system_prompt_sha256": sha256(system_prompt.encode()).hexdigest(),
+                "user_message_sha256": sha256(user_message.encode()).hexdigest(),
+            },
+        ) as span:
+            model_answer = self.llm_service.generate_with_tools(
+                system_prompt=system_prompt,
+                user_message=user_message,
+                tools=traced_tools(
+                    [search, *tools],
+                    tool_trace if tool_trace is not None else [],
+                    results,
+                ),
+                history=history,
+            )
+            current_results = results[result_start:]
+            answer = self._check_sources(model_answer, current_results)
+            retrieval_trace = _retrieval_trace.get()
+            source_check_changed = answer != model_answer
+            no_guidance = answer == NO_GUIDANCE_ANSWER
+            span.update(
+                output={"model_answer": model_answer, "answer": answer},
+                metadata={
+                    "source_check_changed": source_check_changed,
+                    "no_guidance_answer": no_guidance,
+                    "tools_called": [result["tool"] for result in current_results],
+                    "retrieval": retrieval_trace,
+                },
+                **(
+                    {
+                        "level": "WARNING",
+                        "status_message": (
+                            "SOURCE_CHECK_REJECTED"
+                            if source_check_changed
+                            else "NO_GUIDANCE"
+                        ),
+                    }
+                    if source_check_changed or no_guidance
+                    else {}
+                ),
+            )
+            logger.info(
+                "RAG answer completed",
+                retrieved_chunks=len(retrieval_trace["chunks"])
+                if retrieval_trace
+                else 0,
+                retrieval_cache=retrieval_trace["cache"] if retrieval_trace else None,
+                duration_ms=round((perf_counter() - started) * 1000, 2),
+            )
+            return answer
 
     @staticmethod
     def _check_sources(answer: str, results: list[ToolResult]) -> str:

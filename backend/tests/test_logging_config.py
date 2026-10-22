@@ -14,6 +14,8 @@ def run_logging_script(script: str) -> subprocess.CompletedProcess[str]:
             sys.executable,
             "-c",
             "from types import SimpleNamespace\n"
+            "from config import Settings\n"
+            "Settings.model_config['env_file'] = None\n"
             "import logging_config\n"
             "logging_config.get_settings = lambda: SimpleNamespace(log_level='INFO')\n"
             + script,

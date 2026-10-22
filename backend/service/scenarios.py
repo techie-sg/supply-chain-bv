@@ -18,6 +18,7 @@ from domain.scenario import ScenarioData
 from queries.scenarios import read_scenario_rows, replace_scenario
 from resources import SCENARIO_DIR
 from service.cache import invalidate_metrics_cache
+from service.tracing import observation
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -115,27 +116,70 @@ def build_scenario(key: str, as_of: datetime) -> tuple[list[object], dict[str, A
 def load_scenario(key: str, engine: Engine | None = None) -> dict[str, Any]:
     """Atomically replace all operational rows with one validated scenario."""
     started = perf_counter()
-    rows, _ = build_scenario(key, datetime.now(TIMEZONE))
-    replace_scenario(rows, engine)
-    invalidate_metrics_cache()
-    context = current_scenario(engine)
-    if context is None:
-        raise RuntimeError("No saved scenario after loading")
-    logger.info(
-        "Scenario loaded",
-        scenario=key,
-        counts=context["counts"],
-        duration_ms=round((perf_counter() - started) * 1000, 2),
-    )
-    return context
+    with observation(
+        "scenario.load",
+        input={"scenario_key": key},
+        metadata={"scenario_key": key, "reset_committed": False},
+    ) as span:
+        rows, prepared = build_scenario(key, datetime.now(TIMEZONE))
+        span.update(
+            input={"scenario_key": key, "prepared_snapshot": prepared},
+            metadata={"store_id": prepared["store_id"]},
+        )
+        replace_scenario(rows, engine)
+        # Record the commit before later reads can fail: a failed UI refresh
+        # must not make a successful destructive reset look like a rollback.
+        span.update(metadata={"reset_committed": True})
+        invalidate_metrics_cache()
+        span.update(metadata={"metrics_cache_invalidated": True})
+        context = current_scenario(engine)
+        if context is None:
+            raise RuntimeError("No saved scenario after loading")
+        span.update(
+            output={"outcome": "loaded", "snapshot": context},
+            metadata={"outcome": "loaded", "counts": context["counts"]},
+        )
+        logger.info(
+            "Scenario loaded",
+            scenario=key,
+            counts=context["counts"],
+            duration_ms=round((perf_counter() - started) * 1000, 2),
+        )
+        return context
 
 
 def reload_current_scenario(engine: Engine | None = None) -> dict[str, Any]:
     """Reset the database's active scenario with timestamps based on the current time."""
-    context = current_scenario(engine)
-    if context is None:
-        raise LookupError("No scenario is loaded. Load one from Demo tools first.")
-    return load_scenario(context["scenario_key"], engine)
+    with observation("scenario.reload") as span:
+        context = current_scenario(engine)
+        if context is None:
+            span.update(
+                output={"outcome": "no_current_scenario"},
+                metadata={"outcome": "no_current_scenario"},
+            )
+            raise LookupError("No scenario is loaded. Load one from Demo tools first.")
+        span.update(
+            input={
+                "scenario_key": context["scenario_key"],
+                "previous_as_of": context["as_of"],
+            },
+            metadata={
+                "store_id": context.get("store_id"),
+                "scenario_key": context["scenario_key"],
+            },
+        )
+        loaded = load_scenario(context["scenario_key"], engine)
+        span.update(
+            metadata={"outcome": "reloaded"},
+            output={
+                "outcome": "reloaded",
+                "scenario_key": loaded["scenario_key"],
+                "previous_as_of": context["as_of"],
+                "as_of": loaded["as_of"],
+                "counts": loaded["counts"],
+            },
+        )
+        return loaded
 
 
 def current_scenario(engine: Engine | None = None) -> dict[str, Any] | None:

@@ -42,6 +42,11 @@ def build_app() -> gr.Blocks:
     with gr.Blocks(title="DispatchDesk", delete_cache=(3600, 86400)) as app:
         current = gr.State(None)
         active_chat = gr.State(None)
+        # Browser timing stays separate from chat/scenario data. Trace IDs are
+        # held only in server-side, session-scoped state.
+        request_timing = gr.State(None)
+        client_timing = gr.Textbox(visible=False)
+        browser_ack = gr.Textbox(visible=False)
         chat_location = gr.JSON(visible=False)
         # The selected manager's id; chats, settings and proposals follow it.
         manager = gr.State(DEMO_MANAGER_ID)
@@ -454,20 +459,43 @@ def build_app() -> gr.Blocks:
             show_progress="hidden",
         )
         for event in (submit.click, message.submit):
-            response = event(
-                fn=None,
-                js=chat_ui.SEND_MESSAGE_JS,
-                inputs=[message, chatbot],
-                outputs=[pending_message, chatbot, message, submit, processing],
-                queue=False,
-                show_progress="hidden",
-            ).then(
-                chat_ui.respond_to_pending,
-                inputs=[pending_message, chatbot, manager, active_chat],
-                outputs=[chatbot, message, pending_changes],
-                show_progress="hidden",
-                concurrency_id="workspace",
-                concurrency_limit=1,
+            response = (
+                event(
+                    fn=None,
+                    js=chat_ui.SEND_MESSAGE_JS,
+                    inputs=[message, chatbot],
+                    outputs=[
+                        pending_message,
+                        chatbot,
+                        message,
+                        submit,
+                        processing,
+                        client_timing,
+                    ],
+                    queue=False,
+                    show_progress="hidden",
+                )
+                .then(
+                    chat_ui.receive_request,
+                    inputs=[client_timing, manager, active_chat, pending_message],
+                    outputs=request_timing,
+                    queue=False,
+                    show_progress="hidden",
+                )
+                .then(
+                    chat_ui.respond_to_pending,
+                    inputs=[
+                        pending_message,
+                        chatbot,
+                        manager,
+                        active_chat,
+                        request_timing,
+                    ],
+                    outputs=[chatbot, message, pending_changes, request_timing],
+                    show_progress="hidden",
+                    concurrency_id="workspace",
+                    concurrency_limit=1,
+                )
             )
             # A generator can yield the restored draft and then fail. Gradio
             # does not run the ordinary JS continuation for that error path.
@@ -476,11 +504,31 @@ def build_app() -> gr.Blocks:
                 outputs=[processing, submit, message],
                 queue=False,
                 show_progress="hidden",
-            )
-            response.then(
+            ).then(
                 fn=None,
                 js=chat_ui.FINISH_CHAT_JS,
-                outputs=[processing, submit, message],
+                inputs=client_timing,
+                outputs=[processing, submit, message, browser_ack],
+                queue=False,
+                show_progress="hidden",
+            ).then(
+                chat_ui.acknowledge_response,
+                inputs=[browser_ack, request_timing],
+                outputs=request_timing,
+                queue=False,
+                show_progress="hidden",
+            )
+            response.success(
+                fn=None,
+                js=chat_ui.FINISH_CHAT_JS,
+                inputs=client_timing,
+                outputs=[processing, submit, message, browser_ack],
+                queue=False,
+                show_progress="hidden",
+            ).then(
+                chat_ui.acknowledge_response,
+                inputs=[browser_ack, request_timing],
+                outputs=request_timing,
                 queue=False,
                 show_progress="hidden",
             ).then(

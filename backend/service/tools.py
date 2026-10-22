@@ -21,6 +21,7 @@ from domain.tools import LiveStatusInput, MetricsInput, Tool, ToolResult
 from queries.tools import read_delivery_metrics, read_live_dispatch
 from service.cache import cache_key, metrics_cache
 from service.scenarios import scenario_metadata
+from service.tracing import observation
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -33,6 +34,10 @@ IN_PROGRESS_METRICS_TTL_SEC = (
 # by _record_call so the flag reaches the trace but never the model's tool result.
 _metrics_cache_hit: ContextVar[bool | None] = ContextVar(
     "metrics_cache_hit",
+    default=None,
+)
+_metrics_cache_state: ContextVar[str | None] = ContextVar(
+    "metrics_cache_state",
     default=None,
 )
 
@@ -226,10 +231,13 @@ def get_delivery_metrics(
 
     key = cache_key(store_id, date, start_hour, end_hour)
     cache = metrics_cache()
+    _metrics_cache_state.set("lookup" if cache.enabled else "off")
     if cache.enabled and (hit := cache.get(key)) is not None:
+        _metrics_cache_state.set("hit")
         _metrics_cache_hit.set(True)
         return hit
 
+    _metrics_cache_state.set("miss" if cache.enabled else "off")
     data = read_delivery_metrics(store_id, day, start_hour, end_hour)
     rows = data.rows
     if not rows:
@@ -362,43 +370,70 @@ def _record_call(
     results: list[ToolResult] | None,
     arguments: dict[str, Any],
 ) -> str:
-    started = perf_counter()
-    _metrics_cache_hit.set(None)
-    output = (
-        tool.run(arguments)
-        if isinstance(arguments, dict)
-        else json.dumps(_error("INVALID_INPUT", "Tool arguments must be an object."))
-    )
-    try:
-        parsed = json.loads(output)
-    except json.JSONDecodeError:
-        parsed = {}
-    data = parsed if isinstance(parsed, dict) else {}
-    error = data.get("error")
-    duration_ms = round((perf_counter() - started) * 1000, 2)
-    cache_hit = _metrics_cache_hit.get()
-    entry: ToolCallTrace = {
-        "tool": tool.name,
-        "arguments": arguments if isinstance(arguments, dict) else {},
-        "error": error.get("code") if isinstance(error, dict) else None,
-        "as_of": data.get("as_of"),
-        "stale": bool(data.get("stale")),
-    }
-    if cache_hit is not None:  # only cacheable tools; live-status entries unchanged
-        entry["cache_hit"] = cache_hit
-        entry["latency_ms"] = duration_ms
-    trace.append(entry)
-    if results is not None:
-        results.append({"tool": tool.name, "result": data})
-    logger.info(
-        "Tool call",
-        tool=tool.name,
-        arguments=arguments,
-        duration_ms=duration_ms,
-        is_error=bool(error),
-        cache_hit=cache_hit,
-    )
-    return output
+    with observation(tool.name, kind="tool", input=arguments) as span:
+        started = perf_counter()
+        _metrics_cache_hit.set(None)
+        _metrics_cache_state.set(None)
+        try:
+            output = (
+                tool.run(arguments)
+                if isinstance(arguments, dict)
+                else json.dumps(
+                    _error("INVALID_INPUT", "Tool arguments must be an object."),
+                )
+            )
+        finally:
+            span.update(metadata={"cache": _metrics_cache_state.get()})
+        try:
+            parsed = json.loads(output)
+        except json.JSONDecodeError:
+            parsed = None
+        data = parsed if isinstance(parsed, dict) else {}
+        error = data.get("error")
+        duration_ms = round((perf_counter() - started) * 1000, 2)
+        cache_hit = _metrics_cache_hit.get()
+        span.update(
+            output=data if isinstance(parsed, dict) else output,
+            metadata={
+                "as_of": data.get("as_of"),
+                "stale": bool(data.get("stale")),
+                "cache_hit": cache_hit,
+            },
+            **(
+                {
+                    "level": "WARNING",
+                    "status_message": (
+                        error.get("code", "TOOL_ERROR")
+                        if isinstance(error, dict)
+                        else "TOOL_ERROR"
+                    ),
+                }
+                if error
+                else {}
+            ),
+        )
+        entry: ToolCallTrace = {
+            "tool": tool.name,
+            "arguments": arguments if isinstance(arguments, dict) else {},
+            "error": error.get("code") if isinstance(error, dict) else None,
+            "as_of": data.get("as_of"),
+            "stale": bool(data.get("stale")),
+        }
+        if cache_hit is not None:  # only cacheable tools; live-status entries unchanged
+            entry["cache_hit"] = cache_hit
+            entry["latency_ms"] = duration_ms
+        trace.append(entry)
+        if results is not None:
+            results.append({"tool": tool.name, "result": data})
+        logger.info(
+            "Tool call",
+            tool=tool.name,
+            arguments=arguments,
+            duration_ms=duration_ms,
+            is_error=bool(error),
+            cache_hit=cache_hit,
+        )
+        return output
 
 
 def traced_tools(

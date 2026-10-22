@@ -132,6 +132,9 @@ def read_answer_context(
         select(
             Conversation.id,
             Conversation.summary,
+            Conversation.summary_covers_to,
+            Conversation.summarized_at,
+            count.label("messages_count"),
             Conversation.handover_note_id,
             func.jsonb_path_query_array(Conversation.messages, path, type_=JSONB).label(
                 "messages",

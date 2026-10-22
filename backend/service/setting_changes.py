@@ -27,6 +27,7 @@ from service.preferences import (
     manager_preferences,
     validate,
 )
+from service.tracing import observation
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -381,11 +382,36 @@ def confirm_proposals(
     A proposal made for another manager is never saved; the UI discards
     proposals on a manager switch, so this only guards against a stale card.
     """
-    changes = [SettingChange.from_state(state) for state in states]
-    own = [change for change in changes if change.manager_id == manager_id]
-    skipped = [
-        f"Not saved: {change.name} was proposed for another manager."
-        for change in changes
-        if change.manager_id != manager_id
-    ]
-    return confirm(own, manager_preferences(manager_id)) + skipped
+    with observation(
+        "settings.confirm",
+        input={"proposals": states, "manager_id": manager_id},
+        user_id=manager_id,
+        metadata={"action": "confirm", "proposal_count": len(states)},
+    ) as span:
+        changes = [SettingChange.from_state(state) for state in states]
+        own = [change for change in changes if change.manager_id == manager_id]
+        skipped = [
+            f"Not saved: {change.name} was proposed for another manager."
+            for change in changes
+            if change.manager_id != manager_id
+        ]
+        preferences = manager_preferences(manager_id)
+        span.update(metadata={"store_id": preferences.store_id})
+        messages = confirm(own, preferences) + skipped
+        span.update(
+            metadata={
+                "skipped_manager_mismatch": len(skipped),
+                "not_saved": sum(
+                    message.startswith("Not saved:") for message in messages
+                ),
+            },
+            output={
+                "messages": messages,
+                "confirmed_codes": [change.code for change in own],
+                "skipped_manager_mismatch": len(skipped),
+                "not_saved": sum(
+                    message.startswith("Not saved:") for message in messages
+                ),
+            },
+        )
+        return messages

@@ -9,6 +9,8 @@ from pydantic import SecretStr
 from config import get_settings, require
 from constants import JINA_API_URL, JINA_MODEL
 from service.embedding_service import EmbeddingService
+from service.provider_tracing import http_metadata, usage_fields
+from service.tracing import observation
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -36,38 +38,66 @@ class JinaEmbeddingService(EmbeddingService):
             return []
 
         api_key = require(self._api_key or get_settings().jina_api_key, "JINA_API_KEY")
-        started = perf_counter()
-        response = requests.post(
-            JINA_API_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self.model,
-                "input": texts,
-                **({"task": task} if self.task_adapters else {}),
-            },
-            timeout=60,
-        )
-        if not response.ok:
-            raise requests.HTTPError(
-                f"Jina embeddings failed ({response.status_code})",
-                response=response,
-            )
-
-        body = response.json()
-        data = sorted(body["data"], key=lambda item: item["index"])
-        if len(data) != len(texts):
-            raise ValueError(f"Expected {len(texts)} embeddings, received {len(data)}")
-        if [item["index"] for item in data] != list(range(len(texts))):
-            raise ValueError("Jina returned invalid embedding indices")
-
-        logger.info(
-            "Jina embeddings completed",
+        with observation(
+            "jina.embedding",
+            kind="embedding",
+            input=texts,
             model=self.model,
-            inputs=len(texts),
-            tokens=body.get("usage", {}).get("total_tokens"),
-            duration_ms=round((perf_counter() - started) * 1000, 2),
-        )
-        return [item["embedding"] for item in data]
+            metadata={
+                "provider": "jina",
+                "upstream_provider": "jina",
+                "task": task,
+                "task_adapters": self.task_adapters,
+                "usage_source": "unknown",
+                "cost_source": "unknown",
+            },
+        ) as span:
+            started = perf_counter()
+            response = requests.post(
+                JINA_API_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "input": texts,
+                    **({"task": task} if self.task_adapters else {}),
+                },
+                timeout=60,
+            )
+            span.update(metadata=http_metadata(response))
+            if not response.ok:
+                span.update(
+                    level="ERROR",
+                    status_message=f"HTTP_{response.status_code}",
+                )
+                raise requests.HTTPError(
+                    f"Jina embeddings failed ({response.status_code})",
+                    response=response,
+                )
+
+            body = response.json()
+            span.update(**usage_fields(body.get("usage"), provider="jina"))
+            data = sorted(body["data"], key=lambda item: item["index"])
+            if len(data) != len(texts):
+                raise ValueError(
+                    f"Expected {len(texts)} embeddings, received {len(data)}",
+                )
+            if [item["index"] for item in data] != list(range(len(texts))):
+                raise ValueError("Jina returned invalid embedding indices")
+
+            span.update(
+                output={
+                    "embeddings": len(data),
+                    "dimensions": [len(item["embedding"]) for item in data],
+                },
+            )
+            logger.info(
+                "Jina embeddings completed",
+                model=self.model,
+                inputs=len(texts),
+                tokens=body.get("usage", {}).get("total_tokens"),
+                duration_ms=round((perf_counter() - started) * 1000, 2),
+            )
+            return [item["embedding"] for item in data]

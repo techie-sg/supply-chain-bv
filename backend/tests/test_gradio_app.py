@@ -346,8 +346,10 @@ def test_chat_callbacks_receive_no_scenario_state(ui_app) -> None:
         if callback.fn is chat_ui.respond_to_pending
     ]
     assert len(callbacks) == 2
-    # The message, displayed chat, selected manager, and selected chat ID.
-    assert all(len(callback.inputs) == 4 for callback in callbacks)
+    # The message, displayed chat, selected manager, selected chat ID, and
+    # server-owned timing receipt; scenario data is never a chat input.
+    assert all(len(callback.inputs) == 5 for callback in callbacks)
+    assert all(isinstance(callback.inputs[-1], gr.State) for callback in callbacks)
     manager = manager_state(ui_app)
     assert all(callback.inputs[2] is manager for callback in callbacks)
     assert all(
@@ -372,11 +374,15 @@ def test_processing_indicator_clears_after_success_or_failure(ui_app) -> None:
     assert all(
         callback.fn is None and not callback.queue for callback in send_callbacks
     )
-    assert len(finish_callbacks) == len(chat_callbacks) == 2
+    assert len(chat_callbacks) == 2
+    assert len(finish_callbacks) == 4
     assert all(callback.show_progress == "hidden" for callback in chat_callbacks)
     for callback in finish_callbacks:
-        assert callback.trigger_after in [item._id for item in chat_callbacks]
-        assert not callback.trigger_only_on_success
+        predecessor = ui_app.fns[callback.trigger_after]
+        if predecessor.fn is chat_ui.respond_to_pending:
+            assert callback.trigger_only_on_success
+        else:
+            assert predecessor.fn is chat_ui.recover_composer
         assert not callback.trigger_only_on_failure
 
 

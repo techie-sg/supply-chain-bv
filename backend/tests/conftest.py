@@ -32,6 +32,13 @@ def pytest_configure() -> None:
         "OPENROUTER_FALLBACK_MODELS",
         "LLM_PROVIDER",
         "LLM_MODEL",
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_BASE_URL",
+        "LANGFUSE_HOST",
+        "LANGFUSE_ENVIRONMENT",
+        "LANGFUSE_TRACING_ENABLED",
+        "LANGFUSE_CAPTURE_CONTENT",
     ):
         _test_environment.delenv(name, raising=False)
 

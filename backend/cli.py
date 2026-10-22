@@ -9,6 +9,7 @@ import structlog
 
 from database.session import database_resources
 from logging_config import configure_logging
+from service.tracing import observation, shutdown_tracing
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -35,6 +36,10 @@ def main(argv: list[str] | None = None) -> None:
     )
     commands.add_parser("migrate", help="Apply database migrations up to head")
     commands.add_parser("ingest", help="Ingest the configured policy corpus")
+    commands.add_parser(
+        "tracing-check",
+        help="Verify Langfuse storage without model calls",
+    )
     args = parser.parse_args(argv)
     # Configure before importing Gradio, model providers, or database services.
     configure_logging()
@@ -46,9 +51,20 @@ def main(argv: list[str] | None = None) -> None:
     except Exception:
         logger.exception("DispatchDesk command failed", command=args.command)
         raise SystemExit(1) from None
+    finally:
+        # SDK export is asynchronous. Short cron processes must drain before exit.
+        shutdown_tracing()
 
 
 def run_command(args: argparse.Namespace) -> None:
+    if args.command == "app":
+        _run_command(args)
+    else:
+        with observation(f"job.{args.command}", metadata={"command": args.command}):
+            _run_command(args)
+
+
+def _run_command(args: argparse.Namespace) -> None:
     # Import only the selected command's dependencies. Cron needs no Gradio UI.
     if args.command == "app":
         from ui.gradio_app import main as run_app
@@ -78,6 +94,14 @@ def run_command(args: argparse.Namespace) -> None:
 
         configure_logging()
         run_alert_checks(check_store, args.runs, args.every)
+    elif args.command == "tracing-check":
+        from service.tracing_check import verify_tracing
+
+        result = verify_tracing()
+        structlog.stdlib.get_logger(__name__).info(
+            "Langfuse tracing verified",
+            **result,
+        )
     elif args.command == "migrate":
         from alembic.config import Config
 

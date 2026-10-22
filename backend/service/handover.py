@@ -41,6 +41,7 @@ from service.factory import create_llm_service
 from service.managers import store_managers
 from service.review_context import chat_evidence, chat_label
 from service.summaries import SummaryService, summary_service
+from service.tracing import observation
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -171,6 +172,21 @@ class HandoverService:
         Summaries are brought up to date first. The note is always bullets:
         a reply without any falls back to a plain list of the shift's chats.
         """
+        with observation(
+            "handover.draft",
+            kind="chain",
+            metadata={"shift_id": str(shift.id), "store_id": shift.store_id},
+            user_id=shift.manager_id,
+        ) as span:
+            drafted = self._draft(shift)
+            progress = {
+                "status": "drafted" if drafted else "no-chats",
+                "chat_count": len(drafted[1]) if drafted else 0,
+            }
+            span.update(output=progress, metadata=progress)
+            return drafted
+
+    def _draft(self, shift: Shift) -> tuple[str, list[Conversation]] | None:
         chats = shift_chats(shift, self.engine)
         if not chats:
             return None
@@ -268,9 +284,22 @@ def begin_shift(
     store_id: str = DEMO_STORE_ID,
     engine: Engine | None = None,
 ) -> ShiftView:
-    shift = start_shift(store_id, manager_id, engine)
-    logger.info("Shift started", manager_id=manager_id)
-    return _view(shift, _manager(manager_id, store_id), note_for(shift.id, engine))
+    with observation(
+        "handover.shift.start",
+        kind="chain",
+        user_id=manager_id,
+        metadata={"store_id": store_id},
+    ) as span:
+        shift = start_shift(store_id, manager_id, engine)
+        logger.info("Shift started", manager_id=manager_id)
+        result = _view(
+            shift,
+            _manager(manager_id, store_id),
+            note_for(shift.id, engine),
+        )
+        progress = {"status": "open", "shift_id": str(shift.id)}
+        span.update(output=progress, metadata=progress)
+        return result
 
 
 def ensure_shift(
@@ -292,22 +321,33 @@ def _open(manager_id: str, engine: Engine | None) -> Shift:
 
 def generate_note(manager_id: str, engine: Engine | None = None) -> str | None:
     """A draft for the open shift, not saved; None when the shift has no chats."""
-    service = HandoverService(
-        lambda system, user: create_llm_service().generate(
-            system_prompt=system,
-            user_message=user,
-        ),
-        engine,
-        summaries=summary_service(),
-    )
-    drafted = service.draft(_open(manager_id, engine))
-    return None if drafted is None else drafted[0]
+    with observation("handover.generate", kind="chain", user_id=manager_id) as span:
+        service = HandoverService(
+            lambda system, user: create_llm_service().generate(
+                system_prompt=system,
+                user_message=user,
+            ),
+            engine,
+            summaries=summary_service(),
+        )
+        drafted = service.draft(_open(manager_id, engine))
+        progress = {"status": "drafted" if drafted else "no-chats"}
+        span.update(output=progress, metadata=progress)
+        return None if drafted is None else drafted[0]
 
 
 def save_shift_note(manager_id: str, note: str, engine: Engine | None = None) -> None:
-    shift = _open(manager_id, engine)
-    if not save_note(shift.id, manager_id, note.strip(), engine):
-        raise LookupError("That shift has already ended.")
+    with observation(
+        "handover.note.save",
+        kind="chain",
+        user_id=manager_id,
+        input={"note": note},
+    ) as span:
+        shift = _open(manager_id, engine)
+        if not save_note(shift.id, manager_id, note.strip(), engine):
+            raise LookupError("That shift has already ended.")
+        progress = {"status": "saved", "shift_id": str(shift.id)}
+        span.update(output=progress, metadata=progress)
 
 
 def finish_shift(
@@ -315,7 +355,20 @@ def finish_shift(
     note: str,
     engine: Engine | None = None,
 ) -> datetime:
-    return _end(manager_id, note, engine)[0]
+    with observation(
+        "handover.shift.finish",
+        kind="chain",
+        user_id=manager_id,
+        input={"note": note},
+    ) as span:
+        ended, note_id = _end(manager_id, note, engine)
+        progress = {
+            "status": "ended",
+            "note_id": str(note_id),
+            "ended_at": ended.isoformat(),
+        }
+        span.update(output=progress, metadata=progress)
+        return ended
 
 
 def _end(manager_id: str, note: str, engine: Engine | None) -> tuple[datetime, UUID]:
@@ -363,27 +416,45 @@ def hand_over(
     handover, so it stays in the next manager's chats like any other. A blank
     note still ends the shift; the chat then says no note was left.
     """
-    following = next_manager(manager_id, store_id)
-    if following is None:
-        raise LookupError("There is no next shift to hand over to.")
-    giver = _manager(manager_id, store_id)
-    ended, note_id = _end(manager_id, note, engine)
-    start_shift(store_id, following.manager_id, engine)
-    conversation = start_conversation(
-        store_id,
-        following.manager_id,
-        engine,
-        handover_note_id=note_id if note.strip() else None,
-    )
-    message: StoredMessage = {
-        "who": "assistant",
-        "what": handover_message(giver, ended, note),
-        "when": datetime.now(TIMEZONE).isoformat(),
-    }
-    append_message(conversation.id, message, engine)
-    set_title(conversation.id, handover_title(giver, ended), engine)
-    logger.info("Handed over", manager_id=manager_id, to=following.manager_id)
-    return HandOver(following.manager_id, conversation.id, ended)
+    with observation(
+        "handover.complete",
+        kind="chain",
+        input={"has_note": bool(note.strip())},
+        metadata={
+            "store_id": store_id,
+            "has_note": bool(note.strip()),
+        },
+        user_id=manager_id,
+    ) as span:
+        following = next_manager(manager_id, store_id)
+        if following is None:
+            raise LookupError("There is no next shift to hand over to.")
+        giver = _manager(manager_id, store_id)
+        span.update(metadata={"next_manager_id": following.manager_id})
+        ended, note_id = _end(manager_id, note, engine)
+        start_shift(store_id, following.manager_id, engine)
+        conversation = start_conversation(
+            store_id,
+            following.manager_id,
+            engine,
+            handover_note_id=note_id if note.strip() else None,
+        )
+        message: StoredMessage = {
+            "who": "assistant",
+            "what": handover_message(giver, ended, note),
+            "when": datetime.now(TIMEZONE).isoformat(),
+        }
+        append_message(conversation.id, message, engine)
+        set_title(conversation.id, handover_title(giver, ended), engine)
+        logger.info("Handed over", manager_id=manager_id, to=following.manager_id)
+        progress = {
+            "status": "completed",
+            "conversation_id": str(conversation.id),
+            "next_manager_id": following.manager_id,
+            "note_id": str(note_id),
+        }
+        span.update(output=progress, metadata=progress)
+        return HandOver(following.manager_id, conversation.id, ended)
 
 
 def next_manager(
