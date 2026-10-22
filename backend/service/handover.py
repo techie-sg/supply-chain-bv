@@ -18,7 +18,7 @@ import requests
 import structlog
 from sqlalchemy import Engine
 
-from constants import DEMO_STORE_ID, TIMEZONE
+from constants import DEMO_STORE_ID, HANDOVER_MAX_INPUT_BYTES, TIMEZONE
 from database.models import Conversation, Manager, Shift
 from domain.chat import StoredMessage
 from domain.managers import ShiftManager
@@ -202,10 +202,21 @@ class HandoverService:
                 if len(messages) == len(conversation.messages)
                 else None
             )
-            body = summary or "\n".join(
-                f"{message['who']}: {message['what'][:300]}"
-                for message in messages[-6:]
+            covered = conversation.summary_covers_to if summary else None
+            uncovered = (
+                messages[max(covered + 1, 0) :] if covered is not None else messages
             )
+            parts = [summary] if summary else []
+            if uncovered:
+                transcript = "\n".join(
+                    f"{message['who']}: {message['what']}" for message in uncovered
+                )
+                parts.append(
+                    f"Messages not covered by the summary:\n{transcript}"
+                    if summary
+                    else transcript,
+                )
+            body = "\n\n".join(parts)
             sections.append(f"Chat: {chat_label(conversation)}\n{body}")
             decisions.extend(
                 f"{message['when']}: {message['what']}"
@@ -221,10 +232,17 @@ class HandoverService:
             "these override conflicting descriptions in chat summaries):\n"
             + ("\n".join(decisions) if decisions else "None recorded."),
         )
-        reply = self.generate(
-            (PROMPTS / "handover_draft.md").read_text(encoding="utf-8"),
-            "\n\n".join(sections),
-        )
+        system_prompt = (PROMPTS / "handover_draft.md").read_text(encoding="utf-8")
+        user_message = "\n\n".join(sections)
+        if (
+            len(system_prompt.encode("utf-8")) + len(user_message.encode("utf-8"))
+            > HANDOVER_MAX_INPUT_BYTES
+        ):
+            raise ValueError(
+                "This shift has too much unsummarized conversation to draft safely. "
+                "Summarize its chats and try again.",
+            )
+        reply = self.generate(system_prompt, user_message)
         return note_lines(reply) or fallback_note(chats), chats
 
     def nightly_draft(self, manager_id: str) -> bool:

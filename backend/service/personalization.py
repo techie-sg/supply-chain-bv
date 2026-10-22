@@ -45,6 +45,20 @@ from service.tracing import observation
 logger = structlog.stdlib.get_logger(__name__)
 
 
+def _json_response(text: str) -> str:
+    """Remove only complete Markdown fence lines around a JSON response."""
+    if not isinstance(text, str):
+        raise TypeError("The JSON response must be text.")
+    lines = text.strip().splitlines()
+    if lines and lines[0].strip().lower() in {"```", "```json"}:
+        if len(lines) < 3 or lines[-1].strip() != "```":
+            raise ValueError("The JSON response has an incomplete Markdown fence.")
+        return "\n".join(lines[1:-1]).strip()
+    if lines and lines[-1].strip() == "```":
+        return "\n".join(lines[:-1]).strip()
+    return text.strip()
+
+
 def item(
     value: str | None,
     source: str,
@@ -284,8 +298,10 @@ class PersonalizationService:
         ):
             raise ValueError("Personalization extraction input exceeds its budget.")
         try:
-            candidates = adapter.validate_json(generate(prompt, payload))
-        except (ValidationError, ValueError) as exc:
+            candidates = adapter.validate_json(
+                _json_response(generate(prompt, payload)),
+            )
+        except (ValidationError, ValueError, TypeError) as exc:
             raise ValueError(
                 "Invalid personalization extraction; batch remains pending.",
             ) from exc
