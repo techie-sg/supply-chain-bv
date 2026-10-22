@@ -191,25 +191,34 @@ def test_failed_search_does_not_prevent_fetching_operational_facts(
         return []
 
     monkeypatch.setattr(rag, "retrieve", retrieve)
-    live = Tool("live", "Live facts.", {}, lambda args: '{"open_orders": 7}')
+    snapshot = {
+        "as_of": "2026-10-22T18:00:00+05:30",
+        "queue": {"open_orders": 7},
+        "summary": {},
+    }
+    live = Tool(
+        "get_live_dispatch_status",
+        "Live facts.",
+        {},
+        lambda args: json.dumps(snapshot),
+    )
     llm = FakeLLMService(
-        [SEARCH, ("live", {})],
+        [SEARCH, ("get_live_dispatch_status", {})],
         "There are 7 open orders. I cannot verify the batching policy right now.",
     )
     trace = []
-    assert (
-        RAGService(FakeEmbeddingService(), llm).answer_question(
-            "What is waiting?",
-            tools=[live],
-            tool_trace=trace,
-        )
-        == llm.answer
+    answer = RAGService(FakeEmbeddingService(), llm).answer_question(
+        "What is waiting?",
+        tools=[live],
+        tool_trace=trace,
     )
+    assert "**Open orders:** 7" in answer
+    assert "can't verify a policy recommendation" in answer
     assert llm.results[0]["sources"] == []
     assert llm.results[0]["error"]["code"] == (
         "GUIDANCE_UNAVAILABLE" if failure else "NO_GUIDANCE"
     )
-    assert llm.results[1] == {"open_orders": 7}
+    assert llm.results[1] == snapshot
     assert trace[0]["error"] is not None and trace[1]["error"] is None
 
 
@@ -314,6 +323,8 @@ def test_manager_context_and_actual_question_are_kept_separate_from_search(retri
     ]
     assert order == sorted(order)
     assert user.endswith("Question: Keep it concise")
+    assert "Saved personal context and preferences" in user
+    assert "Saved response preferences" not in user
     assert embeddings.questions == []
 
 
