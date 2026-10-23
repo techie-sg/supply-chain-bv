@@ -16,7 +16,7 @@ The reload button beside **Current scenario** recreates the scenario currently s
 
 Requires Python 3.13, uv, PostgreSQL with pgvector, and Jina/OpenRouter API keys.
 
-From the repository root:
+Start from the repository root:
 
 ```bash
 cd backend
