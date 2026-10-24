@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from evals.run_evals import (
@@ -9,6 +11,7 @@ from evals.run_evals import (
     summarize,
 )
 from service.rag import retrieval_query
+from service.scenarios import scenario_names
 
 
 def test_dataset_ids_unique_and_chunk_ids_exist():
@@ -107,3 +110,28 @@ def test_sweep_budget_scores_only_count_chunks_that_fit():
         budget_scores(["a"], ["a"], [{"a"}, {"b"}], [900, 10], 600)["budget_chunks"]
         == 1
     )
+
+
+def test_dataset_agent_columns_are_valid():
+    rows = load_dataset()
+    scenarios = {item["key"] for item in scenario_names()}
+    tools = {
+        "get_live_dispatch_status",
+        "get_delivery_metrics",
+        "propose_setting_change",
+    }
+    assert len(rows) >= 100
+    assert [row["id"] for row in rows if row["core"] == "True"] == [
+        f"EVAL-03{i}" for i in range(1, 7)
+    ]
+    for row in rows:
+        assert row["eval_focus"] in {
+            "retrieval",
+            "tool",
+            "guardrail",
+            "fabrication",
+            "unsafe",
+        }, row["id"]
+        assert row["scenario"] in scenarios, row["id"]
+        assert set(json.loads(row["expected_tools"])) <= tools, row["id"]
+        assert row["expected_guardrail"] in {"any", "not_blocked"}, row["id"]
