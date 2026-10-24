@@ -283,7 +283,12 @@ def main() -> None:  # pragma: no cover
     parser.add_argument("--core", action="store_true", help="only the 6 sample queries")
     parser.add_argument("--focus", choices=FOCUSES)
     parser.add_argument("--only", nargs="+", metavar="ID")
-    parser.add_argument("--judge-model", help="model for grading, same provider")
+    parser.add_argument("--judge-model", help="model for grading")
+    parser.add_argument(
+        "--judge-provider",
+        choices=("openrouter", "groq"),
+        help="grade on another provider, so judging does not use the agent's quota",
+    )
     parser.add_argument("--delay", type=float, default=0, help="seconds between rows")
     parser.add_argument("--max-latency", type=float, default=60, help="seconds")
     parser.add_argument("--resume", type=Path, help="report to continue from")
@@ -312,12 +317,16 @@ def main() -> None:  # pragma: no cover
     done = {r["id"] for r in report["rows"]}
     judge_llm = create_llm_service(
         settings.model_copy(
-            update={"llm_model": args.judge_model or settings.llm_model},
+            update={
+                "llm_provider": args.judge_provider or settings.llm_provider,
+                "llm_model": args.judge_model or settings.llm_model,
+            },
         ),
     )
     run_models = {
         "provider": settings.llm_provider,
         "model": settings.llm_model,
+        "judge_provider": args.judge_provider or settings.llm_provider,
         "judge_model": judge_llm.model,
     }
     if args.resume and any(report.get(k) != v for k, v in run_models.items()):
