@@ -1,4 +1,8 @@
-from evals.agent_evals import checks, compare, summary, table
+from types import SimpleNamespace
+
+import requests
+
+from evals.agent_evals import checks, compare, rate_limit_wait, summary, table
 
 ROW = {
     "expected_tools": '["get_live_dispatch_status"]',
@@ -82,3 +86,18 @@ def test_summary_compare_and_table():
     assert "| core | 0.0 | 1.0 |" in lines
     assert "- A: FAIL → PASS" in lines
     assert "| A | tool | FAIL | behavior | 1.0 |" in table(before)
+
+
+def http_error(status, retry_after=None):
+    headers = {"retry-after": retry_after} if retry_after else {}
+    return requests.HTTPError(
+        response=SimpleNamespace(status_code=status, headers=headers),
+    )
+
+
+def test_rate_limit_wait_retries_short_limits_and_stops_on_long_ones():
+    assert rate_limit_wait(http_error(429, "7")) == 8
+    assert rate_limit_wait(http_error(429)) == 61  # no header: wait a minute
+    assert rate_limit_wait(http_error(429, "86400")) is None  # daily cap
+    assert rate_limit_wait(http_error(500, "1")) is None
+    assert rate_limit_wait(ValueError("boom")) is None

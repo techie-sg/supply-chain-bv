@@ -18,12 +18,15 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID
 
+import groq
 import requests
+from sqlalchemy import func, select
 from sqlalchemy.engine import make_url
 
 from config import get_settings
 from constants import DEMO_MANAGER_ID, DEMO_STORE_ID, TIMEZONE
-from database.session import database_resources
+from database.models import DocumentChunk
+from database.session import database_resources, get_session
 from domain.chat import AnswerTrace
 from evals.run_evals import chunk_labels, load_dataset, parse_verdict
 from logging_config import configure_logging
@@ -67,6 +70,28 @@ def require_local_database() -> None:
         parsed.database or ""
     ):
         raise SystemExit("Refusing to run: scenario loads wipe operational rows")
+
+
+def require_corpus() -> None:
+    """An empty vector store turns every policy question into 'no guidance'."""
+    with get_session() as session:
+        if not session.scalar(select(func.count()).select_from(DocumentChunk)):
+            raise SystemExit("No playbook chunks: run `python -m service.ingestion`")
+
+
+def rate_limit_wait(exc: Exception, max_wait: float = 120) -> float | None:
+    """Seconds to wait before retrying a rate-limited row; None means stop.
+
+    A per-minute limit is waited out; a daily one stops the run for --resume.
+    """
+    response = getattr(exc, "response", None)
+    if response is None or response.status_code != 429:
+        return None
+    try:
+        wait = float(response.headers.get("retry-after", "60"))
+    except ValueError:
+        wait = 60
+    return wait + 1 if wait <= max_wait else None
 
 
 def expected_tools(row: dict[str, Any]) -> list[str]:
@@ -290,25 +315,38 @@ def main() -> None:  # pragma: no cover
             update={"llm_model": args.judge_model or settings.llm_model},
         ),
     )
-    report |= {"model": settings.llm_model, "judge_model": judge_llm.model}
+    run_models = {
+        "provider": settings.llm_provider,
+        "model": settings.llm_model,
+        "judge_model": judge_llm.model,
+    }
+    if args.resume and any(report.get(k) != v for k, v in run_models.items()):
+        parser.error("--resume must use the provider and models of the report")
+    report |= run_models
     out = args.resume or REPORTS / (
         f"{args.label}-{datetime.now(TIMEZONE):%Y%m%d-%H%M}.json"
     )
     labels = chunk_labels()
     try:
         with database_resources():
+            require_corpus()
             for row in rows:
                 if row["id"] in done:
                     continue
-                try:
-                    result = run_row(row, labels, judge_llm, args.max_latency)
-                except requests.HTTPError as exc:
-                    if exc.response is not None and exc.response.status_code == 429:
-                        print(
-                            f"Rate-limited at {row['id']}; resume with --resume {out}",
-                        )
+                result = None
+                for _ in range(3):
+                    try:
+                        result = run_row(row, labels, judge_llm, args.max_latency)
                         break
-                    raise
+                    except (requests.HTTPError, groq.RateLimitError) as exc:
+                        wait = rate_limit_wait(exc)
+                        if wait is None:
+                            raise
+                        print(f"Rate-limited at {row['id']}; retrying in {wait:.0f}s")
+                        time.sleep(wait)
+                if result is None:
+                    print(f"Still rate-limited; resume with --resume {out}")
+                    break
                 report["rows"].append(result)
                 print(
                     row["id"],
