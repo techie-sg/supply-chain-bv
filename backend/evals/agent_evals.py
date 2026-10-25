@@ -33,6 +33,7 @@ from domain.chat import AnswerTrace
 from evals.run_evals import chunk_labels, load_dataset, parse_verdict
 from logging_config import configure_logging
 from queries.conversations import append_message
+from service import rag
 from service import tools as dispatch_tools
 from service.alerts import alerts_block
 from service.conversations import ask_question, new_message, start_new_conversation
@@ -149,6 +150,31 @@ def capture_tool_outputs() -> Iterator[list[dict[str, Any]]]:
         dispatch_tools._record_call = original  # type: ignore[assignment]
 
 
+@contextmanager
+def capture_source_checks() -> Iterator[list[dict[str, Any]]]:
+    """Record each citation check, to see why a retried answer was still rejected."""
+    checks_made: list[dict[str, Any]] = []
+    original = rag.RAGService._check_sources
+
+    def record(answer: str, results: Any, **kwargs: Any) -> str:
+        checked = original(answer, results, **kwargs)
+        checks_made.append(
+            {
+                "accepted": checked == answer,
+                "citations": rag.POLICY_CITATION.findall(answer),
+                "searches": sum(r["tool"] == "search_playbook" for r in results),
+                "tools": [r["tool"] for r in results],
+            },
+        )
+        return checked
+
+    rag.RAGService._check_sources = staticmethod(record)  # type: ignore[method-assign]
+    try:
+        yield checks_made
+    finally:
+        rag.RAGService._check_sources = staticmethod(original)  # type: ignore[method-assign]
+
+
 def _parsed(output: str) -> Any:
     try:
         return json.loads(output)
@@ -228,7 +254,10 @@ def run_row(
         metadata={"eval_id": row["id"], "eval_focus": row["eval_focus"]},
     ) as span:
         started = time.perf_counter()
-        with capture_tool_outputs() as captured:
+        with (
+            capture_tool_outputs() as captured,
+            capture_source_checks() as source_checks,
+        ):
             answer, proposals, trace = ask_question(
                 row["question"],
                 DEMO_MANAGER_ID,
@@ -284,6 +313,8 @@ def run_row(
             {"tool": call["tool"], "arguments": call["arguments"]} for call in captured
         ],
         "guardrail": guard["status"] if (guard := trace.get("guardrail")) else None,
+        "guardrail_findings": guard["findings"] if guard else [],
+        "source_checks": source_checks,
         "trace_id": trace_id,
         "answer": answer,
     }
