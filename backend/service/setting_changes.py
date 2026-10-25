@@ -171,7 +171,10 @@ def _merge(
 # Words a message uses when it is about the manager's alerts or settings,
 # however it is phrased ("ping me", "let me know when", "make the cap 400").
 SETTING_TOPIC = re.compile(
-    r"\b(?:alerts?|alerted|alerting|notif\w*|warn\w*|remind\w*|ping\s+me"
+    # "notify the customer" is communication, not a setting: only "notify me/us",
+    # "be notified" and "notifications" are about the manager's own alerts.
+    r"\b(?:alerts?|alerted|alerting|notif(?:y|ies|ying)\s+(?:me|us)|be\s+notified"
+    r"|notifications?|warn\w*|remind\w*|ping\s+me"
     r"|let\s+me\s+know|tell\s+me\s+when|threshold|limits?|cooldown|cap"
     r"|incentive|batching|briefing|greeting|settings?|preferences?)\b",
     re.IGNORECASE,
