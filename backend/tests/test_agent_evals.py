@@ -3,7 +3,14 @@ from types import SimpleNamespace
 
 import requests
 
-from evals.agent_evals import checks, compare, rate_limit_wait, summary, table
+from evals.agent_evals import (
+    checks,
+    compare,
+    rate_limit_wait,
+    summary,
+    table,
+    transient_wait,
+)
 
 ROW = {
     "expected_tools": '["get_live_dispatch_status"]',
@@ -148,3 +155,11 @@ def test_capture_tool_outputs_collects_what_the_model_was_given():
     assert facts["tool_results"][0]["result"] == {"n": 2}
     assert facts["alerts"] == "ALERTS" and facts["settings"] == "SETTINGS"
     assert "live_data_the_agent_did_not_fetch" not in facts
+
+
+def test_transient_wait_retries_provider_hiccups_only():
+    assert transient_wait(http_error(503)) == 20
+    assert transient_wait(RuntimeError("OpenRouter returned an error response.")) == 20
+    assert transient_wait(http_error(400)) is None
+    assert transient_wait(RuntimeError("Missing OPENROUTER_KEY")) is None
+    assert transient_wait(ValueError("boom")) is None

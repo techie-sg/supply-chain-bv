@@ -106,6 +106,19 @@ def rate_limit_wait(exc: Exception, max_wait: float = 120) -> float | None:
     return wait + 1 if wait <= max_wait else None
 
 
+def transient_wait(exc: Exception, seconds: float = 20) -> float | None:
+    """Seconds to wait after a provider hiccup (5xx or an error body), else None.
+
+    Rows only read data, so retrying one is safe.
+    """
+    response = getattr(exc, "response", None)
+    if response is not None and response.status_code >= 500:
+        return seconds
+    if isinstance(exc, RuntimeError) and "OpenRouter returned an error" in str(exc):
+        return seconds
+    return None
+
+
 def expected_tools(row: dict[str, Any]) -> list[str]:
     return json.loads(row["expected_tools"] or "[]")
 
@@ -469,14 +482,18 @@ def main() -> None:  # pragma: no cover
                     try:
                         result = run_row(row, labels, judge_llm, args.max_latency)
                         break
-                    except (requests.HTTPError, groq.RateLimitError) as exc:
-                        wait = rate_limit_wait(exc)
+                    except (
+                        requests.HTTPError,
+                        groq.RateLimitError,
+                        RuntimeError,
+                    ) as exc:
+                        wait = rate_limit_wait(exc) or transient_wait(exc)
                         if wait is None:
                             raise
-                        print(f"Rate-limited at {row['id']}; retrying in {wait:.0f}s")
+                        print(f"Provider error at {row['id']}; retrying in {wait:.0f}s")
                         time.sleep(wait)
                 if result is None:
-                    print(f"Still rate-limited; resume with --resume {out}")
+                    print(f"Still failing; resume with --resume {out}")
                     break
                 report["rows"].append(result)
                 print(
