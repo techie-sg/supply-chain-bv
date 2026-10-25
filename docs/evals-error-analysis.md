@@ -62,4 +62,35 @@ Tests that counted searches or model requests were updated for fix 1: `tests/tes
 
 ## 6. After the fixes (run 3)
 
-Same command and settings as the baseline, with `--compare` against run 2. The results are added below when the run finishes.
+Report [`after-fixes-20261025-1059.json`](../backend/evals/reports/after-fixes-20261025-1059.json), compared with the baseline using `--compare`. Same agent, judge, scenarios and judge prompt; only fixes 1 and 2 changed.
+
+| Slice | Before | After | Change |
+|---|---|---|---|
+| **Overall** | 52/105 (0.495) | **67/105 (0.638)** | **+15 rows** |
+| **Core 6** | 1/6 (0.167) | **2/6 (0.333)** | +1 row |
+| retrieval (21) | 12 (0.571) | 13 (0.619) | +1 |
+| tool (20) | 11 (0.550) | 10 (0.500) | −1 |
+| guardrail (34) | 14 (0.412) | 21 (0.618) | +7 |
+| fabrication (13) | 8 (0.615) | 9 (0.692) | +1 |
+| unsafe (17) | 7 (0.412) | 14 (0.824) | +7 |
+
+- **22 rows fixed:** EVAL-001, 004, 008, 017, 030, 036, 041, 042, 045, 053, 059, 061, 064, 065, 074, 080, 082, 094, 098, 101, 102, 103.
+- **7 rows regressed:** EVAL-003, 020, 043, 052, 069, 072, 078.
+- **Evidence that the fixes did what they target:**
+  - "I could not find relevant guidance" answers: 20 → 8
+  - facts-only fallback answers: 10 → 3
+  - G4 "proposed rider could not be identified" notes: 11 → 6
+  - the biggest gains are the refusal-heavy slices (unsafe +7, guardrail +7), as expected once refusals stopped being replaced
+- **Cost:** mean latency 12.3 s → 14.1 s per row (the retry adds a model call on rejected answers); rows over 60 s are still 3.
+
+### How much to trust it
+
+- **Net +15 (22 fixed, 7 regressed)** is unlikely to be chance: a one-sided sign test on 22 vs 7 gives p ≈ 0.004. The run used one sample per row on a free model, so individual rows move between runs.
+- **Core 6 is too small to read much into.** Only EVAL-036 changed, and when I reproduced EVAL-031 alone afterwards it passed the citation check on the first attempt and returned a full answer, although it failed in the run. Repeat the core run a few times before quoting 2/6.
+- **The 7 regressions look like variance or judge strictness, not the fixes.** EVAL-020 made no tool call at all this time (baseline did), so no check or retry was involved; 003, 043, 069, 072 and 078 are judge disputes over wording or a missing extra element; 052 answered about a setting instead of the notification question.
+- **Not fixed by this round** (still in section 4): judge FACTS mismatch (D), the settings card hiding the model's explanation, G3 blocking a benign question (EVAL-001 passed this time, but the rule is unchanged), missing live-tool verification (EVAL-099, 104), and some answers that still fall back after a retry (EVAL-031 and 032 in this run).
+
+### Recommended next
+
+1. **Fix 3 (judge sees the agent's real tool results and `<preferences>`)** and then repeat the baseline and after-fixes runs. This is the largest remaining source of false failures, and it would show which of the remaining 38 failing rows are real.
+2. **Run the core 6 three times** and report the pass rate per row, to separate real gaps from variance.
