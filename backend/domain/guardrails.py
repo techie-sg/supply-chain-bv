@@ -147,6 +147,10 @@ NAMED_SEND_TARGET = re.compile(
     r"\b(?i:send|sent|sending|sends|use|used|using|uses|dispatch(?:ed|ing|es)?)\s+"
     r"(?:\*\*|`)?(?P<target>(?i:him|her|them)\b|[A-Z][\w'-]*)",
 )
+ZONE_ID = re.compile(r"Z-[A-Z]\b")
+TO_NAMED_TARGET = re.compile(
+    r"\bto\s+(?:the\s+)?(?:(?:rider|driver)\s+)?(?:\*\*|`)?(?P<target>[A-Z][\w'-]*)",
+)
 GENERIC_ASSIGNMENT_TARGETS = {
     # An order or an adverb after the verb ("assign it", "assigned shortly") is
     # not a rider. A list, not an "-ly" test, so a rider named Kelly still counts.
@@ -399,12 +403,17 @@ def _assignment_clauses(text: str) -> list[str]:
 
 
 def _concrete_rider_target(text: str) -> bool:
-    """Recognize a proposed person even when the tool returned no rider rows."""
-    target = RIDER_TARGET.search(text) or NAMED_SEND_TARGET.search(text)
-    return bool(
-        target
-        and target["target"].casefold() not in GENERIC_ASSIGNMENT_TARGETS
-        and not ORDER_ID.fullmatch(target["target"]),
+    """Recognize a proposed person even when the tool returned no rider rows.
+
+    Every candidate counts, not just the first word after the verb: a generic
+    first target ("assign it") must not hide a later name ("... to Kelly").
+    """
+    return any(
+        (target := match["target"]).casefold() not in GENERIC_ASSIGNMENT_TARGETS
+        and not ORDER_ID.fullmatch(target)
+        and not ZONE_ID.fullmatch(target)
+        for pattern in (RIDER_TARGET, NAMED_SEND_TARGET, TO_NAMED_TARGET)
+        for match in pattern.finditer(text)
     )
 
 

@@ -323,3 +323,22 @@ def test_things_and_adverbs_after_an_assignment_verb_are_not_riders(reply):
 def test_an_unknown_rider_whose_name_ends_in_ly_is_still_caught():
     guarded = check_reply("Who?", "Assign Kelly.", results(snapshot()))
     assert "could not be identified" in guarded.text
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Assign it to Kelly.",
+        "Assign this order to Kelly.",
+        "Assign the order to Kelly.",
+        "Dispatch it first, then assign ORD-03-001 to Kelly.",
+    ],
+)
+def test_a_generic_first_target_does_not_hide_a_later_unknown_rider(reply):
+    guarded = check_reply("Who?", reply, results(snapshot()))
+    assert "could not be identified" in guarded.text
+
+
+def test_a_zone_after_to_is_not_a_rider_name():
+    reply = "Assign it to Z-A riders."
+    assert check_reply("Who?", reply, results(snapshot())).text == reply
