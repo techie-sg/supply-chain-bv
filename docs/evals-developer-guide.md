@@ -7,9 +7,9 @@ This guide is for developers who need to understand, run or extend the end-to-en
 | Task | Requirement (`docs/initial/tasks.md`) | Delivered |
 |---|---|---|
 | 27 | Eval harness from the expected-answers table, pass/fail scoring, one command | `backend/evals/agent_evals.py`. Each of the 6 sample queries is a dataset row with `core=True`, so `--core` runs exactly them; 99 more rows extend the coverage |
-| 28 | Baseline report (score, timestamp, per-case pass/fail) | JSON reports in `backend/evals/reports/` |
-| 29 | Every failure categorized, with a root cause and the top 3 fixes | `docs/evals-error-analysis.md`, grouped by the `eval_focus` column |
-| 30 | Apply the fixes, re-run, and show the score delta | `--compare <baseline report>` prints the before/after table |
+| 28 | Baseline report (score, timestamp, per-case pass/fail) | `evals/reports/baseline-20261025-1017.json`: **52/105** pass, core 1/6 |
+| 29 | Every failure categorized, with a root cause and the top 3 fixes | `docs/evals-error-analysis.md`, grouped by cause and by the `eval_focus` column |
+| 30 | Apply the fixes, re-run, and show the score delta | Two fixes applied; `evals/reports/after-fixes-20261025-1059.json`: **67/105** pass (+15), core 2/6; `--compare` prints the before/after table |
 
 **Commits** (branch `feat/agent-golden-dataset`):
 
@@ -18,10 +18,16 @@ This guide is for developers who need to understand, run or extend the end-to-en
 | `4eb0aa4` | Dataset grows from 65 to 105 rows, adds 7 agent-eval columns, and adds the `peak` scenario |
 | `7240446` | The harness `evals/agent_evals.py` and `tests/test_agent_evals.py` |
 | `51e426e` | Harness fails fast on an empty corpus; rate-limit wait/retry and safe `--resume` |
-| `32b8672` | `--judge-provider`, so grading doesn't use the agent's provider quota |
-| docs commit | This guide, the error analysis, and the README section |
+| `32b8672` | `--judge-provider`, so grading can use a different provider than the agent |
+| `d877e99` | This guide, the first error analysis and the README section |
+| `eaf90e5` | The judge is built with no fallback models |
+| `55bfea1` | Judge prompt fix: placeholders instead of sample scores |
+| `d5005d6` | **Agent fix 1:** retry a rejected answer once with fresh playbook passages |
+| `b507171` | **Agent fix 2:** G4 no longer deletes order-only dispatch advice |
+| `3af829b`, `15af038` | Baseline and after-fixes reports |
+| `a4453c4` | Error analysis of the baseline |
 
-No production code under `service/`, `domain/`, `queries/` or `ui/` changed for the harness. Agent fixes chosen from the baseline are listed in the error analysis.
+The harness itself changed no production code. The two agent fixes are described in section 10.
 
 ## 2. Files
 
@@ -110,7 +116,12 @@ Judge rules (`AGENT_JUDGE_PROMPT`):
 - `run_evals.parse_verdict` takes applicability from the dataset flags, not from the judge, so a `null` on an applicable check fails the row.
 - The raw judge reply is kept in the report (`judge.raw`).
 
-Calibration on 2026-10-24: `gpt-oss-20b`, `gpt-oss-120b` and `nemotron-3-ultra` all fail a facts-only answer that skips the action plan; `nemotron-3.5-lightning` passes it, so don't use it as a judge.
+Calibration: on 2026-10-24 `gpt-oss-20b`, `gpt-oss-120b` and `nemotron-3-ultra` all failed a facts-only answer that skips the action plan, while `nemotron-3.5-lightning` passed it, so it isn't used as a judge. On 2026-10-25 `deepseek/deepseek-v4-flash` (the current judge) got 10 of 10 verdicts right on good and bad answers, twice each. Re-run a check like that, with both outcomes, whenever the judge prompt or model changes.
+
+Known limits of the judge, not yet fixed (see fix 3 in the error analysis):
+- Its FACTS come from `facts()`, which refetches tool data after the turn with its own window (yesterday 18:00–24:00) instead of replaying the arguments the agent used. Derived figures can be flagged as invented.
+- It does not see `<preferences>` or `<alerts>`.
+- "Every part" is strict for rows that list several example alternatives.
 
 ## 6. Running
 
@@ -120,20 +131,23 @@ From `backend/`. The harness refuses any database that is neither local nor name
 uv run python cli.py migrate          # schema up to date
 uv run python -m service.ingestion    # playbook chunks present
 
-# The 6 required queries (task 27 definition of done; core scorecard)
+# The 6 required queries (core scorecard)
 uv run python -m evals.agent_evals --label baseline-core --core \
-  --judge-provider groq --judge-model openai/gpt-oss-20b --delay 5
+  --judge-model deepseek/deepseek-v4-flash --delay 5
 
-# Full suite, a category, or specific rows
-uv run python -m evals.agent_evals --label baseline --delay 5
-uv run python -m evals.agent_evals --label guard --focus guardrail
-uv run python -m evals.agent_evals --label smoke --only EVAL-034 EVAL-036
+# Full suite (about 50 minutes), a category, or specific rows
+uv run python -m evals.agent_evals --label baseline \
+  --judge-model deepseek/deepseek-v4-flash --max-latency 120 --delay 5
+uv run python -m evals.agent_evals --label guard --focus guardrail --judge-model deepseek/deepseek-v4-flash
+uv run python -m evals.agent_evals --label smoke --only EVAL-034 EVAL-036 --judge-model deepseek/deepseek-v4-flash
 
-# Continue after a daily rate limit, then compare with the baseline (task 30)
+# Continue after a daily rate limit, then compare with an earlier run
 uv run python -m evals.agent_evals --resume evals/reports/baseline-....json
-uv run python -m evals.agent_evals --label after-fixes --core \
-  --judge-provider groq --judge-model openai/gpt-oss-20b \
-  --compare evals/reports/baseline-core-....json
+uv run python -m evals.agent_evals --label after-fixes \
+  --judge-model deepseek/deepseek-v4-flash --max-latency 120 --delay 5 \
+  --compare evals/reports/baseline-20261025-1017.json
+
+# Optional: grade on another provider (--judge-provider groq --judge-model openai/gpt-oss-20b)
 ```
 
 **Report** (`evals/reports/<label>-<YYYYMMDD-HHMM>.json`):
@@ -144,7 +158,7 @@ uv run python -m evals.agent_evals --label after-fixes --core \
   "started_at": "...",
   "provider": "openrouter",
   "model": "...",
-  "judge_provider": "groq",
+  "judge_provider": "openrouter",
   "judge_model": "...",
   "summary": {"core": 0.5, "overall": 0.5, "by_focus": {"tool": 0.0}, "rows": 6},
   "rows": [
@@ -158,17 +172,20 @@ The run also prints a markdown table (ID, focus, PASS/FAIL, failed checks, laten
 
 ## 7. Providers and quotas
 
-| Provider | Free limit | Use |
-|---|---|---|
-| OpenRouter `nemotron-3-ultra-550b-a55b:free` | 50 requests/day (1,000 with $10 of credit); resets 00:00 UTC (05:30 IST) | agent |
-| Groq `gpt-oss-20b` | 8k tokens/min, 1,000 requests/day | judge (calls are about 1k tokens) |
-| Groq `gpt-oss-120b` | 8k tokens/min | agent prompts are 5–8k tokens, so calls back off and stalled 10–20 min each on 2026-10-24: not practical for the agent |
+Used for the committed reports (2026-10-25), both on OpenRouter with $10 of credit on the account:
 
-- A core row costs about 2–4 agent requests, so a core-6 baseline plus a re-run fits in one day's OpenRouter quota when the judge runs on Groq.
-- The full 105 rows need about 300 agent requests per run, which means OpenRouter credit or several days with `--resume`.
+| Role | Model | Cost / limit |
+|---|---|---|
+| Agent | `nvidia/nemotron-3-ultra-550b-a55b:free` | free; 1,000 requests/day once $10 of credit is bought (50 without), 20 requests/min, failed calls count |
+| Judge | `deepseek/deepseek-v4-flash` | $0.09 in / $0.18 out per million tokens; no plan rate limit. A full run costs a few cents |
+
+- **A full 105-row run** is about 50 minutes and a few hundred requests, so one full run plus a re-run fits in a day. Free-tier calls take 7–30 s and vary from run to run.
+- **The judge cannot be a `gpt-oss` model on OpenRouter.** `OpenRouterService` always sends reasoning disabled, and `gpt-oss` returns 400 ("Reasoning is mandatory"). `deepseek-v4-flash` and `gemini-2.5-flash-lite` accept it.
+- **The judge is built with `openrouter_fallback_models=[]`.** The default Ultra model has a free fallback, and a silent switch would change the grader while the report names the requested model. The agent keeps its fallbacks.
+- **Free key without credit:** 50 requests a day is about one 6-row run plus one re-run. Grade on Groq (`--judge-provider groq --judge-model openai/gpt-oss-20b`) so the judge doesn't use that quota. `gpt-oss-120b` on Groq is too slow for the agent: its 8k tokens/min limit made calls back off for 10–20 minutes.
 - The harness waits out a 429 whose `retry-after` is ≤ 120 s and retries the row (at most 3 times). Retrying is safe because rows only read data, and setting proposals aren't saved until `confirm_proposals`. A longer limit saves the report and prints the `--resume` command.
 - `--resume` refuses a different provider or model than the report's.
-- `.env` `LLM_MODEL` was `nvidia/nemotron-3-super-120b-a12b:free`, which now returns 404. It is now `nvidia/nemotron-3-ultra-550b-a55b:free`.
+- `.env` `LLM_MODEL` is `nvidia/nemotron-3-ultra-550b-a55b:free`; the earlier `nemotron-3-super-120b-a12b:free` returns 404.
 
 ## 8. Tests
 
@@ -185,6 +202,26 @@ The harness's DB and LLM path (`run_row`, `main`) is `# pragma: no cover`. Check
 
 - **Empty vector store.** The first baseline showed `NO_GUIDANCE` on every policy question, which looks like retrieval failures. `require_corpus()` now stops this.
 - **Stale local schema.** Chats failed on a missing column until `cli.py migrate` was run.
-- **The facts-only fallback looks like a pass to a lenient judge.** When `service/rag.py:580 _check_sources` finds no current-turn playbook citation, it replaces the answer with facts only. The judge must fail that answer when a diagnosis or action plan was expected.
+- **The facts-only fallback looks like a pass to a lenient judge.** When `RAGService._check_sources` (`service/rag.py`) finds no current-turn playbook citation, it replaces the answer. Since fix 1 it first retries once; a fallback can still happen. The judge must fail it when a diagnosis or action plan was expected.
+- **A judge model copies literal examples.** The first judge prompt showed `"behavior": 0, ...` and the judge returned exactly that for correct answers, so about 14 of the first 19 results were wrong. The prompt now uses `<1 or 0>` placeholders, asks for the reason first, and `test_judge_prompt_has_no_sample_scores_to_copy` guards it. Calibrate with both good and bad answers after any change.
+- **One run is noisy.** Free-model answers change between runs; EVAL-031 failed in a run and passed when reproduced alone. Trust the overall and per-focus numbers (105 rows) more than single rows or the core 6, and repeat a run before quoting a small change.
+- **Local Docker.** `pgv-docker` (pgvector pg17, port 5433, database `dispatchdesk_test`) may still be starting right after a restart. If the harness reports a refused connection, wait for `docker ps` to show it up.
 - **Latency depends on the provider.** The same row took 8 s and 75 s on the free tier. Treat `latency` failures as provider noise unless they repeat.
 - **Memory rows change settings.** They are reset after each row. Rows that ran before a crash may leave the `karthik` settings changed; check the Settings view after an aborted run.
+
+## 10. Agent changes made from the analysis
+
+**Fix 1: retry a rejected answer once** (`service/rag.py`, `RAGService.answer_question` and `_retry_with_sources`).
+- Before: `_check_sources` replaced a whole answer with `NO_GUIDANCE_ANSWER` or a facts-only table when the model skipped `search_playbook`, cited an ID it had not retrieved this turn, or gave policy advice with no citation. That was 26 of the 53 baseline failures, including 6 correct refusals of unsafe requests.
+- Now: when the check rejects an answer (and no `propose_setting_change` result is present), `_retry_with_sources` runs the search itself with the question, shows the passages to the model in a `<playbook_sources>` block, and checks the new answer with the same `_check_sources`. If the search finds nothing, or the second answer is rejected too, the same fallback is returned. So uncited policy advice still cannot reach the manager.
+- Side effects: one extra model call and search on rejected answers (mean latency 12.3 s to 14.1 s in the eval); the extra search appears in the agent trace. Span metadata has `source_retry`.
+- Tests: `tests/test_rag.py` (retry succeeds, skipped when nothing to cite, not attempted for setting changes) and updates to the tests that counted searches or model requests (`test_rag.py`, `test_rag_grounding.py`, `test_provider_tracing.py`). Use `CITED` in `test_rag.py` for fake answers that should not be retried.
+
+**Fix 2: G4 order-only clauses** (`domain/guardrails.py`, `rider_hours_fix`).
+- Before: a clause with an assignment verb and an order ID but no rider ("Dispatch ORD-02-001 first") counted as a specific rider assignment, found no rider in the live data, and was replaced by "(Removed: this rider assignment cannot be recommended because the proposed rider could not be identified…)".
+- Now: only a named rider, a rider ID, or a concrete rider target makes a clause a specific assignment. G5 still catches claims that it was done.
+- Test: `test_order_only_dispatch_advice_is_not_treated_as_a_rider_assignment` in `tests/test_dispatch_grounding.py`. After the fix such notes dropped from 11 to 6 answers; the rest come from other branches of the same rule and are not analysed yet.
+
+**Fix 3 (not applied):** replay the agent's actual tool calls for the judge's FACTS and give the judge `<preferences>`. It changes how rows are scored, so the baseline and after-fixes runs must be repeated together. See the error analysis.
+
+**Result:** overall 52/105 to 67/105 (22 rows fixed, 7 regressed), core 1/6 to 2/6, guardrail and unsafe rows improved most. Details and caveats are in [evals-error-analysis.md](evals-error-analysis.md) section 6.
