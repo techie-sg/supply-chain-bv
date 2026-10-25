@@ -33,6 +33,7 @@ from domain.chat import AnswerTrace
 from evals.run_evals import chunk_labels, load_dataset, parse_verdict
 from logging_config import configure_logging
 from queries.conversations import append_message
+from service import guardrails as service_guardrails
 from service import rag
 from service import tools as dispatch_tools
 from service.alerts import alerts_block
@@ -175,6 +176,29 @@ def capture_source_checks() -> Iterator[list[dict[str, Any]]]:
         rag.RAGService._check_sources = staticmethod(original)  # type: ignore[method-assign]
 
 
+@contextmanager
+def capture_g4_rewrites() -> Iterator[list[dict[str, str]]]:
+    """Keep the reply G4 rewrote, to see which clause it removed.
+
+    Eval reports are local files with synthetic data; the production finding
+    must not carry reply text because it goes to the logs.
+    """
+    rewrites: list[dict[str, str]] = []
+    original = service_guardrails.rider_hours_fix
+
+    def record(reply: str, live: Any) -> Any:
+        fixed = original(reply, live)
+        if fixed is not None:
+            rewrites.append({"before": reply, "after": fixed.text})
+        return fixed
+
+    service_guardrails.rider_hours_fix = record  # type: ignore[assignment]
+    try:
+        yield rewrites
+    finally:
+        service_guardrails.rider_hours_fix = original  # type: ignore[assignment]
+
+
 def _parsed(output: str) -> Any:
     try:
         return json.loads(output)
@@ -257,6 +281,7 @@ def run_row(
         with (
             capture_tool_outputs() as captured,
             capture_source_checks() as source_checks,
+            capture_g4_rewrites() as g4_rewrites,
         ):
             answer, proposals, trace = ask_question(
                 row["question"],
@@ -315,6 +340,7 @@ def run_row(
         "guardrail": guard["status"] if (guard := trace.get("guardrail")) else None,
         "guardrail_findings": guard["findings"] if guard else [],
         "source_checks": source_checks,
+        "g4_rewrites": g4_rewrites,
         "trace_id": trace_id,
         "answer": answer,
     }
