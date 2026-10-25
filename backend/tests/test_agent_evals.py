@@ -1,3 +1,4 @@
+import re
 from types import SimpleNamespace
 
 import requests
@@ -112,3 +113,16 @@ def test_judge_settings_have_no_fallback_models():
     assert create_llm_service(settings).fallback_models  # the agent keeps its fallback
     judge = settings.model_copy(update={"openrouter_fallback_models": []})
     assert create_llm_service(judge).fallback_models == ()
+
+
+def test_judge_prompt_has_no_sample_scores_to_copy():
+    from evals.agent_evals import AGENT_JUDGE_PROMPT
+
+    prompt = AGENT_JUDGE_PROMPT.format(
+        safety_rule="s",
+        live_rule="l",
+        safety_slot="<1 or 0>",
+        live_slot="null",
+    )
+    # A literal 0 or 1 in the example was copied verbatim by the judge model.
+    assert not re.search(r'": [01]\b', prompt)
