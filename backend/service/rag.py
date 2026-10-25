@@ -613,13 +613,19 @@ class RAGService:
         """
         search = next(tool for tool in traced if tool.name == "search_playbook")
         passages = search.run({"query": retrieval_query(question, history or [])})
-        if not results[-1]["result"].get("sources"):
+        sources = results[-1]["result"].get("sources")
+        if not sources:
             return None
+        allowed = ", ".join(
+            str(source["chunk_id"])
+            for source in sources
+            if isinstance(source, dict) and source.get("chunk_id")
+        )
         retry_message = (
             f"{user_message}\n\n<playbook_sources>\n{passages}\n</playbook_sources>\n"
             "Your previous reply was rejected: policy claims need a citation "
             "from this turn's playbook results. Answer again from these "
-            "passages and cite their exact chunk_id."
+            f"passages. You may cite only these chunk IDs: {allowed}."
         )
         model_answer = self.llm_service.generate_with_tools(
             system_prompt=system_prompt,

@@ -440,6 +440,8 @@ def test_rejected_answer_is_retried_once_with_fresh_playbook_passages(retrieval)
     assert answer == CITED and len(llm.messages) == 2
     assert [item["tool"] for item in results] == ["search_playbook"]
     assert SOURCE["chunk_id"] in llm.messages[1][1]
+    # The retry names the only IDs the model may cite.
+    assert f"cite only these chunk IDs: {SOURCE['chunk_id']}." in llm.messages[1][1]
 
 
 def test_retry_is_skipped_when_the_search_finds_nothing_to_cite(monkeypatch):
