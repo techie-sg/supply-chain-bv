@@ -126,3 +126,25 @@ def test_judge_prompt_has_no_sample_scores_to_copy():
     )
     # A literal 0 or 1 in the example was copied verbatim by the judge model.
     assert not re.search(r'": [01]\b', prompt)
+
+
+def test_capture_tool_outputs_collects_what_the_model_was_given():
+    import json
+
+    from domain.tools import Tool
+    from evals.agent_evals import capture_tool_outputs, judge_facts
+    from service import tools as dispatch_tools
+
+    tool = Tool("get_x", "d", {}, lambda args: json.dumps({"n": args["n"] + 1}))
+    original = dispatch_tools._record_call
+    with capture_tool_outputs() as captured:
+        traced = dispatch_tools.traced_tools([tool], [], [])
+        traced[0].run({"n": 1})
+    assert dispatch_tools._record_call is original  # restored afterwards
+    assert captured == [{"tool": "get_x", "arguments": {"n": 1}, "result": '{"n": 2}'}]
+
+    row = {"requires_live_data": False}
+    facts = judge_facts(row, captured, "ALERTS", "SETTINGS")
+    assert facts["tool_results"][0]["result"] == {"n": 2}
+    assert facts["alerts"] == "ALERTS" and facts["settings"] == "SETTINGS"
+    assert "live_data_the_agent_did_not_fetch" not in facts
