@@ -304,9 +304,3 @@ def test_order_only_dispatch_advice_is_not_treated_as_a_rider_assignment():
     guarded = check_reply("What next?", reply, results(snapshot()))
     assert guarded.text == reply
     assert not any(item["rule"] == "G4" for item in guarded.trace["findings"])
-
-
-def test_g4_finding_names_the_clause_it_removed():
-    guarded = check_reply("Who?", "Assign Arun R.", results(snapshot()))
-    detail = next(i["detail"] for i in guarded.trace["findings"] if i["rule"] == "G4")
-    assert "could not be identified" in detail and "Assign Arun R." in detail

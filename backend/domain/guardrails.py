@@ -508,11 +508,7 @@ def rider_hours_fix(reply: str, live: dict[str, Any] | None) -> Fixed | None:
                 1,
             )
             findings.append(
-                Finding(
-                    "G4",
-                    f"Assignment without verified rider facts: {problem} "
-                    f'("{part.strip()[:80]}")',
-                ),
+                Finding("G4", f"Assignment without verified rider facts: {problem}"),
             )
             continue
         for rider in named:
