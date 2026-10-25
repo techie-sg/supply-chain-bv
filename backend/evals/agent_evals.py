@@ -320,6 +320,9 @@ def main() -> None:  # pragma: no cover
             update={
                 "llm_provider": args.judge_provider or settings.llm_provider,
                 "llm_model": args.judge_model or settings.llm_model,
+                # No fallback: a silent switch to another model would change the
+                # grader while the report still names the requested one.
+                "openrouter_fallback_models": [],
             },
         ),
     )

@@ -101,3 +101,14 @@ def test_rate_limit_wait_retries_short_limits_and_stops_on_long_ones():
     assert rate_limit_wait(http_error(429, "86400")) is None  # daily cap
     assert rate_limit_wait(http_error(500, "1")) is None
     assert rate_limit_wait(ValueError("boom")) is None
+
+
+def test_judge_settings_have_no_fallback_models():
+    from config import Settings
+    from constants import OPENROUTER_MODEL
+    from service.factory import create_llm_service
+
+    settings = Settings(_env_file=None, llm_model=OPENROUTER_MODEL)  # type: ignore[call-arg]
+    assert create_llm_service(settings).fallback_models  # the agent keeps its fallback
+    judge = settings.model_copy(update={"openrouter_fallback_models": []})
+    assert create_llm_service(judge).fallback_models == ()
