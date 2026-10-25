@@ -304,3 +304,22 @@ def test_order_only_dispatch_advice_is_not_treated_as_a_rider_assignment():
     guarded = check_reply("What next?", reply, results(snapshot()))
     assert guarded.text == reply
     assert not any(item["rule"] == "G4" for item in guarded.trace["findings"])
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "If a frozen order is waiting, assign it to the next available rider.",
+        "Tell the customer: your order is packed and will be assigned shortly.",
+        "Dispatch it promptly on its own.",
+    ],
+)
+def test_things_and_adverbs_after_an_assignment_verb_are_not_riders(reply):
+    guarded = check_reply("What now?", reply, results(snapshot()))
+    assert guarded.text == reply
+    assert not any(item["rule"] == "G4" for item in guarded.trace["findings"])
+
+
+def test_an_unknown_rider_whose_name_ends_in_ly_is_still_caught():
+    guarded = check_reply("Who?", "Assign Kelly.", results(snapshot()))
+    assert "could not be identified" in guarded.text

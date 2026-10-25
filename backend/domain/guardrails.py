@@ -148,6 +148,26 @@ NAMED_SEND_TARGET = re.compile(
     r"(?:\*\*|`)?(?P<target>(?i:him|her|them)\b|[A-Z][\w'-]*)",
 )
 GENERIC_ASSIGNMENT_TARGETS = {
+    # An order or an adverb after the verb ("assign it", "assigned shortly") is
+    # not a rider. A list, not an "-ly" test, so a rider named Kelly still counts.
+    "it",
+    "this",
+    "that",
+    "these",
+    "those",
+    "one",
+    "ones",
+    "shortly",
+    "soon",
+    "promptly",
+    "immediately",
+    "quickly",
+    "next",
+    "first",
+    "now",
+    "today",
+    "later",
+    "again",
     "a",
     "an",
     "the",
