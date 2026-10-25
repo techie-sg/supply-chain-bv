@@ -357,7 +357,7 @@ def test_jina_usage_never_invents_zero_or_exports_vectors(monkeypatch, traces, u
 def test_rag_preserves_raw_and_filtered_answers_with_prompt_provenance(traces):
     preferences = SimpleNamespace(prompt_block=lambda: "Settings: cap 350")
     service = rag.RAGService(
-        SimpleNamespace(model="embedding"),
+        SimpleNamespace(model="embedding", embed_query=lambda query: [0.1]),
         SimpleNamespace(
             generate_with_tools=lambda **kwargs: "Advice from DD-UNKNOWN-999#0.",
         ),

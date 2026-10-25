@@ -525,14 +525,15 @@ class RAGService:
                 "user_message_sha256": sha256(user_message.encode()).hexdigest(),
             },
         ) as span:
+            traced = traced_tools(
+                [search, *tools],
+                tool_trace if tool_trace is not None else [],
+                results,
+            )
             model_answer = self.llm_service.generate_with_tools(
                 system_prompt=system_prompt,
                 user_message=user_message,
-                tools=traced_tools(
-                    [search, *tools],
-                    tool_trace if tool_trace is not None else [],
-                    results,
-                ),
+                tools=traced,
                 history=history,
             )
             current_results = results[result_start:]
@@ -542,6 +543,22 @@ class RAGService:
                 question=question,
                 history=history,
             )
+            source_retry = False
+            if answer != model_answer and not any(
+                result["tool"] == "propose_setting_change" for result in current_results
+            ):
+                retried = self._retry_with_sources(
+                    traced,
+                    system_prompt,
+                    user_message,
+                    question,
+                    history,
+                    results,
+                    result_start,
+                )
+                if retried is not None:
+                    source_retry, answer = True, retried
+                    current_results = results[result_start:]
             retrieval_trace = _retrieval_trace.get()
             source_check_changed = answer != model_answer
             no_guidance = answer == NO_GUIDANCE_ANSWER
@@ -549,6 +566,7 @@ class RAGService:
                 output={"model_answer": model_answer, "answer": answer},
                 metadata={
                     "source_check_changed": source_check_changed,
+                    "source_retry": source_retry,
                     "no_guidance_answer": no_guidance,
                     "tools_called": [result["tool"] for result in current_results],
                     "retrieval": retrieval_trace,
@@ -575,6 +593,46 @@ class RAGService:
                 duration_ms=round((perf_counter() - started) * 1000, 2),
             )
             return answer
+
+    def _retry_with_sources(
+        self,
+        traced: list[Tool],
+        system_prompt: str,
+        user_message: str,
+        question: str,
+        history: Sequence[ChatMessage] | None,
+        results: list[ToolResult],
+        result_start: int,
+    ) -> str | None:
+        """Ask once more, with fresh playbook passages, after a rejected answer.
+
+        The model often skips the search or cites an ID it never retrieved, and
+        the check then replaces a good answer with a generic fallback. Searching
+        for the model and re-checking the new answer keeps the same citation
+        rule. None means there was nothing to cite, so the fallback stands.
+        """
+        search = next(tool for tool in traced if tool.name == "search_playbook")
+        passages = search.run({"query": retrieval_query(question, history or [])})
+        if not results[-1]["result"].get("sources"):
+            return None
+        retry_message = (
+            f"{user_message}\n\n<playbook_sources>\n{passages}\n</playbook_sources>\n"
+            "Your previous reply was rejected: policy claims need a citation "
+            "from this turn's playbook results. Answer again from these "
+            "passages and cite their exact chunk_id."
+        )
+        model_answer = self.llm_service.generate_with_tools(
+            system_prompt=system_prompt,
+            user_message=retry_message,
+            tools=traced,
+            history=history,
+        )
+        return self._check_sources(
+            model_answer,
+            results[result_start:],
+            question=question,
+            history=history,
+        )
 
     @staticmethod
     def _check_sources(

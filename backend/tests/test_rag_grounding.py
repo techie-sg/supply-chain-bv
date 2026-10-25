@@ -147,7 +147,8 @@ def test_successful_but_uncited_or_failed_search_cannot_authorize_advice(
         service(model).answer_question("Can I batch frozen orders?")
         == NO_GUIDANCE_ANSWER
     )
-    assert model.requests == 1
+    # A working search gets one retry with fresh passages; a failed one has none.
+    assert model.requests == (1 if failed else 2)
 
 
 @pytest.mark.parametrize("citation", ["DD-BATCH-001#0", "DD-BATCH-001"])
