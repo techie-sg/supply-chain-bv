@@ -297,3 +297,10 @@ def test_policy_framing_does_not_hide_an_unsafe_action_request(question):
     assert guarded is not None
     assert guarded.trace["status"] == "blocked"
     assert guarded.trace["findings"][0]["rule"] == "G3"
+
+
+def test_order_only_dispatch_advice_is_not_treated_as_a_rider_assignment():
+    reply = "Dispatch ORD-03-001 first, then ORD-03-002."
+    guarded = check_reply("What next?", reply, results(snapshot()))
+    assert guarded.text == reply
+    assert not any(item["rule"] == "G4" for item in guarded.trace["findings"])

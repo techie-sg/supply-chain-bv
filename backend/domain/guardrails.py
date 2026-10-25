@@ -469,12 +469,9 @@ def rider_hours_fix(reply: str, live: dict[str, Any] | None) -> Fixed | None:
         ]
         if exact:
             named = exact
-        specific = bool(
-            named
-            or RIDER_ID.search(part)
-            or _concrete_rider_target(part)
-            or (ORDER_ID.search(part) and not CLAIM.search(part)),
-        )
+        # An order with no rider ("Dispatch ORD-02-001 first") proposes no one to
+        # verify; G5 still handles claims that it was done.
+        specific = bool(named or RIDER_ID.search(part) or _concrete_rider_target(part))
         if not specific:
             continue
         # A rider/customer message is not an assignment. Keep ordinary drafts
