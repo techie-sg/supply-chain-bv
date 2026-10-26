@@ -114,6 +114,8 @@ def transient_wait(exc: Exception, seconds: float = 20) -> float | None:
     response = getattr(exc, "response", None)
     if response is not None and response.status_code >= 500:
         return seconds
+    if isinstance(exc, requests.RequestException) and response is None:
+        return seconds  # dropped connection, timeout or truncated body
     if isinstance(exc, RuntimeError) and "OpenRouter returned an error" in str(exc):
         return seconds
     return None
@@ -483,7 +485,7 @@ def main() -> None:  # pragma: no cover
                         result = run_row(row, labels, judge_llm, args.max_latency)
                         break
                     except (
-                        requests.HTTPError,
+                        requests.RequestException,
                         groq.RateLimitError,
                         RuntimeError,
                     ) as exc:

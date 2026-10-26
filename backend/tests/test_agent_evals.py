@@ -160,6 +160,9 @@ def test_capture_tool_outputs_collects_what_the_model_was_given():
 def test_transient_wait_retries_provider_hiccups_only():
     assert transient_wait(http_error(503)) == 20
     assert transient_wait(RuntimeError("OpenRouter returned an error response.")) == 20
+    assert transient_wait(requests.exceptions.ChunkedEncodingError("cut")) == 20
+    assert transient_wait(requests.exceptions.ConnectionError("down")) == 20
+    assert transient_wait(requests.exceptions.Timeout("slow")) == 20
     assert transient_wait(http_error(400)) is None
     assert transient_wait(RuntimeError("Missing OPENROUTER_KEY")) is None
     assert transient_wait(ValueError("boom")) is None
