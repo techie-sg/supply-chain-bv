@@ -136,10 +136,17 @@ CONDITIONAL = re.compile(
 )
 ORDER_ID = re.compile(r"\bORD-\d+-\d+\b")
 RIDER_ID = re.compile(r"\bRDR-[A-Z0-9-]+\b", re.IGNORECASE)
+# Words skipped before judging the target, so a generic word cannot hide a name
+# behind it: "assign either Kelly or Ravi", "extend for Kelly", "assign to kelly".
+_FILLER = (
+    r"(?:(?:the|either|both|another|any|each|every|an?|one\s+of|that|this|these|those"
+    r"|new|available|next|nearest|closest|closer|free|different|same|single|other"
+    r"|returning|idle|standby|stand-by|off-duty|eligible|spare|extra)\s+)*"
+)
 RIDER_TARGET = re.compile(
     r"\b(?:(?:re)?assign(?:ed|ing|s)?|allocat(?:e|es|ed|ing)|"
     r"schedul(?:e|es|ed|ing)|extend(?:ed|ing|s)?)\s+"
-    r"(?:(?:the\s+)?(?:rider|driver)\s+)?"
+    r"(?:(?:to|for|with)\s+)?" + _FILLER + r"(?:(?:rider|driver)\s+)?"
     r"(?:\*\*|`)?(?P<target>[\w'-]+)",
     re.IGNORECASE,
 )
@@ -147,7 +154,67 @@ NAMED_SEND_TARGET = re.compile(
     r"\b(?i:send|sent|sending|sends|use|used|using|uses|dispatch(?:ed|ing|es)?)\s+"
     r"(?:\*\*|`)?(?P<target>(?i:him|her|them)\b|[A-Z][\w'-]*)",
 )
+ZONE_ID = re.compile(r"Z-[A-Z]\b")
+TO_NAMED_TARGET = re.compile(
+    r"\bto\s+"
+    + _FILLER
+    + r"(?:(?:rider|driver)\s+)?(?:\*\*|`)?(?P<target>[A-Z][\w'-]*)",
+)
 GENERIC_ASSIGNMENT_TARGETS = {
+    # An order or an adverb after the verb ("assign it", "assigned shortly") is
+    # not a rider. A list, not an "-ly" test, so a rider named Kelly still counts.
+    # Prepositions, indefinite pronouns and plain nouns the round-2 eval showed
+    # being read as rider names ("assigned to any order", "extending anyone's
+    # shift", "Extend ETAs", "assigning either rider").
+    "to",
+    "for",
+    "in",
+    "on",
+    "at",
+    "by",
+    "with",
+    "as",
+    "from",
+    "and",
+    "or",
+    "not",
+    "either",
+    "neither",
+    "both",
+    "another",
+    "other",
+    "someone",
+    "someone's",
+    "anyone",
+    "anyone's",
+    "everyone",
+    "everyone's",
+    "whichever",
+    "whoever",
+    "eta",
+    "etas",
+    "radius",
+    "window",
+    "hours",
+    "shifts",
+    "it",
+    "this",
+    "that",
+    "these",
+    "those",
+    "one",
+    "ones",
+    "shortly",
+    "soon",
+    "promptly",
+    "immediately",
+    "quickly",
+    "next",
+    "first",
+    "now",
+    "today",
+    "later",
+    "again",
     "a",
     "an",
     "the",
@@ -379,12 +446,17 @@ def _assignment_clauses(text: str) -> list[str]:
 
 
 def _concrete_rider_target(text: str) -> bool:
-    """Recognize a proposed person even when the tool returned no rider rows."""
-    target = RIDER_TARGET.search(text) or NAMED_SEND_TARGET.search(text)
-    return bool(
-        target
-        and target["target"].casefold() not in GENERIC_ASSIGNMENT_TARGETS
-        and not ORDER_ID.fullmatch(target["target"]),
+    """Recognize a proposed person even when the tool returned no rider rows.
+
+    Every candidate counts, not just the first word after the verb: a generic
+    first target ("assign it") must not hide a later name ("... to Kelly").
+    """
+    return any(
+        (target := match["target"]).casefold() not in GENERIC_ASSIGNMENT_TARGETS
+        and not ORDER_ID.fullmatch(target)
+        and not ZONE_ID.fullmatch(target)
+        for pattern in (RIDER_TARGET, NAMED_SEND_TARGET, TO_NAMED_TARGET)
+        for match in pattern.finditer(text)
     )
 
 
@@ -469,12 +541,9 @@ def rider_hours_fix(reply: str, live: dict[str, Any] | None) -> Fixed | None:
         ]
         if exact:
             named = exact
-        specific = bool(
-            named
-            or RIDER_ID.search(part)
-            or _concrete_rider_target(part)
-            or (ORDER_ID.search(part) and not CLAIM.search(part)),
-        )
+        # An order with no rider ("Dispatch ORD-02-001 first") proposes no one to
+        # verify; G5 still handles claims that it was done.
+        specific = bool(named or RIDER_ID.search(part) or _concrete_rider_target(part))
         if not specific:
             continue
         # A rider/customer message is not an assignment. Keep ordinary drafts

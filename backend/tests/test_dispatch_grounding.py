@@ -297,3 +297,104 @@ def test_policy_framing_does_not_hide_an_unsafe_action_request(question):
     assert guarded is not None
     assert guarded.trace["status"] == "blocked"
     assert guarded.trace["findings"][0]["rule"] == "G3"
+
+
+def test_order_only_dispatch_advice_is_not_treated_as_a_rider_assignment():
+    reply = "Dispatch ORD-03-001 first, then ORD-03-002."
+    guarded = check_reply("What next?", reply, results(snapshot()))
+    assert guarded.text == reply
+    assert not any(item["rule"] == "G4" for item in guarded.trace["findings"])
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "If a frozen order is waiting, assign it to the next available rider.",
+        "Tell the customer: your order is packed and will be assigned shortly.",
+        "Dispatch it promptly on its own.",
+    ],
+)
+def test_things_and_adverbs_after_an_assignment_verb_are_not_riders(reply):
+    guarded = check_reply("What now?", reply, results(snapshot()))
+    assert guarded.text == reply
+    assert not any(item["rule"] == "G4" for item in guarded.trace["findings"])
+
+
+def test_an_unknown_rider_whose_name_ends_in_ly_is_still_caught():
+    guarded = check_reply("Who?", "Assign Kelly.", results(snapshot()))
+    assert "could not be identified" in guarded.text
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Assign it to Kelly.",
+        "Assign this order to Kelly.",
+        "Assign the order to Kelly.",
+        "Dispatch it first, then assign ORD-03-001 to Kelly.",
+    ],
+)
+def test_a_generic_first_target_does_not_hide_a_later_unknown_rider(reply):
+    guarded = check_reply("Who?", reply, results(snapshot()))
+    assert "could not be identified" in guarded.text
+
+
+def test_a_zone_after_to_is_not_a_rider_name():
+    reply = "Assign it to Z-A riders."
+    assert check_reply("Who?", reply, results(snapshot())).text == reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Before assigning either rider to a new order, verify their hours.",
+        "This adds capacity without extending anyone's shift.",
+        "Extend ETAs honestly and tell customers why.",
+        "ORD-03-003 can be assigned to another rider or batched with a different order.",
+        "ORD-03-006 -> assign to an available Z-A rider.",
+        "Before assigning any returning rider, verify their hours.",
+        "Stop assigning orders to that rider until they take a break.",
+    ],
+)
+def test_prepositions_pronouns_and_plain_nouns_are_not_rider_names(reply):
+    guarded = check_reply("What now?", reply, results(snapshot()))
+    assert guarded.text == reply
+    assert not any(item["rule"] == "G4" for item in guarded.trace["findings"])
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Assign to Kelly.",
+        "Assign the order to rider R42.",
+        "Assign ORD-03-001 to RDR-999.",
+    ],
+)
+def test_a_name_after_a_preposition_is_still_caught(reply):
+    guarded = check_reply("Who?", reply, results(snapshot()))
+    assert "could not be identified" in guarded.text
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Assign either Kelly or Ravi to ORD-03-001.",
+        "Extend for Kelly.",
+        "assign to kelly",
+        "Assign both Kelly and Ravi.",
+        "Assign it to either Kelly or Ravi.",
+        "Reassign the order to the new rider Kelly.",
+    ],
+)
+@pytest.mark.parametrize("live", ["missing", "fresh", "stale"])
+def test_a_name_behind_a_generic_word_is_still_caught(reply, live):
+    data = snapshot()
+    if live == "stale":
+        data["stale"] = True
+    guarded = check_reply(
+        "Who?",
+        reply,
+        [] if live == "missing" else results(data),
+    )
+    assert reply not in guarded.text
+    assert any(item["rule"] == "G4" for item in guarded.trace["findings"])

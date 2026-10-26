@@ -60,6 +60,8 @@ SOURCE = {
     "similarity": 0.9,
 }
 SEARCH = ("search_playbook", {"query": "frozen order batching rules"})
+# A valid citation, so answers in tests of search plumbing are not retried.
+CITED = f"Separate delivery ({SOURCE['chunk_id']})."
 
 
 @pytest.fixture
@@ -170,6 +172,7 @@ def test_policy_only_question_does_not_require_dispatch_data(retrieval):
         [
             ("search_playbook", {"query": "rider safety traffic lights"}),
         ],
+        CITED,
     )
     trace = []
     RAGService(FakeEmbeddingService(), llm).answer_question(
@@ -257,15 +260,20 @@ def test_unretrieved_policy_citations_are_not_shown(retrieval, citation):
     )
 
 
-def test_old_chat_citations_are_not_evidence_for_this_answer(retrieval):
+def test_old_chat_citations_are_not_evidence_for_this_answer(monkeypatch, retrieval):
     llm = FakeLLMService([SEARCH], "Separate delivery (DD-BATCH-001#2).")
     service = RAGService(FakeEmbeddingService(), llm)
     results = []
     assert service.answer_question("first", tool_results=results) == llm.answer
     assert rag.pop_retrieval_trace() is not None
     llm.calls = []
+    # This turn's own search finds a different chunk, so the old citation fails.
+    monkeypatch.setattr(
+        rag,
+        "retrieve",
+        lambda **kwargs: [{**SOURCE, "chunk_id": "DD-BATCH-001#9"}],
+    )
     assert service.answer_question("again", tool_results=results) == NO_GUIDANCE_ANSWER
-    assert rag.pop_retrieval_trace() is None
 
 
 def test_followup_history_reaches_model_but_only_model_query_is_embedded(retrieval):
@@ -346,7 +354,7 @@ def test_ui_entry_point_composes_services_and_passes_trace_lists(
 
 def test_repeat_model_query_skips_embedding_and_database_query(retrieval):
     embeddings = FakeEmbeddingService()
-    llm = FakeLLMService([SEARCH])
+    llm = FakeLLMService([SEARCH], CITED)
     service = RAGService(embeddings, llm)
     service.answer_question("First question")
     assert rag.pop_retrieval_trace()["cache"] == "miss"
@@ -372,6 +380,7 @@ def test_search_trace_combines_queries_instead_of_losing_the_first_result(monkey
             ("search_playbook", {"query": "rider breaks"}),
             SEARCH,
         ],
+        "Separate delivery (DD-BATCH-001#1).",
     )
     trace = []
     RAGService(FakeEmbeddingService(), llm).answer_question("q", tool_trace=trace)
@@ -383,7 +392,7 @@ def test_search_trace_combines_queries_instead_of_losing_the_first_result(monkey
 
 def test_cache_keys_separate_top_k_and_model_selected_queries(retrieval):
     embeddings = FakeEmbeddingService()
-    llm = FakeLLMService([SEARCH])
+    llm = FakeLLMService([SEARCH], CITED)
     service = RAGService(embeddings, llm)
     service.answer_question("q", top_k=3)
     service.answer_question("q", top_k=2)
@@ -394,7 +403,7 @@ def test_cache_keys_separate_top_k_and_model_selected_queries(retrieval):
 
 def test_disabled_cache_and_empty_results_are_not_reused(monkeypatch, retrieval):
     embeddings = FakeEmbeddingService()
-    llm = FakeLLMService([SEARCH])
+    llm = FakeLLMService([SEARCH], CITED)
     off = RAGService(embeddings, llm, cache=TTLCache(0, 10))
     off.answer_question("q")
     assert rag.pop_retrieval_trace()["cache"] == "off"
@@ -404,4 +413,54 @@ def test_disabled_cache_and_empty_results_are_not_reused(monkeypatch, retrieval)
     empty = RAGService(embeddings, llm, cache=TTLCache(10, 10))
     empty.answer_question("none")
     empty.answer_question("none")
-    assert len(embeddings.questions) == 4
+    # Each empty answer is rejected, so it searches once more before falling back.
+    assert len(embeddings.questions) == 6
+
+
+def test_rejected_answer_is_retried_once_with_fresh_playbook_passages(retrieval):
+    class Retrying(FakeLLMService):
+        def generate_with_tools(self, system_prompt, user_message, tools, history=None):
+            if "<playbook_sources>" in user_message:
+                self.answer = CITED
+            else:
+                self.answer = "Frozen orders may be batched."  # uncited policy
+            return super().generate_with_tools(
+                system_prompt,
+                user_message,
+                tools,
+                history,
+            )
+
+    llm = Retrying()
+    results = []
+    answer = RAGService(FakeEmbeddingService(), llm).answer_question(
+        "Can I batch frozen orders?",
+        tool_results=results,
+    )
+    assert answer == CITED and len(llm.messages) == 2
+    assert [item["tool"] for item in results] == ["search_playbook"]
+    assert SOURCE["chunk_id"] in llm.messages[1][1]
+    # The retry names the only IDs the model may cite.
+    assert f"cite only these chunk IDs: {SOURCE['chunk_id']}." in llm.messages[1][1]
+
+
+def test_retry_is_skipped_when_the_search_finds_nothing_to_cite(monkeypatch):
+    monkeypatch.setattr(rag, "retrieve", lambda **kwargs: [])
+    llm = FakeLLMService([], "Frozen orders may be batched.")
+    answer = RAGService(FakeEmbeddingService(), llm).answer_question("Batch frozen?")
+    assert answer == NO_GUIDANCE_ANSWER and len(llm.messages) == 1
+
+
+def test_retry_is_not_attempted_for_a_setting_change(retrieval):
+    proposal = Tool(
+        "propose_setting_change",
+        "Propose a setting",
+        {},
+        lambda args: json.dumps({"status": "proposed", "setting": "Cap"}),
+    )
+    llm = FakeLLMService([("propose_setting_change", {})], "Saved it.")
+    RAGService(FakeEmbeddingService(), llm).answer_question(
+        "Change my cap",
+        tools=[proposal],
+    )
+    assert len(llm.messages) == 1

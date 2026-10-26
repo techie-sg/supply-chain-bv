@@ -118,7 +118,7 @@ Live data is a saved snapshot. Its original `as_of` time is preserved and it is 
 
 ## Evals
 
-[`backend/evals/dataset.csv`](backend/evals/dataset.csv) holds 65 questions. Each row lists `relevant_chunk_ids` (must be retrieved), `expected_chunk_ids` (all useful chunks), live-data and safety flags, and the expected behavior. `history` holds prior turns as JSON for follow-up questions. Run from `backend/` after ingestion:
+[`backend/evals/dataset.csv`](backend/evals/dataset.csv) holds 105 questions. Each row lists `relevant_chunk_ids` (must be retrieved), `expected_chunk_ids` (all useful chunks), live-data and safety flags, and the expected behavior. `history` holds prior turns as JSON for follow-up questions. Run from `backend/` after ingestion:
 
 ```bash
 uv run --group eval --group ingestion python -m evals.run_evals            # retrieval only
@@ -128,6 +128,17 @@ uv run --group eval --group ingestion python -m evals.run_evals --judge    # als
 The harness evaluates a fixed-query retrieval baseline and, with `--judge`, answers that can call `search_playbook`. The agent may choose different queries from the retrieval baseline. The harness does not exercise conversation preferences, handover, personalization or dispatch tools. Its scores do not validate the full product workflow.
 
 Retrieval metrics: `hit@k` (any relevant chunk in top k), `recall@k` (share of expected chunks in top k), and `mrr`. `--judge` asks an LLM to grade each answer 1/0 on `behavior`, `no_invented_facts`, `no_execution_claim`, `safety` (safety rows only) and `live_data_honesty` (live-data rows only); `pass` requires every applicable check. Results are printed overall and by category, and per-question rows go to `evals/results.csv`, with `answer_model` and `judge_model` columns when `--judge` is used. Use `--judge-model` to grade with a different model than the one answering, and `--category` to run a subset, and `--delay` (seconds between questions) to stay under provider rate limits. `tests/test_evals.py` checks that every chunk ID in the dataset exists in the corpus.
+
+### End-to-end agent evals
+
+`evals/agent_evals.py` runs dataset rows through the full chat turn (scenario, tools, guardrails, memory) and scores them pass/fail. It needs a local or test database with the corpus ingested.
+
+```bash
+uv run python -m evals.agent_evals --label baseline-core --core \
+  --judge-model deepseek/deepseek-v4-flash --delay 5
+```
+
+`--core` runs the 6 sample queries from `docs/initial/requirements.md`; omit it for all 105 rows (about 50 minutes). Add `--compare <earlier report>` to print a before/after table. Reports go to `evals/reports/`. Latest result: 79/105 rows pass, up from 56/105 before the retry and guardrail fixes (the judge sees the data the agent saw; one run per row on a free model, so expect a few rows of noise). See [docs/evals-developer-guide.md](docs/evals-developer-guide.md) for the design, options and quotas, and [docs/evals-error-analysis.md](docs/evals-error-analysis.md) for results.
 
 ## Railway
 
