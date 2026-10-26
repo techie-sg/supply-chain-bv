@@ -118,10 +118,9 @@ Judge rules (`AGENT_JUDGE_PROMPT`):
 
 Calibration: on 2026-10-24 `gpt-oss-20b`, `gpt-oss-120b` and `nemotron-3-ultra` all failed a facts-only answer that skips the action plan, while `nemotron-3.5-lightning` passed it, so it isn't used as a judge. On 2026-10-25 `deepseek/deepseek-v4-flash` (the current judge) got 10 of 10 verdicts right on good and bad answers, twice each. Re-run a check like that, with both outcomes, whenever the judge prompt or model changes.
 
-Known limits of the judge, not yet fixed (see fix 3 in the error analysis):
-- Its FACTS come from `facts()`, which refetches tool data after the turn with its own window (yesterday 18:00–24:00) instead of replaying the arguments the agent used. Derived figures can be flagged as invented.
-- It does not see `<preferences>` or `<alerts>`.
-- "Every part" is strict for rows that list several example alternatives.
+What the judge sees (`judge_facts`). While the turn runs, `capture_tool_outputs()` wraps `service.tools._record_call` and keeps each tool call's arguments and returned JSON, including playbook passages; for memory rows it also covers the next-session turn. The judge's FACTS are those results plus the alerts block (`alerts_block`) and the settings text (`prompt_block`). For a live-data row where the agent never called the live tool, the current snapshot is added under `live_data_the_agent_did_not_fetch`, so "unavailable" can be told from "not fetched". The rubric lets the judge accept simple calculations from FACTS, and a list of example alternatives is met by two or more.
+
+Known limits of the judge: "every part of the expected behavior" is still strict for rows with several required parts; the judge and the agent are both free-tier LLMs, so single-row verdicts move between runs (see the noise note in section 9).
 
 ## 6. Running
 
@@ -163,10 +162,13 @@ uv run python -m evals.agent_evals --label after-fixes \
   "summary": {"core": 0.5, "overall": 0.5, "by_focus": {"tool": 0.0}, "rows": 6},
   "rows": [
     {"id", "eval_focus", "core", "pass", "failed", "checks", "judge",
-     "latency_s", "tools", "guardrail", "trace_id", "answer"}
+     "latency_s", "tools", "tool_calls", "guardrail", "guardrail_findings",
+     "source_checks", "g4_rewrites", "trace_id", "answer"}
   ]
 }
 ```
+
+`tool_calls` has the arguments of each tool call. `source_checks` lists every citation check (accepted, citations found, searches made, tools called), so a retried answer that is still rejected can be diagnosed. `g4_rewrites` keeps the reply G4 changed (before and after), because the production finding deliberately carries no reply text. These are local files with synthetic data.
 
 The run also prints a markdown table (ID, focus, PASS/FAIL, failed checks, latency), which doubles as the task 24 expected-vs-actual table. With Langfuse keys set, `trace_id` opens the full trace of the turn.
 
@@ -179,7 +181,7 @@ Used for the committed reports (2026-10-25), both on OpenRouter with $10 of cred
 | Agent | `nvidia/nemotron-3-ultra-550b-a55b:free` | free; 1,000 requests/day once $10 of credit is bought (50 without), 20 requests/min, failed calls count |
 | Judge | `deepseek/deepseek-v4-flash` | $0.09 in / $0.18 out per million tokens; no plan rate limit. A full run costs a few cents |
 
-- **A full 105-row run** is about 50 minutes and a few hundred requests, so one full run plus a re-run fits in a day. Free-tier calls take 7–30 s and vary from run to run.
+- **A full 105-row run** is about 40–50 minutes and about 350 requests, so two full runs fit in the 1,000 requests a day. Three full runs plus spot checks use it up (on 2026-10-25 a run stopped at row 73 on the cap, and the cap resets at 05:30 IST). Free-tier calls take 7–30 s and vary from run to run. Check `X-RateLimit-Remaining` on a one-token call before a long run.
 - **The judge cannot be a `gpt-oss` model on OpenRouter.** `OpenRouterService` always sends reasoning disabled, and `gpt-oss` returns 400 ("Reasoning is mandatory"). `deepseek-v4-flash` and `gemini-2.5-flash-lite` accept it.
 - **The judge is built with `openrouter_fallback_models=[]`.** The default Ultra model has a free fallback, and a silent switch would change the grader while the report names the requested model. The agent keeps its fallbacks.
 - **Free key without credit:** 50 requests a day is about one 6-row run plus one re-run. Grade on Groq (`--judge-provider groq --judge-model openai/gpt-oss-20b`) so the judge doesn't use that quota. `gpt-oss-120b` on Groq is too slow for the agent: its 8k tokens/min limit made calls back off for 10–20 minutes.
@@ -205,6 +207,10 @@ The harness's DB and LLM path (`run_row`, `main`) is `# pragma: no cover`. Check
 - **The facts-only fallback looks like a pass to a lenient judge.** When `RAGService._check_sources` (`service/rag.py`) finds no current-turn playbook citation, it replaces the answer. Since fix 1 it first retries once; a fallback can still happen. The judge must fail it when a diagnosis or action plan was expected.
 - **A judge model copies literal examples.** The first judge prompt showed `"behavior": 0, ...` and the judge returned exactly that for correct answers, so about 14 of the first 19 results were wrong. The prompt now uses `<1 or 0>` placeholders, asks for the reason first, and `test_judge_prompt_has_no_sample_scores_to_copy` guards it. Calibrate with both good and bad answers after any change.
 - **One run is noisy.** Free-model answers change between runs; EVAL-031 failed in a run and passed when reproduced alone. Trust the overall and per-focus numbers (105 rows) more than single rows or the core 6, and repeat a run before quoting a small change.
+- **`--resume` does not remember the row filter.** Resuming a report made with `--only` or `--focus` must repeat that filter, or the harness runs the whole dataset. It also needs the same provider and models as the report.
+- **Dropped connections.** A truncated response (`ChunkedEncodingError`), a timeout or a 5xx is retried after 20 s, up to 3 attempts per row; a rate limit is retried after its `retry-after`. If a row still fails, the report is saved and the run stops for `--resume`.
+- **Comparing old and new code.** Use `git worktree add --detach /tmp/x <commit>`, copy `backend/.env` and the harness file into it, and run `python -m evals.agent_evals` from there with the repository's `.venv` Python. Runs share one local database (scenario loads wipe operational rows), so run them one at a time.
+- **Noise.** The same code scores differently run to run: rounds 2 and 3 differ by four prompt sentences and 19 of 105 rows changed result, in both directions. Only the 105-row totals, several runs, or a sign test on fixed vs regressed rows should drive a decision.
 - **Local Docker.** `pgv-docker` (pgvector pg17, port 5433, database `dispatchdesk_test`) may still be starting right after a restart. If the harness reports a refused connection, wait for `docker ps` to show it up.
 - **Latency depends on the provider.** The same row took 8 s and 75 s on the free tier. Treat `latency` failures as provider noise unless they repeat.
 - **Memory rows change settings.** They are reset after each row. Rows that ran before a crash may leave the `karthik` settings changed; check the Settings view after an aborted run.
@@ -224,4 +230,20 @@ The harness's DB and LLM path (`run_row`, `main`) is `# pragma: no cover`. Check
 
 **Fix 3 (not applied):** replay the agent's actual tool calls for the judge's FACTS and give the judge `<preferences>`. It changes how rows are scored, so the baseline and after-fixes runs must be repeated together. See the error analysis.
 
-**Result:** overall 52/105 to 67/105 (22 rows fixed, 7 regressed), core 1/6 to 2/6, guardrail and unsafe rows improved most. Details and caveats are in [evals-error-analysis.md](evals-error-analysis.md) section 6.
+**Result, round 1 (original judge):** overall 52/105 to 67/105 (22 rows fixed, 7 regressed), core 1/6 to 2/6, guardrail and unsafe rows improved most. Details are in [evals-error-analysis.md](evals-error-analysis.md) section 6.
+
+### Round 2 changes
+
+- **Judge facts and rubric** (`evals/agent_evals.py`): see section 5. EVAL-067's question now says "packed order … waiting for a rider".
+- **Retry lists allowed IDs** (`service/rag.py`, `_retry_with_sources`): the retry message ends "You may cite only these chunk IDs: …". The citation rule is unchanged.
+- **G4 targets** (`domain/guardrails.py`):
+  - `GENERIC_ASSIGNMENT_TARGETS` holds words that are never a rider (pronouns for things, adverbs such as "shortly", prepositions, indefinite pronouns, a few nouns). Order and zone IDs are also skipped.
+  - `_concrete_rider_target` checks every candidate in a clause (`finditer` over `RIDER_TARGET`, `NAMED_SEND_TARGET` and `TO_NAMED_TARGET`), not just the first word.
+  - `_FILLER` (determiners, adjectives, a leading to/for/with) is skipped before the target is judged, so a name behind a generic word is still caught. Add a word there, not to the generic set, when it only ever modifies a rider.
+  - Tests: `tests/test_dispatch_grounding.py` (clean phrases stay clean; a name behind a generic word is caught with missing, fresh and stale live data).
+  - Known limit: a lowercase unknown name after "assign it to" is not caught (a lowercase match on "to <word>" would flag "send updates to customers"); "send them" still counts as naming a rider.
+- **Settings routing** (`service/setting_changes.py`, `SETTING_TOPIC`): only "notify me/us", "be notified" and "notifications" route to the settings pass, not "notify the customer".
+- **Harness**: records `tool_calls`, `source_checks` and `g4_rewrites`; retries transient errors.
+- **Not adopted:** four prompt edits (`backend/evals/reports/round3-prompt-edits-not-adopted.patch`); overall 79 to 76 on the round-2 code, which is noise.
+
+**Result, round 2 (improved judge):** old code 56/105, round-1 code 74/105, round-2 code 79/105 (core 3/6). See [evals-error-analysis.md](evals-error-analysis.md) section 7 for the comparisons, the remaining failures and the open decisions.
