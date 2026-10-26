@@ -138,7 +138,7 @@ uv run python -m evals.agent_evals --label baseline-core --core \
   --judge-model deepseek/deepseek-v4-flash --delay 5
 ```
 
-`--core` runs the 6 sample queries from `docs/initial/requirements.md`; omit it for all 105 rows (about 50 minutes). Add `--compare <earlier report>` to print a before/after table. Reports go to `evals/reports/`. Latest result: 67/105 rows pass, up from 52/105 before two fixes. See [docs/evals-developer-guide.md](docs/evals-developer-guide.md) for the design, options and quotas, and [docs/evals-error-analysis.md](docs/evals-error-analysis.md) for results.
+`--core` runs the 6 sample queries from `docs/initial/requirements.md`; omit it for all 105 rows (about 50 minutes). Add `--compare <earlier report>` to print a before/after table. Reports go to `evals/reports/`. Latest result: 79/105 rows pass, up from 56/105 before the retry and guardrail fixes (the judge sees the data the agent saw; one run per row on a free model, so expect a few rows of noise). See [docs/evals-developer-guide.md](docs/evals-developer-guide.md) for the design, options and quotas, and [docs/evals-error-analysis.md](docs/evals-error-analysis.md) for results.
 
 ## Railway
 
