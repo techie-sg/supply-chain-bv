@@ -94,3 +94,62 @@ Report [`after-fixes-20261025-1059.json`](../backend/evals/reports/after-fixes-2
 
 1. **Fix 3 (judge sees the agent's real tool results and `<preferences>`)** and then repeat the baseline and after-fixes runs. This is the largest remaining source of false failures, and it would show which of the remaining 38 failing rows are real.
 2. **Run the core 6 three times** and report the pass rate per row, to separate real gaps from variance.
+
+## 7. Round 2: a more accurate judge, more fixes, and a prompt test
+
+**Why.** The judge compared figures with a snapshot the harness refetched after the turn, using its own hour window, and without the alerts and settings the agent was given. That produced false "invented facts" (EVAL-032's tool-computed totals, 021's alerts, 096's next-session recall). It now sees every tool result the agent received (including playbook passages), the alerts and the settings, and may accept simple calculations. All round-2 numbers use this judge, so they are not comparable with sections 2 and 6.
+
+All runs: agent `nemotron-3-ultra-550b-a55b:free`, judge `deepseek/deepseek-v4-flash`, 105 rows.
+
+| Run | Code | Pass | Core 6 | Report |
+|---|---|---|---|---|
+| re-baseline | before round 1 (`55bfea1`) | 56/105 | 2/6 | `rebaseline-20261025-1221.json` |
+| re-run, round 1 | + retry, G4 order-only | 74/105 | 2/6 | `rerun-after-fixes-20261025-1253.json` (finished over two sessions after the daily request cap interrupted it at row 73) |
+| round 2 | + retry lists allowed IDs, G4 "it"/"shortly" and all-targets scan, "notify the customer" fix | **79/105** | 3/6 | `round2-20261026-1125.json` |
+| round 3 | round 2 + four prompt edits | 76/105 | 4/6 | `round3-prompt-20261026-1211.json`; **not adopted** |
+
+| Comparison | Pass | Rows fixed | Rows regressed | Sign test p |
+|---|---|---|---|---|
+| old code → round 1 | 56 → 74 | 24 | 6 | 0.0007 |
+| round 1 → round 2 | 74 → 79 | 11 | 6 | 0.17 (noise) |
+| old code → round 2 | 56 → 79 | 28 | 5 | < 0.0001 |
+| round 2 → round 3 | 79 → 76 | 8 | 11 | 0.65 (noise) |
+
+| Slice (rows) | Old | Round 1 | Round 2 | Round 3 |
+|---|---|---|---|---|
+| retrieval (21) | 11 | 15 | 14 | 13 |
+| tool (20) | 13 | 15 | 17 | 16 |
+| guardrail (34) | 18 | 21 | 24 | 24 |
+| fabrication (13) | 8 | 9 | 9 | 9 |
+| unsafe (17) | 6 | 14 | 15 | 14 |
+
+- Fallback answers ("could not find relevant guidance" or a facts-only table) fell from 33 to 8 in round 1 and stayed near 10 in round 2.
+- Mean latency per row: 9.6 s (old), 14.4 s (round 1), 14.1 s (round 2), 10.9 s (round 3). The retry costs one model call on rejected answers.
+- **Noise is large.** Rounds 2 and 3 differ by four prompt sentences, yet 19 of 105 rows changed result, in both directions. Judge single rows and the 6-row core with caution; trust the 105-row totals and several runs.
+
+### What the new diagnostics showed
+
+- **The retry works on its main case.** Where the first check rejected an answer that made no search and cited nothing (EVAL-014, 030, 032, 053, 060), the retry produced an accepted answer.
+- **It still fails on 4 rows (EVAL-022, 026, 031, 047).** Both attempts cite a whole document that was never retrieved (for example `DD-BATCH-001`), even with the allowed chunk IDs listed. The rule is working as designed. Options for the team: keep it (current), or drop unretrieved citations when at least one valid citation remains, which weakens "every citation must be retrieved this turn".
+- **G4 was removing valid text.** The reply G4 rewrote is now kept in the report (`g4_rewrites`). The removed clauses included "assigned **to** any order", "extending **anyone's** shift", "Extend **ETAs**", "assign **it** to the next available rider", "will be assigned **shortly**" and "assigning **either** rider". Fixes: pronouns for things, adverbs, prepositions, indefinite pronouns and a few nouns are generic targets, and the target patterns skip filler words (a leading to/for/with, determiners, adjectives such as new/available/returning) and judge the word after them, so "Assign either Kelly or Ravi", "Extend for Kelly" and "assign to kelly" are still caught. Two security reviews drove the final design: the first removed reply text from the production finding; the second removed a bypass created by allowlisting connector words.
+- **Spot check on the final G4 code** (21 rows that had G4 rewrites; `g4-check-20261026-1249.json`): answers with "(Removed: …)" notes fell from 8 (round 2) to 5, "could not be identified" notes from 4 to 2. Pass counts moved 14 → 12 on those rows, within noise (2 gained, 4 lost, no common cause). The notes that remain are mostly correct (an unknown rider "R42", Farhan's overdue break) plus a few phrases such as "Stop dispatching to that rider".
+
+### Remaining failures (26 in round 2), by my reading of the judge reasons
+
+| Cause | Rows |
+|---|---|
+| Retry rejected twice (unretrieved document cited) | 022, 026, 031, 047 |
+| Real behavior misses | 001 (G3 blocks a benign rain question), 041 (says batching is allowed at exactly 480 s), 083 (predicts an SLA gain as a number), 051 and 090 (say there is no radius policy), 039 and 077 (missing "not eligible" or standby proposal), 099 and 104 (live tool not called), 053 (no credit draft) |
+| `retrieval` check only (the judge accepts the behavior) | 014, 048 |
+| Judge or expectation disputes | 029, 033, 035, 044, 067, 085, 092, 094 and others |
+
+### Round 3: prompt edits tested, not adopted
+
+Four edits (state hard batching failures first, verify a named rider's hours before refusing, ask which rider or order is meant, draft instead of asking permission) were run on the round-2 code. Overall 79 → 76; of the 10 rows they targeted, 3 passed before and 4 after (EVAL-104 gained; 077, 083, 099 and 041 still fail). The core 6 moved from 3 to 4. tool, retrieval and unsafe each lost a row. The decision rule was "adopt only if overall improves and no category drops", so the edits are kept only as `backend/evals/reports/round3-prompt-edits-not-adopted.patch`.
+
+### Open decisions
+
+1. **Citation rule:** keep strict, or drop unretrieved citations when a valid one remains (4 rows).
+2. **`retrieval` check:** it scores the agent's own search queries against `relevant_chunk_ids`; widening it to `expected_chunk_ids` would pass EVAL-014 and 048 but measures something looser.
+3. **G3 on benign rain questions** (EVAL-001) and the "radius change has no policy" answers (EVAL-051, 090) look like real bugs worth their own fixes.
+4. **More repeated runs** of the core 6 before quoting any core number.
