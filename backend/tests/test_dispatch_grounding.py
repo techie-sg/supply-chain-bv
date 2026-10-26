@@ -371,3 +371,28 @@ def test_prepositions_pronouns_and_plain_nouns_are_not_rider_names(reply):
 def test_a_name_after_a_preposition_is_still_caught(reply):
     guarded = check_reply("Who?", reply, results(snapshot()))
     assert "could not be identified" in guarded.text
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Assign either Kelly or Ravi to ORD-03-001.",
+        "Extend for Kelly.",
+        "assign to kelly",
+        "Assign both Kelly and Ravi.",
+        "Assign it to either Kelly or Ravi.",
+        "Reassign the order to the new rider Kelly.",
+    ],
+)
+@pytest.mark.parametrize("live", ["missing", "fresh", "stale"])
+def test_a_name_behind_a_generic_word_is_still_caught(reply, live):
+    data = snapshot()
+    if live == "stale":
+        data["stale"] = True
+    guarded = check_reply(
+        "Who?",
+        reply,
+        [] if live == "missing" else results(data),
+    )
+    assert reply not in guarded.text
+    assert any(item["rule"] == "G4" for item in guarded.trace["findings"])

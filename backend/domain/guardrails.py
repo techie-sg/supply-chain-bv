@@ -136,10 +136,16 @@ CONDITIONAL = re.compile(
 )
 ORDER_ID = re.compile(r"\bORD-\d+-\d+\b")
 RIDER_ID = re.compile(r"\bRDR-[A-Z0-9-]+\b", re.IGNORECASE)
+# Words skipped before judging the target, so a generic word cannot hide a name
+# behind it: "assign either Kelly or Ravi", "extend for Kelly", "assign to kelly".
+_FILLER = (
+    r"(?:(?:the|either|both|another|any|each|every|an?|one\s+of|new|available|next"
+    r"|nearest|closest|closer|free|different|same|single|other)\s+)*"
+)
 RIDER_TARGET = re.compile(
     r"\b(?:(?:re)?assign(?:ed|ing|s)?|allocat(?:e|es|ed|ing)|"
     r"schedul(?:e|es|ed|ing)|extend(?:ed|ing|s)?)\s+"
-    r"(?:(?:the\s+)?(?:rider|driver)\s+)?"
+    r"(?:(?:to|for|with)\s+)?" + _FILLER + r"(?:(?:rider|driver)\s+)?"
     r"(?:\*\*|`)?(?P<target>[\w'-]+)",
     re.IGNORECASE,
 )
@@ -149,7 +155,9 @@ NAMED_SEND_TARGET = re.compile(
 )
 ZONE_ID = re.compile(r"Z-[A-Z]\b")
 TO_NAMED_TARGET = re.compile(
-    r"\bto\s+(?:the\s+)?(?:(?:rider|driver)\s+)?(?:\*\*|`)?(?P<target>[A-Z][\w'-]*)",
+    r"\bto\s+"
+    + _FILLER
+    + r"(?:(?:rider|driver)\s+)?(?:\*\*|`)?(?P<target>[A-Z][\w'-]*)",
 )
 GENERIC_ASSIGNMENT_TARGETS = {
     # An order or an adverb after the verb ("assign it", "assigned shortly") is
