@@ -139,8 +139,9 @@ RIDER_ID = re.compile(r"\bRDR-[A-Z0-9-]+\b", re.IGNORECASE)
 # Words skipped before judging the target, so a generic word cannot hide a name
 # behind it: "assign either Kelly or Ravi", "extend for Kelly", "assign to kelly".
 _FILLER = (
-    r"(?:(?:the|either|both|another|any|each|every|an?|one\s+of|new|available|next"
-    r"|nearest|closest|closer|free|different|same|single|other)\s+)*"
+    r"(?:(?:the|either|both|another|any|each|every|an?|one\s+of|that|this|these|those"
+    r"|new|available|next|nearest|closest|closer|free|different|same|single|other"
+    r"|returning|idle|standby|stand-by|off-duty|eligible|spare|extra)\s+)*"
 )
 RIDER_TARGET = re.compile(
     r"\b(?:(?:re)?assign(?:ed|ing|s)?|allocat(?:e|es|ed|ing)|"

@@ -352,6 +352,8 @@ def test_a_zone_after_to_is_not_a_rider_name():
         "Extend ETAs honestly and tell customers why.",
         "ORD-03-003 can be assigned to another rider or batched with a different order.",
         "ORD-03-006 -> assign to an available Z-A rider.",
+        "Before assigning any returning rider, verify their hours.",
+        "Stop assigning orders to that rider until they take a break.",
     ],
 )
 def test_prepositions_pronouns_and_plain_nouns_are_not_rider_names(reply):
